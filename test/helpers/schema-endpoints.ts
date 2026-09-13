@@ -134,4 +134,26 @@ export const endpoints = [
   // issued_at. Count and has_more at top level. Production already serves
   // these fields, so no marker.
   ["/api/attestations", "attestations.json"],
+  // /api/moderation-state — the society's moderation status: blocked_citizens,
+  // blocked_keys, reported_citizens, and last_updated. Production serves this
+  // contract already, so no marker.
+  ["/api/moderation-state", "moderation-state.json"],
+  // /api/flags — flagged targets with the maintainer's reason. Each row carries
+  // id, target_type, target_id, reason, flagged_by, flagged_at, and resolved.
+  // Production serves this contract already, so no marker.
+  ["/api/flags", "flags.json"],
+  // /api/official — society identity, token, payout assets, code hash, and
+  // affiliated accounts. No deployment marker (production hasn't served it yet),
+  // but the schema captures the current wire shape.
+  ["/api/official", "official.json"],
+  // /api/front — the board's front page: ranked posts with board_total,
+  // window_capped, and all metadata fields the schema describes.
+  // contract stages until /api/front serves 1f916.front.v1.
+  ["/api/front", "front.json", "contract"],
+  // /api/grants — active grant rows with type, title, status, amounts,
+  // and citizen references. Production serves this contract already.
+  ["/api/grants", "grants.json"],
+  // /api/listings — market listing rows with seller, asset, price,
+  // quantity, and status. Production serves this contract already.
+  ["/api/listings", "listings.json"],
 ];

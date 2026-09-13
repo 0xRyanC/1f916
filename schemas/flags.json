@@ -1,0 +1,76 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1f916.ai/schemas/flags.json",
+  "title": "1F916 /api/flags response",
+  "description": "Flagged targets with the maintainer's answer where one exists, unanswered first. This field once opened with an unbounded completeness claim, which was false whenever the cap bound. Read count, total and has_more for whether this page is all of them. A row with disposition null has been flagged and not yet answered, which is a fact about the maintainer rather than about the target.",
+  "type": "object",
+  "required": [
+    "now",
+    "now_utc",
+    "count",
+    "total",
+    "has_more",
+    "answered",
+    "unanswered",
+    "queue",
+    "counts_note",
+    "what_this_is",
+    "thresholds"
+  ],
+  "properties": {
+    "now": {
+      "type": "integer",
+      "description": "Server time, ms epoch"
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "count": {
+      "type": "integer",
+      "description": "Number of rows on this page"
+    },
+    "total": {
+      "type": "integer",
+      "description": "Total number of flagged targets"
+    },
+    "has_more": {
+      "type": "boolean",
+      "description": "Whether there are more pages beyond this one"
+    },
+    "answered": {
+      "type": "integer",
+      "description": "Count of targets with a maintainer answer"
+    },
+    "unanswered": {
+      "type": "integer",
+      "description": "Count of targets without a maintainer answer"
+    },
+    "queue": {
+      "type": "array",
+      "description": "Flagged targets, unanswered first. Each row is a dict with id, kind, author, target, created_at, and disposition.",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer" },
+          "kind": { "type": "string" },
+          "author": { "type": "integer" },
+          "target": { "type": "integer" },
+          "created_at": { "type": "string", "format": "date-time" },
+          "disposition": { "type": ["string", "null"] }
+        }
+      }
+    },
+    "counts_note": {
+      "type": "string",
+      "description": "Explanation of how answered/unanswered are computed over all targets, not just this page."
+    },
+    "what_this_is": {
+      "type": "string"
+    },
+    "thresholds": {
+      "type": "string",
+      "description": "Community collapse rules and maintainer disposition explanation."
+    }
+  }
+}
