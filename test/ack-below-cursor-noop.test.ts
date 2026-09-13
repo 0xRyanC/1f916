@@ -20,9 +20,11 @@ class D1Statement {
   private args: unknown[] = [];
   private readonly db: DatabaseSync;
   private readonly sql: string;
-  constructor(db: DatabaseSync, sql: string) {
+  private readonly after?: (sql: string, changes: number) => void;
+  constructor(db: DatabaseSync, sql: string, after?: (sql: string, changes: number) => void) {
     this.db = db;
     this.sql = sql;
+    this.after = after;
   }
   bind(...args: unknown[]) {
     this.args = args;
@@ -35,23 +37,28 @@ class D1Statement {
     return { results: this.db.prepare(this.sql).all(...this.args) as T[] };
   }
   async run() {
-    this.db.prepare(this.sql).run(...this.args);
+    const info = this.db.prepare(this.sql).run(...this.args);
+    if (this.after) this.after(this.sql, Number(info.changes));
     return { success: true };
   }
 }
 
 class LocalD1 {
   private readonly db: DatabaseSync;
-  constructor(db: DatabaseSync) {
+  private readonly after?: (sql: string, changes: number) => void;
+  constructor(db: DatabaseSync, after?: (sql: string, changes: number) => void) {
     this.db = db;
+    this.after = after;
   }
   prepare(sql: string) {
-    return new D1Statement(this.db, sql);
+    return new D1Statement(this.db, sql, this.after);
   }
 }
 
-function envFor(db: DatabaseSync): Env {
-  return { DB: new LocalD1(db) } as unknown as Env;
+// `after` runs once per statement, after it executes: the seam a test uses
+// to land a second write between two statements of the same handler.
+function envFor(db: DatabaseSync, after?: (sql: string, changes: number) => void): Env {
+  return { DB: new LocalD1(db, after) } as unknown as Env;
 }
 
 function reader(db: DatabaseSync) {
@@ -169,6 +176,86 @@ test("ids equal to the stored cursor with the stored timestamp: nothing moves, a
     assert.equal(after.last_seen_at, STORED_AT);
     assert.equal(r.comments, 50);
     assert.equal(r.advanced, false, "same ids, same timestamp: no arm of the OR is true");
+  } finally {
+    db.close();
+  }
+});
+
+// Fifth and sixth cases, from judy (c58812 on 5046): `advanced` under a
+// self-race, two acks from one seat in flight together. The handler takes
+// `citizen` as a snapshot read at auth (society.ts 449) and computes
+// `advanced` against that snapshot, so the race has two shapes and neither
+// needs a second thread to reach: a write that lands after the snapshot but
+// before the handler UPDATE (the snapshot is simply stale), and a write
+// that lands between the handler UPDATE and its read-back SELECT (the
+// `after` seam above). Each arm mis-reports in one direction only. Lossless:
+// a larger timestamp landed by the OTHER call makes `row.last_seen_at >
+// citizen.last_seen_at` true, so this call answers advanced:true having moved
+// nothing (over-report). Legacy: this call fires its UPDATE, the larger value
+// from the other call lands before the SELECT, `=== t` fails, and the call
+// answers advanced:false having moved the timestamp (under-report). Same
+// race, the two arms hand a reader opposite answers to "did my call do
+// anything".
+
+const OTHER_ACK_AT = STORED_AT + 100;
+const OTHER_ACK_SQL = "UPDATE citizens SET last_seen_at = " + OTHER_ACK_AT + " WHERE id = 1";
+const GUARDED_UPDATE = "UPDATE citizens SET last_seen_at = ? WHERE id = ? AND last_seen_at < ?";
+
+test("lossless arm, stale snapshot: a larger timestamp landed by the other call reads back as advanced:true", async () => {
+  const db = freshDb();
+  try {
+    const snapshot = reader(db);
+    db.exec(OTHER_ACK_SQL);
+    const r = (await ackInbox(envFor(db), snapshot, {
+      version: 1,
+      timestamp: STORED_AT + 1,
+      comments: 50,
+      mentions: 0,
+    })) as { mode: string; cursor: number; comments?: number; advanced: boolean };
+    const after = stored(db);
+    assert.equal(after.last_seen_at, OTHER_ACK_AT, "MAX kept the value the other call landed; this call moved nothing");
+    assert.equal(after.last_seen_comment_id, 50);
+    assert.equal(r.mode, "lossless");
+    assert.equal(r.cursor, OTHER_ACK_AT);
+    assert.equal(r.advanced, true, "true off the movement of the other call: the lossless arm over-reports under the race");
+  } finally {
+    db.close();
+  }
+});
+
+test("legacy arm, stale snapshot: a value already past t leaves the UPDATE unfired and advanced:false", async () => {
+  const db = freshDb();
+  try {
+    const snapshot = reader(db);
+    db.exec(OTHER_ACK_SQL);
+    const r = (await ackInbox(envFor(db), snapshot, STORED_AT + 1)) as { mode: string; cursor: number; advanced: boolean };
+    const after = stored(db);
+    assert.equal(after.last_seen_at, OTHER_ACK_AT, "guarded UPDATE did not fire: stored was already past t");
+    assert.equal(r.mode, "legacy");
+    assert.equal(r.cursor, OTHER_ACK_AT);
+    assert.equal(r.advanced, false, "nothing moved and the legacy arm says so");
+  } finally {
+    db.close();
+  }
+});
+
+test("legacy arm, write between UPDATE and SELECT: the UPDATE fired and advanced still reads false", async () => {
+  const db = freshDb();
+  try {
+    let updateChanges = -1;
+    const env = envFor(db, (sql, changes) => {
+      if (sql.startsWith(GUARDED_UPDATE)) {
+        updateChanges = changes;
+        db.exec(OTHER_ACK_SQL);
+      }
+    });
+    const r = (await ackInbox(env, reader(db), STORED_AT + 1)) as { mode: string; cursor: number; advanced: boolean };
+    const after = stored(db);
+    assert.equal(updateChanges, 1, "the guarded UPDATE of this call fired (1000 < 1001)");
+    assert.equal(after.last_seen_at, OTHER_ACK_AT, "then the larger value from the other call landed before the SELECT");
+    assert.equal(r.mode, "legacy");
+    assert.equal(r.cursor, OTHER_ACK_AT);
+    assert.equal(r.advanced, false, "read-back is not t, so a call that did move the timestamp reports false: the legacy arm under-reports");
   } finally {
     db.close();
   }
