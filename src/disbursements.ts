@@ -579,7 +579,7 @@ export interface DisbursementTally {
  * ratified the 2026-08-20 collection retroactively, and it should not have.
  */
 export function tallyDisbursement(
-  votes: Array<{ position: DisbursePosition; keyThumbprint?: string | null }>,
+  votes: Array<{ handle: string; position: DisbursePosition; keyThumbprint?: string | null }>,
   cohortSize: number,
   maturesAt: number,
   expiry: number,
@@ -590,15 +590,44 @@ export function tallyDisbursement(
   const dissents = votes.filter((v) => v.position === "dissent");
   const assented = assents.length;
   const dissented = dissents.length;
+  // ONE ELECTOR, ONE VOTE — CHECKED HERE, BECAUSE NOTHING ELSE CAN CHECK IT.
+  //
+  // This used to be left to the overflow check below, whose comment claimed it
+  // caught "a double vote". It does not. It catches the double votes that push
+  // the count past the frozen cohort and no others: with a cohort of 675, one
+  // citizen voting twice produces 2 counted votes against 675 and the overflow
+  // test is nowhere near firing. The tally would have reported an extra assent
+  // as an extra elector, silently, and the threshold is a count of assents.
+  //
+  // The deeper reason it could not be caught is that this function's input did
+  // not carry WHO voted — only a position and an optional thumbprint — so a
+  // duplicate was invisible to it by type. `handle` is now required in the
+  // parameter, the same repair `cohortFrozenAt` got in validateDisbursementVote:
+  // a contract that cannot receive the state a check needs cannot be fixed by a
+  // careful caller.
+  //
+  // This is not a substitute for a UNIQUE(disbursement, citizen) constraint on
+  // whatever table eventually stores these rows — it is the guarantee that does
+  // not depend on one existing, and this module is unrouted, so today there is
+  // no table and this is the only place the rule can live.
+  const seen = new Set<string>();
+  const doubled: string[] = [];
+  for (const v of votes) {
+    if (seen.has(v.handle)) { if (!doubled.includes(v.handle)) doubled.push(v.handle); continue; }
+    seen.add(v.handle);
+  }
+  if (doubled.length)
+    throw new SocietyError(500, `${doubled.length} citizen(s) appear more than once in this proposal's votes (${doubled.slice(0, 5).join(", ")}${doubled.length > 5 ? ", …" : ""}). One elector casts one vote; a tally computed over duplicates counts a single citizen as several electors and the threshold is a count. Refusing to compute a tally rather than report a majority that does not exist`);
+
   // SILENCE CANNOT BE NEGATIVE, and this is a real check rather than a restated
   // identity. `silent` is DEFINED as the subtraction below, so any test of the
   // form `assented + dissented + silent === cohort_size` reduces to
   // `cohortSize === cohortSize` and passes for every input, including inputs
   // where silence is negative (@framework-relay, c32360). More counted votes
   // than cohort members means the rows and the frozen denominator disagree —
-  // an off-cohort voter, a double vote, or a denominator recomputed after the
-  // fact. Every one of those is a defect in what was stored, so this refuses
-  // to render a tally rather than printing a number that hides it.
+  // an off-cohort voter or a denominator recomputed after the fact. Both are
+  // defects in what was stored, so this refuses to render a tally rather than
+  // printing a number that hides it. Duplicates are caught above, by name.
   if (assented + dissented > cohortSize)
     throw new SocietyError(500, `this proposal has ${assented + dissented} counted votes against a frozen cohort of ${cohortSize}. A tally cannot have more voters than electors, so the stored votes and the frozen denominator disagree and neither can be trusted to render. Refusing to compute a tally rather than report negative silence`);
   const signed = (vs: typeof votes) => vs.filter((v) => typeof v.keyThumbprint === "string" && v.keyThumbprint !== "").length;

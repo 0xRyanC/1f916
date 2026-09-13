@@ -93,9 +93,12 @@ test("the two versions are distinct domains", () => {
 
 // ---------- the tally ----------
 
-const votes = (assent: number, dissent: number): Array<{ position: DisbursePosition }> => [
-  ...Array.from({ length: assent }, () => ({ position: "assent" as const })),
-  ...Array.from({ length: dissent }, () => ({ position: "dissent" as const })),
+// Distinct handles, because the tally now refuses duplicates by name and a
+// helper that handed it the same voter N times would make every test below a
+// test of the duplicate guard instead of the thing it is named for.
+const votes = (assent: number, dissent: number): Array<{ handle: string; position: DisbursePosition }> => [
+  ...Array.from({ length: assent }, (_, i) => ({ handle: `assenter-${i}`, position: "assent" as const })),
+  ...Array.from({ length: dissent }, (_, i) => ({ handle: `dissenter-${i}`, position: "dissent" as const })),
 ];
 
 test("the tally says how much of itself is non-repudiable, and weights nothing by it", () => {
@@ -104,11 +107,11 @@ test("the tally says how much of itself is non-repudiable, and weights nothing b
   // the second is published beside it so nobody has to walk the rows, and so
   // that nobody can quietly start treating a signed vote as worth more.
   const mixed = [
-    { position: "assent" as const, keyThumbprint: "aaa" },
-    { position: "assent" as const, keyThumbprint: null },
-    { position: "assent" as const },
-    { position: "dissent" as const, keyThumbprint: "bbb" },
-    { position: "dissent" as const, keyThumbprint: "" },
+    { handle: "signed-assenter", position: "assent" as const, keyThumbprint: "aaa" },
+    { handle: "keyless-assenter", position: "assent" as const, keyThumbprint: null },
+    { handle: "bare-assenter", position: "assent" as const },
+    { handle: "signed-dissenter", position: "dissent" as const, keyThumbprint: "bbb" },
+    { handle: "empty-thumbprint-dissenter", position: "dissent" as const, keyThumbprint: "" },
   ];
   const t = tallyDisbursement(mixed, 52, 1000, 2000, 500);
   assert.equal(t.assented, 3, "every assent counts, signed or not");
@@ -484,6 +487,61 @@ test("more counted votes than cohort members fails rather than reporting negativ
   // Exactly full is not an error: every elector voting is the good case.
   const full = tallyDisbursement(votes(12, 8), 20, 1000, 2000, 1500);
   assert.equal(full.silent, 0);
+});
+
+test("one elector, one vote — a duplicate is refused by name, not by overflow", () => {
+  // THE DEFECT THIS CLOSES. The overflow check above fires only when the count
+  // passes the frozen cohort. With a realistic cohort it never fires, so a
+  // citizen voting twice used to be counted as two electors and the threshold
+  // is a count of assents.
+  const cohort = 675;
+  const doubled = [
+    { handle: "afterword", position: "assent" as const },
+    { handle: "afterword", position: "assent" as const },
+    { handle: "framework-relay", position: "dissent" as const },
+  ];
+  assert.equal(doubled.length + 0, 3, "3 counted votes against 675 — nowhere near the overflow boundary");
+  assert.throws(
+    () => tallyDisbursement(doubled, cohort, 1000, 2000, 1500),
+    (e: Error) => {
+      assert.match(e.message, /afterword/, "the refusal names who, so it is actionable rather than a mystery");
+      assert.match(e.message, /One elector casts one vote/);
+      return true;
+    },
+  );
+});
+
+test("a citizen who assents and then dissents is one citizen, not two", () => {
+  // The subtler shape: the positions differ, so nothing about the counts looks
+  // wrong from the outside. 1 assent and 1 dissent against a cohort of 52 is a
+  // perfectly ordinary row, and it is one person voting twice.
+  assert.throws(
+    () => tallyDisbursement([
+      { handle: "two-minds", position: "assent" as const },
+      { handle: "two-minds", position: "dissent" as const },
+    ], 52, 1000, 2000, 1500),
+    /two-minds/,
+  );
+});
+
+test("the guard is load-bearing: without it this tally ratifies on one voter", () => {
+  // The round trip. `tallyDisbursement` refuses the input below; the old
+  // behaviour is reconstructed here to show what it would have produced, so
+  // that deleting the duplicate check turns this test red rather than leaving
+  // a rule nobody exercises.
+  const cohort = 20;
+  const threshold = tallyDisbursement([], cohort, 1000, 2000, 1500).threshold;
+  const repeats = Math.max(2, threshold);             // a "duplicate" needs at least two rows
+  const oneCitizenNTimes = Array.from({ length: repeats }, () => ({ handle: "sock", position: "assent" as const }));
+
+  // What the old code did: count rows, ignore identity.
+  const naiveAssents = oneCitizenNTimes.filter((v) => v.position === "assent").length;
+  assert.ok(naiveAssents >= threshold, "one citizen, repeated, clears the threshold on a row count");
+  assert.ok(naiveAssents >= 2, "and the input really does contain a duplicate");
+  assert.ok(naiveAssents <= cohort, "…and never trips the overflow check, which is why that check was not the guard");
+
+  assert.throws(() => tallyDisbursement(oneCitizenNTimes, cohort, 1000, 2000, 1500), /sock/,
+    "the tally must refuse rather than ratify a spend on one citizen wearing a threshold");
 });
 
 test("silence is asserted non-negative independently of the formula that defines it", () => {
