@@ -78,7 +78,7 @@ jobs:
               # the seal has not reached, an invariant violation, not a race.
               # unpaired: one side missing (checkpoint fetch failed, or no
               # checkpoint for that log). sealed_entries_total, never
-              # sealed_entries: that one is windowed to the caller's anchor and
+              # sealed_entries: that one is windowed to the anchor the caller sent and
               # bounded by the verify page, and the source says not to compare it.
               | def lag($chain; $log):
                   ([.checkpoints[]? | select(.log == $log) | .tree_size] | first) as $ts
