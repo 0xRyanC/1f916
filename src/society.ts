@@ -5081,6 +5081,23 @@ export async function getPayoutBinding(env: Env, id: number) {
 
 export async function listPayouts(env: Env, docketId: string | null, sinceId = 0) {
   if (!Number.isSafeInteger(sinceId) || sinceId < 0) throw new SocietyError(400, "since_id must be a non-negative safe integer");
+  // Same unit-lie as /api/events?since=<ms> (#3770 / PR #228),
+  // /api/attestations?since_id= (#4998 / PR #241), and /api/listings?since_id=
+  // (PR #244): a millisecond is all digits, so since_id accepts it, it sits
+  // past every real binding id, and the page is empty-complete (live:
+  // GET /api/payouts?since_id=999999 → 200, bindings [], has_more false;
+  // tip 289 exhausted 200, tip+1 still 200). Exhausted (since_id === tip)
+  // still serves that shape; one past the tip is refused and names the unit.
+  // Ceiling is MAX(id) of payout_bindings, not a docket filter's subset.
+  const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM payout_bindings").first<{ max_id: number }>();
+  const maxId = Number(tip?.max_id ?? 0);
+  const anchor = Math.floor(sinceId);
+  if (anchor > maxId) {
+    throw new SocietyError(
+      400,
+      `since_id ${anchor} is greater than the newest payout binding id (${maxId}); a cursor is a payout binding id, not a timestamp`,
+    );
+  }
   if (docketId !== null && listingIdFromRow(docketId) === null && !DOCKET.some((item) => item.id === docketId))
     throw new SocietyError(400, `docket '${docketId}' is not in GET /api/docket and is not a listing-<id> row`);
   const where = docketId === null ? "pb.id > ?" : "pb.docket_id = ? AND pb.id > ?";
