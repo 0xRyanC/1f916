@@ -637,10 +637,25 @@ export default {
           }
           return v;
         };
+        // identity_from=0 used to parse as present and then norm() to the same
+        // 0 as an omitted parameter, so GET /api/attest and
+        // GET /api/attest?identity_from=0 were byte-identical (anchor_mode
+        // unanchored, anchored_at null). A client whose anchor mis-parses to 0
+        // then sends a bare expect against the tip and reads a rewrite alarm
+        // while the body denies a filter was sent. Present means well-formed
+        // or refused — the empty-expect precedent (docket attest-identity-from-zero,
+        // unspent c25849 on 2667). 0 is not a row id.
+        const rowId = (k: string) => {
+          const n = num(k);
+          if (n === 0) {
+            throw new SocietyError(400, `${k}=0 is not an anchor — omit the parameter for a bare walk, or give a row id at or above 1`);
+          }
+          return n;
+        };
         return json(
           await attestation(env, q.get("from") === null ? 0 : wholeNumberParam(url, "from", "a row id in the chain being verified"), {
-            identityFrom: num("identity_from"),
-            ledgerFrom: num("ledger_from"),
+            identityFrom: rowId("identity_from"),
+            ledgerFrom: rowId("ledger_from"),
             identityExpect: str("identity_expect"),
             ledgerExpect: str("ledger_expect"),
           }),
