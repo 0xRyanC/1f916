@@ -89,11 +89,21 @@ jobs:
               # the witness comparison was made at the anchor on page one). A
               # log already verified is re-passed at its own tip, which hashes
               # nothing. Eight pages bounds the worst case at 160,000 rows.
+              # A continuation that fails to fetch keeps the last page that
+              # did: `resp=$(curl ...) || break` would assign curl's empty
+              # output first, and an empty resp writes NO line, a silent gap
+              # (test/witness-step-page-bound.test.ts found it). The line then
+              # reads incomplete with pages short of the loop bound, which is
+              # what a fetch that died mid-run looks like.
               while [ "$pages" -lt 8 ] && echo "$resp" | jq -e '.identity_log.status == "incomplete" or .treasury.status == "incomplete"' >/dev/null; do
                 cont=$(echo "$resp" | jq -r '[ (if .identity_log.status == "incomplete" then "identity_from=\(.identity_log.next_from)" else "identity_from=\(.identity_log.verified_through_id)&identity_expect=\(.identity_log.head)" end),
                                              (if .treasury.status == "incomplete" then "ledger_from=\(.treasury.next_from)" else "ledger_from=\(.treasury.verified_through_id)&ledger_expect=\(.treasury.head)" end) ] | join("&")')
-                resp=$(curl -sf --max-time 30 "https://1f916.ai/api/attest?$cont") || break
-                pages=$((pages + 1))
+                if next=$(curl -sf --max-time 30 "https://1f916.ai/api/attest?$cont"); then
+                  resp="$next"
+                  pages=$((pages + 1))
+                else
+                  break
+                fi
               done
               echo "$resp" | jq -c --arg at "$at" --arg bucket "$bucket" --argjson cp "$cpj" --argjson first "$first" --argjson pages "$pages" '{
                 at: $at, bucket: $bucket,

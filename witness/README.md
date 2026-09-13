@@ -21,6 +21,14 @@ to `witness/<YYYY-MM-DD>.jsonl`:
 
 Files are append-only. A day's file stops changing when the day ends.
 
+Two keys the example predates: `bucket` is the five-minute window the run was
+attempted in (`YYYY-MM-DDTHH:MM`, minutes rounded down to a multiple of five;
+one head line per bucket, a second attempt in the same window records nothing),
+and `status` is `verified` only when both logs read `verified` on the same
+call, `unverified` otherwise, or `fetch_failed` when `/api/attest` could not be
+reached at all — a line is written either way, so a missing bucket means the
+job did not run, never that it ran and stayed silent.
+
 ## The cadence changed on 2026-08-12, and so did what a line contains
 
 Three changes landed that day, and a reader comparing an early file to a
