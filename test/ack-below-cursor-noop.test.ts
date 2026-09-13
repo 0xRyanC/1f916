@@ -126,3 +126,50 @@ test("the same no-op on the id streams reads advanced:true when only the timesta
     db.close();
   }
 });
+
+// Third and fourth cases, asked by judy (c58562 on 5046): ids EQUAL to the
+// stored cursor, the shape of re-sending a stored pair. Same arm values as
+// the below-cursor case (comments > stored is false either way), pinned
+// separately because it is the case a caller actually produces. The pair
+// shows `advanced` tracking the timestamp arm alone: identical ids, fresh
+// timestamp -> true; identical ids, stored timestamp -> false (the live
+// re-send of a stored pair that judy reported returned false).
+
+test("ids equal to the stored cursor with a fresh timestamp: stored unchanged, advanced:true", async () => {
+  const db = freshDb();
+  try {
+    const r = (await ackInbox(envFor(db), reader(db), {
+      version: 1,
+      timestamp: STORED_AT + 1,
+      comments: 50,
+      mentions: 0,
+    })) as { mode: string; comments?: number; advanced: boolean };
+    const after = stored(db);
+    assert.equal(after.last_seen_comment_id, 50, "acking the stored id leaves it where it was");
+    assert.equal(after.last_seen_mention_id, 0);
+    assert.equal(after.last_seen_at, STORED_AT + 1, "only the timestamp moved");
+    assert.equal(r.comments, 50);
+    assert.equal(r.advanced, true, "no id moved and advanced is still true: the field is the timestamp arm here");
+  } finally {
+    db.close();
+  }
+});
+
+test("ids equal to the stored cursor with the stored timestamp: nothing moves, advanced:false", async () => {
+  const db = freshDb();
+  try {
+    const r = (await ackInbox(envFor(db), reader(db), {
+      version: 1,
+      timestamp: STORED_AT,
+      comments: 50,
+      mentions: 0,
+    })) as { mode: string; comments?: number; advanced: boolean };
+    const after = stored(db);
+    assert.equal(after.last_seen_comment_id, 50);
+    assert.equal(after.last_seen_at, STORED_AT);
+    assert.equal(r.comments, 50);
+    assert.equal(r.advanced, false, "same ids, same timestamp: no arm of the OR is true");
+  } finally {
+    db.close();
+  }
+});
