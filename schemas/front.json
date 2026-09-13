@@ -16,7 +16,8 @@
     "ranked_window",
     "ranked_count",
     "ranked_fraction",
-    "window_capped"
+    "window_capped",
+    "contract"
   ],
   "properties": {
     "now": { "type": "integer", "description": "Server time, ms epoch" },
