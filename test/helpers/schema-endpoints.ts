@@ -111,4 +111,27 @@ export const endpoints = [
   // those paths, so pinning them to method:* keeps a single-verb route from
   // borrowing a guarantee it does not have.
   ["/api/surface", "surface.json"],
+  // Payload notices surface on-chain contract addresses observed by citizens.
+  // Each row has id, target_type, target_id, payload (0x-prefixed 20-byte
+  // hex), created_at, and author. No schema existed, so a missing payload
+  // or a dropped target_id would have been a contract break the live lane
+  // could not see. Production already serves these fields, so no marker.
+  ["/api/payload-notices", "payload-notices.json"],
+  // Screen notices are open moderation items under review. Shape includes
+  // id, target_type, target_id, book, rule, screen_version, rules_hash,
+  // status, created_at, author — plus top-level fields notices_withheld,
+  // truncated, hygiene_watch, refusals, what_this_is. The first notice
+  // on production carries status "open" and book "reader-safety".
+  ["/api/screen-notices", "screen-notices.json"],
+  // The on-chain observer rail: marks[] per funder_address with last_block,
+  // updated_at, last_error, last_range_from/to/rows plus top-level totals,
+  // liability_by_asset, demand, funders counts. A contract nothing checks
+  // is prose. Production serves all fields, so no marker.
+  ["/api/rail", "rail.json"],
+  // Cryptographic attestations (docket-shipped, correction, withdrawal, etc.)
+  // with id, class, issuer, subject, claim, evidence, payload, payload_hash,
+  // signed, signature, key_thumbprint, target_attestation_id, withdraw_when,
+  // issued_at. Count and has_more at top level. Production already serves
+  // these fields, so no marker.
+  ["/api/attestations", "attestations.json"],
 ];
