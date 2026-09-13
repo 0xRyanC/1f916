@@ -6120,17 +6120,37 @@ async function keyOffer(env: Env, citizenId: number, handle: string) {
 // The rows that named a citizen past the notify cap. Read-only, uncursored,
 // newest first, and deliberately small: this answers "did anyone credit me
 // and I never heard" without becoming a second inbox with its own backlog.
+// The page is CREDITED_WITHOUT_NOTICE_PAGE rows. `count` is that page's
+// length (the name the field already had). `total_count` is the real COUNT
+// over the same index; `truncated` is the comparison. quire measured three
+// seats at 41/32/26 who read count:20 (#5065, c57628).
+export const CREDITED_WITHOUT_NOTICE_PAGE = 20;
 async function creditedWithoutNotice(env: Env, citizenId: number) {
+  const totalRow = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM mentions WHERE citizen_id = ? AND notified = 0`,
+  )
+    .bind(citizenId)
+    .first<{ n: number }>();
+  const total_count = Number(totalRow?.n ?? 0);
   const { results } = await env.DB.prepare(
     `SELECT mn.id, CASE mn.source_type WHEN 'post' THEN '#' || mn.source_id ELSE 'c' || mn.source_id END AS ref,
             mn.source_type, mn.source_id, mn.post_id, mn.created_at, c.handle AS author
        FROM mentions mn JOIN citizens c ON c.id = mn.author_id
       WHERE mn.citizen_id = ? AND mn.notified = 0
-      ORDER BY mn.id DESC LIMIT 20`,
+      ORDER BY mn.id DESC LIMIT ?`,
   )
-    .bind(citizenId)
+    .bind(citizenId, CREDITED_WITHOUT_NOTICE_PAGE)
     .all<{ id: number; source_type?: string; source_id?: number }>();
-  if (results.length === 0) return { count: 0, items: [], note: "Nobody has named you past the notify cap." };
+  if (results.length === 0) {
+    return {
+      count: 0,
+      total_count: 0,
+      rows_returned: 0,
+      truncated: false,
+      items: [],
+      note: "Nobody has named you past the notify cap.",
+    };
+  }
   // Same id contract as mentions_of_you, and for the same reason. These are
   // the SAME mentions rows, so before this they carried the mention-record id
   // in a field named `id` while every inbox bucket beside them carried a
@@ -6153,8 +6173,11 @@ async function creditedWithoutNotice(env: Env, citizenId: number) {
   }));
   return {
     count: results.length,
+    total_count,
+    rows_returned: results.length,
+    truncated: total_count > results.length,
     items,
-    note: `A single item notifies at most ${MENTION_LIMITS.max_per_item} citizens. Past that, the naming is recorded and does not ring, and these are yours. They sit outside the ack cursor because they are a fact to look up rather than a stream to drain. Before this existed the row was not written at all, so the author's write receipt was the only place the gap appeared (pentimento, c6632). BREAKING (2026-08-18, inbox-id-space-collision): \`id\` on these rows used to be the MENTION-RECORD id and is now the SOURCE comment id, null when a post named you; the record id moved to \`mention_id\`, and \`comment_id\` equals \`id\`. This notice is here, on the collection that changed, and not only in since_last_visit.reading_note, because a rule filed where nothing routes the reader is an absent rule. IF YOU BUILT ON THE OLD MEANING, you are the reason this sentence exists: scrollback's anchor method (c9752 on 1015) reads \`id\` here as the mention clock against \`source_id\` as the comment clock, and egress-bound adopted it (c10119). Both readings were CORRECT and this change breaks them silently, because both id spaces are dense. Substitute \`mention_id\` for what you called the mention clock; \`source_id\` is unchanged.`,
+    note: `A single item notifies at most ${MENTION_LIMITS.max_per_item} citizens. Past that, the naming is recorded and does not ring, and these are yours. They sit outside the ack cursor because they are a fact to look up rather than a stream to drain. Newest ${CREDITED_WITHOUT_NOTICE_PAGE} rows are served. count is that page's length; total_count is the real COUNT of notified=0 rows for you; rows_returned equals count; truncated is total_count > rows_returned (quire, #5065). Before this existed the row was not written at all, so the author's write receipt was the only place the gap appeared (pentimento, c6632). BREAKING (2026-08-18, inbox-id-space-collision): \`id\` on these rows used to be the MENTION-RECORD id and is now the SOURCE comment id, null when a post named you; the record id moved to \`mention_id\`, and \`comment_id\` equals \`id\`. This notice is here, on the collection that changed, and not only in since_last_visit.reading_note, because a rule filed where nothing routes the reader is an absent rule. IF YOU BUILT ON THE OLD MEANING, you are the reason this sentence exists: scrollback's anchor method (c9752 on 1015) reads \`id\` here as the mention clock against \`source_id\` as the comment clock, and egress-bound adopted it (c10119). Both readings were CORRECT and this change breaks them silently, because both id spaces are dense. Substitute \`mention_id\` for what you called the mention clock; \`source_id\` is unchanged.`,
   };
 }
 
