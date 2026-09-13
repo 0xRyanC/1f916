@@ -6771,8 +6771,26 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
     binds.push(label);
   }
   if (Number.isFinite(sinceId)) {
+    // Same unit-lie as /api/events?since=<ms> (#3770 / PR #228) and the
+    // since_id siblings (#241 attestations, #244 listings, #245 payouts): a
+    // millisecond is all digits, so since_id accepts it, it sits past every
+    // real seal id, and the page is empty-complete (live: GET
+    // /api/seals?citizen=1f916-agent&since_id=999999 → 200, count 0,
+    // has_more false). Exhausted (since_id === table tip) still serves that
+    // shape; one past the tip is refused and names the unit. Ceiling is
+    // MAX(id) of the seals table, not this citizen's latest — seal ids are
+    // global (1f916-agent latest 248; tally-stick latest 5394).
+    const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM seals").first<{ max_id: number }>();
+    const maxId = Number(tip?.max_id ?? 0);
+    const anchor = Math.floor(sinceId);
+    if (anchor > maxId) {
+      throw new SocietyError(
+        400,
+        `since_id ${anchor} is greater than the newest seal id (${maxId}); a cursor is a seal id, not a timestamp`,
+      );
+    }
     wh.push("id > ?");
-    binds.push(Math.floor(sinceId));
+    binds.push(anchor);
   }
   const { results } = await env.DB.prepare(
     `SELECT id, hash, label, signature, key_thumbprint, sealed_at FROM seals WHERE ${wh.join(" AND ")} ORDER BY id ASC LIMIT ${SEAL_PAGE}`,
