@@ -70,6 +70,26 @@ Lines written before this change have no `lag` key and no
 `sealed_entries_total`; for them, an unanchored read within one verify page,
 `identity.sealed_entries` equals `sealed_entries_total`, so recompute from it.
 
+## Head lines anchor at the previous verified line (`fix/witness-attest-page-bound`)
+
+From the first head line that carries `identity.anchored_at`, each run hands the
+previous verified line's `verified_through_id` and `head` back to `/api/attest`
+as `identity_from`/`identity_expect` (and `ledger_from`/`ledger_expect` for the
+treasury): the recipe below, run by the job itself, against today's or
+yesterday's file. `verified` on such a line means the rows appended since the
+previous verified line chain onto it, and that line's head is still the hash at
+its position (`expect_matches: true`). The chain of lines verifies the chain.
+A single line no longer re-hashes the log from row 1: the unanchored read did,
+and `/api/attest` bounds it at `VERIFY_PAGE` (20,000 rows per call), a size
+`identity_events` passes in 2026-09, past which an unanchored line would read
+`incomplete` on every run and the recipe below would answer `mismatch` on it.
+When a log reads `incomplete` (no anchor found, or more than one page since it)
+the job follows `next_from`, up to eight pages, and `pages` records how many.
+`sealed_entries` on an anchored line is windowed to the anchor; the absolute
+count is `sealed_entries_total`. The recipe below still works on these lines
+unchanged: `verified_through_id` and `head` are the tip at the time of the
+line. Countersignature lines are cut from `/api/checkpoint` and are unaffected.
+
 So "the witness has covered this since 2026-08-09" means two different claims
 either side of that day: corroboration of the chain heads before it, and a
 countersignature over the signed checkpoint after it. Both are in these files;
