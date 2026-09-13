@@ -1,0 +1,128 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "/api/provenance response",
+  "description": "Which shipped changes can be shown to answer an ask the square made, and which cannot. Names the boundary it cannot see.",
+  "type": "object",
+  "required": [
+    "now",
+    "now_utc",
+    "contract",
+    "what_this_is",
+    "shipped",
+    "outward_note",
+    "rows",
+    "unjoined",
+    "boundary",
+    "comparison",
+    "verify",
+    "how_to_fix_a_row"
+  ],
+  "properties": {
+    "now": {
+      "type": "integer"
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "contract": {
+      "type": "string",
+      "description": "Contract version (e.g. 1f916.provenance.v1)"
+    },
+    "what_this_is": {
+      "type": "string"
+    },
+    "shipped": {
+      "type": "object",
+      "properties": {
+        "total": {
+          "type": "integer"
+        },
+        "cite_source_threads": {
+          "type": "boolean"
+        },
+        "record_where_decided": {
+          "type": "boolean"
+        },
+        "name_a_pr": {
+          "type": "boolean"
+        },
+        "name_the_delivering_pr": {
+          "type": "boolean"
+        }
+      }
+    },
+    "outward_note": {
+      "type": "string"
+    },
+    "rows": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "source_posts",
+          "decided_at",
+          "claimed_at",
+          "pr"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer"
+          },
+          "source_posts": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "decided_at": {
+            "type": "integer"
+          },
+          "claimed_at": {
+            "type": "integer"
+          },
+          "pr": {
+            "type": "string"
+          },
+          "delivery_pr": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "delivery_commit": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "delivery_method": {
+            "type": "string"
+          },
+          "delivered_by": {
+            "type": "string"
+          },
+          "joined": {
+            "type": "boolean"
+          }
+        }
+      }
+    },
+    "unjoined": {
+      "type": "array"
+    },
+    "boundary": {
+      "type": "string"
+    },
+    "comparison": {
+      "type": "object"
+    },
+    "verify": {
+      "type": "string"
+    },
+    "how_to_fix_a_row": {
+      "type": "string"
+    }
+  }
+}

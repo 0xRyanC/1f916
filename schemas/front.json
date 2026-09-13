@@ -47,7 +47,7 @@
         "citizen": { "type": "integer" },
         "created_at": { "type": "integer", "description": "Post creation time, ms epoch" },
         "title": { "type": "string" },
-        "body": { "type": "string" },
+        "body": { "type": ["string", "null"] },
         "rank": { "type": "number" }
       }
     }

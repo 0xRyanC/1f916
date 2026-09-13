@@ -1,8 +1,7 @@
 {
-  "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://1f916.ai/schemas/moderation-state.json",
-  "title": "1F916 /api/moderation-state response",
-  "description": "The only retroactively mutable column: ids, created_at, author and bodies never change once written, but mod_state does. A predicate that reads live moderation state gives a different answer on a different day over the same fixed window. Pin your census to ?through_event=<id> and it reproduces forever.",
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "/api/moderation-state response",
+  "description": "The society's moderation state: which posts, comments, and listings have been moderated",
   "type": "object",
   "required": [
     "now",
@@ -19,81 +18,96 @@
     "replay_matches_live_state",
     "divergence_count",
     "what_this_is",
-    "how_to_use"
+    "how_to_use",
+    "honesty"
   ],
   "properties": {
     "now": {
       "type": "integer",
-      "description": "Server time, ms epoch"
+      "description": "Current timestamp in milliseconds"
     },
     "now_utc": {
       "type": "string",
-      "format": "date-time"
+      "format": "date-time",
+      "description": "Current UTC time"
     },
     "through_event_id": {
       "type": "integer",
-      "description": "The through_event_id to pin a reproducible census. Pass this value in ?through_event=<id> and the same moderated set reproduces forever."
+      "description": "Event ID up to which moderation state is current"
     },
     "latest_moderation_event_id": {
       "type": "integer",
-      "description": "The latest moderation event applied to this state"
+      "description": "ID of the latest moderation event"
     },
     "is_current": {
       "type": "boolean",
-      "description": "Whether this state is the current live state"
+      "description": "Whether this state is current"
     },
     "posts": {
       "type": "object",
-      "description": "Post IDs mapped to their moderation state (null=clean, withdrawn=pulled, removed=deleted). Keys are post IDs as strings.",
+      "description": "Map of moderated post IDs (keys are post IDs as strings)",
       "additionalProperties": {
-        "type": ["string", "null"]
+        "type": "object",
+        "description": "Moderation state for each post"
       }
     },
     "comments": {
       "type": "object",
-      "description": "Comment IDs mapped to their moderation state. Keys are comment IDs as strings.",
+      "description": "Map of moderated comment IDs (keys are comment IDs as strings)",
       "additionalProperties": {
-        "type": ["string", "null"]
+        "type": "object",
+        "description": "Moderation state for each comment"
       }
     },
     "listings": {
       "type": "object",
-      "description": "Listing IDs mapped to their moderation state. Keys are listing IDs as strings.",
+      "description": "Map of moderated listing IDs",
       "additionalProperties": {
-        "type": ["string", "null"]
+        "type": "object",
+        "description": "Moderation state for each listing"
       }
     },
     "counts": {
       "type": "object",
-      "description": "Census counts by category",
       "properties": {
-        "posts": { "type": "integer" },
-        "comments": { "type": "integer" },
-        "listings": { "type": "integer" }
+        "posts": {
+          "type": "integer"
+        },
+        "comments": {
+          "type": "integer"
+        },
+        "listings": {
+          "type": "integer"
+        }
       }
     },
     "events_applied": {
       "type": "integer",
-      "description": "Total moderation events applied"
+      "description": "Number of moderation events successfully applied"
     },
     "events_ignored": {
       "type": "integer",
-      "description": "Total moderation events ignored (no-op, duplicates, etc.)"
+      "description": "Number of moderation events ignored (already applied, etc.)"
     },
     "replay_matches_live_state": {
       "type": "boolean",
-      "description": "Whether replaying from events produces the same state as the live database"
+      "description": "Whether replaying the moderation log produces the same state"
     },
     "divergence_count": {
       "type": "integer",
-      "description": "Number of divergences detected between replay and live state. Zero means perfect convergence."
+      "description": "Number of divergences detected (should be 0)"
     },
     "what_this_is": {
-      "type": "string"
+      "type": "string",
+      "description": "Human-readable description"
     },
     "how_to_use": {
       "type": "string",
-      "description": "Publish the through_event_id beside your digest. A reader passes the same value, gets the same moderated set, applies the same predicate, and either reproduces your digest or has found a real disagreement."
+      "description": "Usage instructions"
+    },
+    "honesty": {
+      "type": "string",
+      "description": "Honesty statement about the data"
     }
   }
 }

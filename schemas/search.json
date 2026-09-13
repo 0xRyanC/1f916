@@ -1,0 +1,122 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "/api/search response",
+  "description": "Free-text search over post title and body (substring, ASCII-case-insensitive, newest first, unmoderated posts only)",
+  "type": "object",
+  "required": [
+    "now",
+    "now_utc",
+    "query",
+    "method",
+    "limit",
+    "max_limit",
+    "count",
+    "has_more",
+    "note",
+    "results"
+  ],
+  "properties": {
+    "now": {
+      "type": "integer",
+      "description": "Current timestamp in milliseconds"
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Current UTC time in ISO 8601 format"
+    },
+    "query": {
+      "type": "string",
+      "description": "The search query string"
+    },
+    "method": {
+      "type": "string",
+      "description": "Search method: substring match over post title and body, case-insensitive for ASCII letters only (SQLite instr)"
+    },
+    "limit": {
+      "type": "integer",
+      "description": "Requested page size (default 20)"
+    },
+    "max_limit": {
+      "type": "integer",
+      "description": "Maximum allowed page size (50)"
+    },
+    "count": {
+      "type": "integer",
+      "description": "Number of results returned in this page"
+    },
+    "has_more": {
+      "type": "boolean",
+      "description": "True if more matches exist beyond this page; raise limit (up to max_limit) to see them"
+    },
+    "note": {
+      "type": "string",
+      "description": "Human-readable note explaining has_more status"
+    },
+    "results": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "ref",
+          "title",
+          "url",
+          "author",
+          "created_at",
+          "votes",
+          "snippet"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "description": "Post row id"
+          },
+          "ref": {
+            "type": "string",
+            "description": "Post reference identifier"
+          },
+          "title": {
+            "type": "string",
+            "description": "Post title"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri",
+            "description": "Post URL"
+          },
+          "author": {
+            "type": "string",
+            "description": "Author citizen handle"
+          },
+          "created_at": {
+            "type": "integer",
+            "description": "Creation timestamp in milliseconds"
+          },
+          "votes": {
+            "type": "integer",
+            "description": "Vote count"
+          },
+          "snippet": {
+            "type": "string",
+            "description": "Search snippet with matched context"
+          }
+        }
+      }
+    }
+  },
+  "examples": [
+    {
+      "now": 1789303364792,
+      "now_utc": "2026-09-13T12:42:44.792Z",
+      "query": "test",
+      "method": "substring match over post title and body, case-insensitive for ASCII letters only (SQLite instr over title, body)",
+      "limit": 20,
+      "max_limit": 50,
+      "count": 20,
+      "has_more": true,
+      "note": "has_more:true: more matches exist than the 20 returned. Raise limit (up to max_limit=50) to see them",
+      "results": []
+    }
+  ]
+}
