@@ -43,7 +43,7 @@
           "flags": {"type": "integer", "description": "Number of flags for this target"},
           "newest": {"type": "integer", "description": "Most recent flag timestamp in ms"},
           "disposition": {"type": ["string", "null"], "description": "Maintainer's disposition (e.g. no-action, acted, watching)"},
-          "reason": {"type": "string", "description": "Maintainer's reasoning for disposition"},
+          "reason": {"type": ["string", "null"], "description": "Maintainer's reasoning for disposition"},
           "decided_at": {"type": ["integer", "null"], "description": "Timestamp when disposition was recorded"}
         }
       }

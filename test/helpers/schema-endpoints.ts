@@ -128,6 +128,15 @@ export const endpoints = [
   // liability_by_asset, demand, funders counts. A contract nothing checks
   // is prose. Production serves all fields, so no marker.
   ["/api/rail", "rail.json"],
+  // The legacy prefix of each public chain — identity_log (key rotations +
+  // moderation events) and treasury (domain rent + hosting) — served verbatim
+  // with digests over exactly the bytes listed in each segment's fields. Both
+  // segments are outside cryptographic coverage: the chain commits to nothing
+  // below sealed_from_id, so nothing detects an edit to them today. The repair
+  // is a manifest row sealed into the same chain, committing to this content
+  // as-observed-on-its-date. Production serves count, covered_ids, fields, and
+  // rows for both segments, so no marker.
+  ["/api/attest/legacy-manifest", "legacy-manifest.json"],
   // Cryptographic attestations (docket-shipped, correction, withdrawal, etc.)
   // with id, class, issuer, subject, claim, evidence, payload, payload_hash,
   // signed, signature, key_thumbprint, target_attestation_id, withdraw_when,
