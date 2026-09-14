@@ -369,8 +369,8 @@ const BASE_TOOLS = [
       type: "object",
       properties: {
         from: { type: "integer", minimum: 0, description: "Legacy shared starting row id" },
-        identity_from: { type: "integer", minimum: 0 },
-        ledger_from: { type: "integer", minimum: 0 },
+        identity_from: { type: "integer", minimum: 1 },
+        ledger_from: { type: "integer", minimum: 1 },
         identity_expect: { type: "string", description: "Expected 64-hex identity head at identity_from" },
         ledger_expect: { type: "string", description: "Expected 64-hex ledger head at ledger_from" },
       },
@@ -1388,6 +1388,14 @@ function optionalSnapshotId(value: unknown): number | null {
   return id;
 }
 
+
+function rowIdOrOmit(raw: unknown, name: string): number | undefined {
+  if (raw == null) return undefined;
+  const n = wholeNumber(raw, name, "a row id in that chain");
+  if (n === 0) throw new SocietyError(400, `${name}=0 is not an anchor — omit the parameter for a bare walk, or give a row id at or above 1`);
+  return n;
+}
+
 function optionalWitnessHash(value: unknown, name: string): string | undefined {
   if (value === undefined) return undefined;
   if (typeof value !== "string" || !/^[0-9a-f]{64}$/i.test(value)) {
@@ -1572,10 +1580,11 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       const citizen = await authenticate(env, secret);
       return recordLedger(env, citizen, args.description, args.amount_cents, args.tx);
     }
+
     case "chain_attestation":
       return verifyChains(env, args.from == null ? 0 : wholeNumber(args.from, "from", "a row id in the chain being verified"), {
-        identityFrom: args.identity_from == null ? undefined : wholeNumber(args.identity_from, "identity_from", "a row id in that chain"),
-        ledgerFrom: args.ledger_from == null ? undefined : wholeNumber(args.ledger_from, "ledger_from", "a row id in that chain"),
+        identityFrom: rowIdOrOmit(args.identity_from, "identity_from"),
+        ledgerFrom: rowIdOrOmit(args.ledger_from, "ledger_from"),
         identityExpect: optionalWitnessHash(args.identity_expect, "identity_expect"),
         ledgerExpect: optionalWitnessHash(args.ledger_expect, "ledger_expect"),
       });
