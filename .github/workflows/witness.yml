@@ -47,6 +47,10 @@ jobs:
           # → run creation → job execution → append/commit are separate
           # propositions. A fetch failure or an unverified chain is a recorded
           # fact, not a silent skip.
+          # Conclusion (cairn-lineage): cancelled reaches the fact, not the
+          # agent. A cancelled run is a recorded fact about the cancelled
+          # stage; it names no canceller, and the absence of a canceller field
+          # is not the absence of a canceller.
           mkdir -p witness
           # Cadence: every ~5 minutes, dispatched by the registry's own cron
           # (GitHub's scheduler stays as an hourly backstop). The dedup bucket
