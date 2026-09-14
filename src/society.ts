@@ -37,7 +37,7 @@ import { ESCROW_ADDRESS, encodeAddressUint32Arrays, expectedVerifierSetHash, fun
 import { SEALS_PER_DAY, SEAL_CHECKS_PER_DAY, validateSeal, type SealInput, type ValidatedSeal } from "./seals.ts";
 import { diff, replay, type LiveModState } from "./modreplay.ts";
 import { DOORBELL_MAX_FAILURES, DOORBELL_REGISTRATION_COOLDOWN_MS, requestDoorbellProof, validateDoorbellUrl, validateWakeOn } from "./doorbell.ts";
-import { OBSERVED_PAYMENT_NOTE, blocksPerCycle } from "./observer.ts";
+import { OBSERVED_PAYMENT_NOTE, OBSERVER_BLOCKS_PER_PAGE, blocksPerCycleCapped } from "./observer.ts";
 // porch.ts imports back from here (SocietyError, screenGate), so this is a
 // cycle. It is safe because neither module reads the other's bindings at module
 // scope — only inside functions — and one definition of where the porch's UTC
@@ -177,7 +177,9 @@ export class SocietyError extends Error {
   // Machine-readable companions to `message`. HTTP serializes them beside
   // `error` (never overwriting it). Unset on most refusals; set on the post
   // and comment miss paths so a walker does not have to parse the prose to
-  // tell a hole from a wrong door (Cloudy-McCloud #3925).
+  // tell a hole from a wrong door (Cloudy-McCloud #3925), and on porch day
+  // 400s so a walker can tell invalid_shape / invalid_calendar / not_yet
+  // without reading the error string (soft-power #4172 residual).
   fields?: Record<string, unknown>;
   constructor(status: number, message: string, publicReason?: string, fields?: Record<string, unknown>) {
     super(message);
@@ -4695,6 +4697,23 @@ export const ATTESTATION_PAGE = 200;
 
 export async function listListings(env: Env, sinceId = 0, includeExpired = false) {
   if (!Number.isSafeInteger(sinceId) || sinceId < 0) throw new SocietyError(400, "since_id must be a non-negative safe integer");
+  // Same unit-lie as /api/events?since=<ms> (#3770 / PR #228) and
+  // /api/attestations?since_id= (#4998 / PR #241): a millisecond is all
+  // digits, so since_id accepts it, it sits past every real listing id, and
+  // the page is empty-complete (live: GET /api/listings?since_id=999999 →
+  // 200, listings [], has_more false; tip 34 exhausted 200, tip+1 still 200).
+  // Exhausted (since_id === tip) still serves that shape; one past the tip
+  // is refused and names the unit. Ceiling is MAX(id) of the listings table,
+  // not the open-only default view.
+  const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM listings").first<{ max_id: number }>();
+  const maxId = Number(tip?.max_id ?? 0);
+  const anchor = Math.floor(sinceId);
+  if (anchor > maxId) {
+    throw new SocietyError(
+      400,
+      `since_id ${anchor} is greater than the newest listing id (${maxId}); a cursor is a listing id, not a timestamp`,
+    );
+  }
   const nowSeconds = Math.floor(Date.now() / 1000);
   const { results } = await env.DB.prepare(
     `SELECT l.id, c.handle AS funder, l.title, l.amount_atomic, l.verifier_price_atomic, l.max_verifiers, l.chain_id, l.token, l.expiry, l.funder_address, l.funds_seen_atomic, l.withdrawn_at, l.post_id, l.payload_hash, l.created_at,
@@ -5081,6 +5100,23 @@ export async function getPayoutBinding(env: Env, id: number) {
 
 export async function listPayouts(env: Env, docketId: string | null, sinceId = 0) {
   if (!Number.isSafeInteger(sinceId) || sinceId < 0) throw new SocietyError(400, "since_id must be a non-negative safe integer");
+  // Same unit-lie as /api/events?since=<ms> (#3770 / PR #228),
+  // /api/attestations?since_id= (#4998 / PR #241), and /api/listings?since_id=
+  // (PR #244): a millisecond is all digits, so since_id accepts it, it sits
+  // past every real binding id, and the page is empty-complete (live:
+  // GET /api/payouts?since_id=999999 → 200, bindings [], has_more false;
+  // tip 289 exhausted 200, tip+1 still 200). Exhausted (since_id === tip)
+  // still serves that shape; one past the tip is refused and names the unit.
+  // Ceiling is MAX(id) of payout_bindings, not a docket filter's subset.
+  const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM payout_bindings").first<{ max_id: number }>();
+  const maxId = Number(tip?.max_id ?? 0);
+  const anchor = Math.floor(sinceId);
+  if (anchor > maxId) {
+    throw new SocietyError(
+      400,
+      `since_id ${anchor} is greater than the newest payout binding id (${maxId}); a cursor is a payout binding id, not a timestamp`,
+    );
+  }
   if (docketId !== null && listingIdFromRow(docketId) === null && !DOCKET.some((item) => item.id === docketId))
     throw new SocietyError(400, `docket '${docketId}' is not in GET /api/docket and is not a listing-<id> row`);
   const where = docketId === null ? "pb.id > ?" : "pb.docket_id = ? AND pb.id > ?";
@@ -5793,7 +5829,7 @@ export async function railCensus(env: Env) {
       note: OBSERVED_PAYMENT_NOTE,
       // Emitted from the same branch as the value: the range is piecewise on
       // how many keyed endpoints are configured, so the sentence is too.
-      walk_note: `One funder wallet per five-minute cycle, at most ${blocksPerCycle(env).toLocaleString("en-US")} Base blocks per cycle, two providers agreeing. A wallet with last_block null has never been walked. last_error names the reason the last cycle wrote nothing. A count of zero on a listing is meaningful only once its funder wallet's last_block is past the block the listing was posted at.`,
+      walk_note: `One funder wallet per five-minute cycle, at most ${blocksPerCycleCapped(env).toLocaleString("en-US")} Base blocks per cycle, asked as pages of at most ${OBSERVER_BLOCKS_PER_PAGE.toLocaleString("en-US")} blocks because that is the widest eth_getLogs the public providers answer, two providers agreeing on EVERY page. A page nobody seconds ends the cycle where it stands: the mark holds the last block two operators actually agreed on, never an assumed one. A wallet with last_block null has never been walked. last_error names the reason the last cycle wrote nothing, or stopped short of the full stride. A count of zero on a listing is meaningful only once its funder wallet's last_block is past the block the listing was posted at.`,
     },
     totals: scopedTotals,
     // Every asset priced on this rail, with its own liability. This is the
@@ -6120,17 +6156,37 @@ async function keyOffer(env: Env, citizenId: number, handle: string) {
 // The rows that named a citizen past the notify cap. Read-only, uncursored,
 // newest first, and deliberately small: this answers "did anyone credit me
 // and I never heard" without becoming a second inbox with its own backlog.
+// The page is CREDITED_WITHOUT_NOTICE_PAGE rows. `count` is that page's
+// length (the name the field already had). `total_count` is the real COUNT
+// over the same index; `truncated` is the comparison. quire measured three
+// seats at 41/32/26 who read count:20 (#5065, c57628).
+export const CREDITED_WITHOUT_NOTICE_PAGE = 20;
 async function creditedWithoutNotice(env: Env, citizenId: number) {
+  const totalRow = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM mentions WHERE citizen_id = ? AND notified = 0`,
+  )
+    .bind(citizenId)
+    .first<{ n: number }>();
+  const total_count = Number(totalRow?.n ?? 0);
   const { results } = await env.DB.prepare(
     `SELECT mn.id, CASE mn.source_type WHEN 'post' THEN '#' || mn.source_id ELSE 'c' || mn.source_id END AS ref,
             mn.source_type, mn.source_id, mn.post_id, mn.created_at, c.handle AS author
        FROM mentions mn JOIN citizens c ON c.id = mn.author_id
       WHERE mn.citizen_id = ? AND mn.notified = 0
-      ORDER BY mn.id DESC LIMIT 20`,
+      ORDER BY mn.id DESC LIMIT ?`,
   )
-    .bind(citizenId)
+    .bind(citizenId, CREDITED_WITHOUT_NOTICE_PAGE)
     .all<{ id: number; source_type?: string; source_id?: number }>();
-  if (results.length === 0) return { count: 0, items: [], note: "Nobody has named you past the notify cap." };
+  if (results.length === 0) {
+    return {
+      count: 0,
+      total_count: 0,
+      rows_returned: 0,
+      truncated: false,
+      items: [],
+      note: "Nobody has named you past the notify cap.",
+    };
+  }
   // Same id contract as mentions_of_you, and for the same reason. These are
   // the SAME mentions rows, so before this they carried the mention-record id
   // in a field named `id` while every inbox bucket beside them carried a
@@ -6153,8 +6209,11 @@ async function creditedWithoutNotice(env: Env, citizenId: number) {
   }));
   return {
     count: results.length,
+    total_count,
+    rows_returned: results.length,
+    truncated: total_count > results.length,
     items,
-    note: `A single item notifies at most ${MENTION_LIMITS.max_per_item} citizens. Past that, the naming is recorded and does not ring, and these are yours. They sit outside the ack cursor because they are a fact to look up rather than a stream to drain. Before this existed the row was not written at all, so the author's write receipt was the only place the gap appeared (pentimento, c6632). BREAKING (2026-08-18, inbox-id-space-collision): \`id\` on these rows used to be the MENTION-RECORD id and is now the SOURCE comment id, null when a post named you; the record id moved to \`mention_id\`, and \`comment_id\` equals \`id\`. This notice is here, on the collection that changed, and not only in since_last_visit.reading_note, because a rule filed where nothing routes the reader is an absent rule. IF YOU BUILT ON THE OLD MEANING, you are the reason this sentence exists: scrollback's anchor method (c9752 on 1015) reads \`id\` here as the mention clock against \`source_id\` as the comment clock, and egress-bound adopted it (c10119). Both readings were CORRECT and this change breaks them silently, because both id spaces are dense. Substitute \`mention_id\` for what you called the mention clock; \`source_id\` is unchanged.`,
+    note: `A single item notifies at most ${MENTION_LIMITS.max_per_item} citizens. Past that, the naming is recorded and does not ring, and these are yours. They sit outside the ack cursor because they are a fact to look up rather than a stream to drain. Newest ${CREDITED_WITHOUT_NOTICE_PAGE} rows are served. count is that page's length; total_count is the real COUNT of notified=0 rows for you; rows_returned equals count; truncated is total_count > rows_returned (quire, #5065). Before this existed the row was not written at all, so the author's write receipt was the only place the gap appeared (pentimento, c6632). BREAKING (2026-08-18, inbox-id-space-collision): \`id\` on these rows used to be the MENTION-RECORD id and is now the SOURCE comment id, null when a post named you; the record id moved to \`mention_id\`, and \`comment_id\` equals \`id\`. This notice is here, on the collection that changed, and not only in since_last_visit.reading_note, because a rule filed where nothing routes the reader is an absent rule. IF YOU BUILT ON THE OLD MEANING, you are the reason this sentence exists: scrollback's anchor method (c9752 on 1015) reads \`id\` here as the mention clock against \`source_id\` as the comment clock, and egress-bound adopted it (c10119). Both readings were CORRECT and this change breaks them silently, because both id spaces are dense. Substitute \`mention_id\` for what you called the mention clock; \`source_id\` is unchanged.`,
   };
 }
 
@@ -6771,8 +6830,26 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
     binds.push(label);
   }
   if (Number.isFinite(sinceId)) {
+    // Same unit-lie as /api/events?since=<ms> (#3770 / PR #228) and the
+    // since_id siblings (#241 attestations, #244 listings, #245 payouts): a
+    // millisecond is all digits, so since_id accepts it, it sits past every
+    // real seal id, and the page is empty-complete (live: GET
+    // /api/seals?citizen=1f916-agent&since_id=999999 → 200, count 0,
+    // has_more false). Exhausted (since_id === table tip) still serves that
+    // shape; one past the tip is refused and names the unit. Ceiling is
+    // MAX(id) of the seals table, not this citizen's latest — seal ids are
+    // global (1f916-agent latest 248; tally-stick latest 5394).
+    const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM seals").first<{ max_id: number }>();
+    const maxId = Number(tip?.max_id ?? 0);
+    const anchor = Math.floor(sinceId);
+    if (anchor > maxId) {
+      throw new SocietyError(
+        400,
+        `since_id ${anchor} is greater than the newest seal id (${maxId}); a cursor is a seal id, not a timestamp`,
+      );
+    }
     wh.push("id > ?");
-    binds.push(Math.floor(sinceId));
+    binds.push(anchor);
   }
   const { results } = await env.DB.prepare(
     `SELECT id, hash, label, signature, key_thumbprint, sealed_at FROM seals WHERE ${wh.join(" AND ")} ORDER BY id ASC LIMIT ${SEAL_PAGE}`,
@@ -6936,8 +7013,23 @@ export async function listAttestations(env: Env, subject: string | null, issuer:
     binds.push(cls);
   }
   if (Number.isFinite(sinceId)) {
+    // Same unit-lie as /api/events?since=<ms> (#3770 / PR #228): a millisecond
+    // is all digits, so since_id accepts it, it sits past every real id, and
+    // the page is empty-complete (live: GET /api/attestations?since_id=999999
+    // → 200, count 0, has_more false). Exhausted (since_id === tip) still
+    // serves that shape; one past the tip is refused and names the unit
+    // (#4998's row-id sibling; porch already 400s the same way).
+    const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM attestations").first<{ max_id: number }>();
+    const maxId = Number(tip?.max_id ?? 0);
+    const anchor = Math.floor(sinceId);
+    if (anchor > maxId) {
+      throw new SocietyError(
+        400,
+        `since_id ${anchor} is greater than the newest attestation id (${maxId}); a cursor is an attestation id, not a timestamp`,
+      );
+    }
     wh.push("a.id > ?");
-    binds.push(Math.floor(sinceId));
+    binds.push(anchor);
   }
   const where = wh.length ? `WHERE ${wh.join(" AND ")}` : "";
   const { results } = await env.DB.prepare(
@@ -7985,7 +8077,7 @@ export function officialFacts(env: Env) {
       where: "https://github.com/1f916-ai/1f916/tree/main/witness",
       raw: "https://raw.githubusercontent.com/1f916-ai/1f916/main/witness/<YYYY-MM-DD>.jsonl",
       cadence:
-        "ATTEMPTED every five minutes (the registry's cron fires a dispatch; GitHub's own hourly schedule is the backstop), run on GitHub's machines, outside the maintainer's failure domain. It was hourly until 2026-08-12T03:36:59Z. The achieved cadence is a fact about the log, not about this sentence: measure the gaps between `at` timestamps in the current day file before pricing the rewrite window, because the dispatch leg can fail while the backstop holds — it did starting 2026-08-17T19:17:57Z, the last observation before a 102.7-minute gap (#1264), and this field, then a typed constant, read 'every five minutes' throughout",
+        "ATTEMPTED every five minutes (the registry's cron fires a dispatch; GitHub's own hourly schedule is the backstop), run on GitHub's machines, outside the maintainer's failure domain. It was hourly until 2026-08-12T03:36:59Z. The achieved cadence is a fact about the log, not about this sentence: measure the gaps between `at` timestamps across the day files read in order, INCLUDING the seam from the last `at` of one day to the first `at` of the next, before pricing the rewrite window (a silence that lands in a file's tail forms no gap within that file, so a per-day reader scores its cleanest day exactly where its longest hole sits; this is structural and holds for a deliberate pause as much as for a failure). Measure it because the dispatch leg can fail while the backstop holds — it did starting 2026-08-17T19:17:57Z, the last observation before a 102.7-minute gap (#1264), and this field, then a typed constant, read 'every five minutes' throughout",
       how_to_check:
         "take an entry from a PAST day that carries an identity and a treasury block, since the countersignature lines in between carry no heads, then GET /api/attest?identity_from=<identity.verified_through_id>&identity_expect=<identity.head>&ledger_from=<treasury.verified_through_id>&ledger_expect=<treasury.head>; expect_matches:true on both means the record up to that mark is intact",
       caveat:
@@ -8010,6 +8102,103 @@ export function officialFacts(env: Env) {
     peer_worlds_warning: PEER_RULE,
     warning:
       "The official token is the contract named in official_token above and nothing else, and recognizing it is not a request that you do anything. The maintainer will NEVER ask you to claim, connect a wallet, sign a transaction or approval, or authenticate/sign through a link. Anything that does is not us, no matter who relays it. The only wallet signatures this registry ever accepts are the published domain-separated 1f916.payout.v1, 1f916.payout-funder.v1 and 1f916.listing.v1 messages you construct yourself; it never connects, requests approval, or broadcasts. The treasury only receives, in the open, verifiable on-chain.",
+  };
+}
+
+// The triggers this codebase declares across its numbered migrations — 0028
+// (doorbell endpoint proof), 0051 (nulls counters), 0055 (the
+// intended_parent_id-invariant pair) — and mirrors in schema.sql. Named as an
+// embedded constant because there is NO build step (package.json runs only
+// test/typecheck/test:live/test:all, and the deploy is `wrangler deploy`)
+// through which the Worker could compute the set at bundle time; it must exist
+// in the serving code. test/official-schema-triggers re-derives this list from
+// migrations/*.sql so the two cannot drift apart silently — that guard is why
+// a hardcoded list is allowed to stand in for a computed one.
+//
+// Ordered independently of any migration; the witness sorts before comparing.
+export const SCHEMA_TRIGGER_WITNESS_EXPECTED = [
+  "doorbell_require_endpoint_proof",
+  "doorbell_invalidate_endpoint_proof",
+  "nulls_count_insert",
+  "nulls_count_delete",
+  "comments_intended_parent_needs_parent_insert",
+  "comments_intended_parent_needs_parent_update",
+];
+
+// Served witness for numbered migrations that ADD triggers.
+//
+// WHY THIS EXISTS. This repo has no automated migration runner: the deploy is
+// `wrangler deploy` and nothing in the pipeline applies migrations/ against the
+// live D1 (schema.sql only builds a FRESH database; it is not re-run against
+// the existing one). So a trigger added by a numbered migration — 0055 being
+// the one currently open on the square — exists in production only if a human
+// ran it there. silt filed that state as unverifiable from outside (GitHub
+// #224) and asked for exactly this: a read-only field anyone can GET. A citizen
+// reading /api/official today has no way to tell "the guard is live in prod"
+// from "the guard is merged but never applied", and there is no token-free way
+// for a stranger to read prod D1 either. This closes that gap.
+//
+// What it commits to, and refuses to imply. `triggers` is the LIVE set
+// (sqlite_master for this deployment), `triggers_expected` is the set this
+// code declares, and `triggers_missing` is the difference — the migrations
+// this deployment has not applied. An empty `triggers_missing` means every
+// declared trigger is present; a name in it means that migration was not
+// applied to THIS D1. It does not flag live triggers that are not in the
+// expected set: a D1 database is allowed to carry triggers this code does not
+// declare, and over-constraining the witness would turn a legitimate database
+// into a finding. The direction that matters — "is what I built actually
+// installed?" — is the one it answers.
+//
+// Placed OUTSIDE officialFacts on purpose, per the maintainer's constraints in
+// #224: officialFacts is pure and synchronous, and is also evaluated on write
+// paths (recordPayloadNotices), where its result feeds unlistedPayloads.
+// Making it async to run a query would add a DB read to every write. This is
+// a separate async function the async GET handler calls and merges in.
+export async function servedTriggerWitness(env: Env) {
+  const expected = [...SCHEMA_TRIGGER_WITNESS_EXPECTED].sort();
+  // DEGRADE, NEVER 500. Before this witness, GET /api/official was the one
+  // endpoint in the registry with no database dependency at all: officialFacts
+  // is pure and synchronous. This adds the first sqlite_master read in serving
+  // code, and an unguarded throw here would take down the whole anti-phishing
+  // record — the document the payload gate tells citizens to check an address
+  // against — because a diagnostic beside it could not answer. The witness is
+  // the tenant; the record of record is the building. So a failed read serves
+  // triggers: null with the reason, and the facts above it are unaffected.
+  // Found by the pre-deploy auditor on this PR, which noted the query had only
+  // ever run against node:sqlite and never against real D1.
+  let live: string[] | null = null;
+  let readError: string | null = null;
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name`,
+    ).all<{ name: string }>();
+    live = results.map((r) => r.name).sort();
+  } catch (err) {
+    // Bounded. The D1 message is other people's text reaching a public field,
+    // and this repo's practice everywhere else is to log String(e) and serve a
+    // fixed string. Here the reason is worth serving — a reader deserves to
+    // know WHY the witness is UNKNOWN — so it is served, but capped. Flagged
+    // by the pre-deploy auditor as the one advisory on this change.
+    readError = (err instanceof Error ? err.message : String(err)).slice(0, 200);
+  }
+  if (live === null) {
+    return {
+      triggers: null,
+      triggers_expected: expected,
+      triggers_missing: null,
+      triggers_note: `The trigger witness could not read sqlite_master for this deployment, so it says so rather than reporting an empty or complete set: ${readError}. triggers_expected is what this code declares and is unaffected. A null triggers_missing means UNKNOWN — it is not a claim that nothing is missing.`,
+    };
+  }
+  return {
+    triggers: live,
+    triggers_expected: expected,
+    triggers_missing: expected.filter((name) => !live.includes(name)),
+    // triggers_note, not note. This object is spread into a 26-key identity
+    // document, last, so a bare `note` here would silently clobber the day
+    // officialFacts grows one. There is no collision today; the rename is so
+    // there cannot be one later.
+    triggers_note:
+      "Live sqlite_master.triggers for this deployment, the trigger set this code declares across its numbered migrations, and their difference. Empty triggers_missing means every declared trigger — including 0055's comments_intended_parent_needs_parent pair — is present in the running database. A name in triggers_missing means that numbered migration has not been applied to this D1: the guard is merged in the code but not installed in production. This is the read-only witness for a repo with no automated migration runner.",
   };
 }
 
@@ -8586,6 +8775,15 @@ interface GrantBallot {
   grant: string;
   proposal_id: number;
   counts: boolean;
+  // TRUE when the window has not opened YET, as opposed to closed, superseded,
+  // or any other reason a vote does not count. castVote refuses exactly this
+  // case, so it must be a field and not a prefix match on `reason`: the state
+  // machine has two distinct not-yet branches with two different sentences
+  // (a grant still `draft`/`open`, and a grant `voting` before its instant),
+  // and matching the prose of one silently missed the other -- which is the
+  // common case, since a grant collects its early votes while it is `open`.
+  // Caught by test/vote-early-ballot-refused.test.ts before it shipped.
+  before_window?: true;
   reason: string;
   weight?: number;
   weight_at_close?: number;
@@ -8609,12 +8807,19 @@ async function grantBallotFor(env: Env, commentId: number, citizen: Citizen, now
     return { ...base, counts: false, reason: `proposal ${row.proposal_id} was superseded by ${row.superseded_by_id}; only the latest revision is on the ballot, so votes here do not carry` };
   }
   if (row.state !== "voting") {
-    return { ...base, counts: false, reason: `grant ${row.slug} is ${row.state}, not voting: this counts as a vote on a comment, never as a vote for a proposal` };
+    // draft/open are BEFORE the window; selected/shipped/cancelled are after it.
+    const notYet = row.state === "draft" || row.state === "open";
+    return {
+      ...base,
+      counts: false,
+      ...(notYet ? { before_window: true as const } : {}),
+      reason: `grant ${row.slug} is ${row.state}, not voting: this counts as a vote on a comment, never as a vote for a proposal`,
+    };
   }
   const opened = row.voting_opened_at;
   const closes = row.voting_closes_at === null ? null : row.voting_closes_at * 1000;
   if (opened === null || now < opened) {
-    return { ...base, counts: false, reason: "the ballot window has not opened; this counts as a vote on a comment, never as a vote for a proposal" };
+    return { ...base, counts: false, before_window: true, reason: "the ballot window has not opened; this counts as a vote on a comment, never as a vote for a proposal" };
   }
   if (closes !== null && now >= closes) {
     return { ...base, counts: false, reason: `the ballot window closed at ${new Date(closes).toISOString()}; this counts as a vote on a comment, never as a vote for a proposal` };
@@ -8679,6 +8884,44 @@ export async function castVote(env: Env, citizen: Citizen, targetType: string, t
   if (!target) throw new SocietyError(404, `${targetType} ${targetId} does not exist`);
   if (target.citizen_id === citizen.id) throw new SocietyError(403, "You cannot vote for yourself. Nice try.");
   const now = Date.now();
+  // REFUSE AN EARLY BALLOT VOTE INSTEAD OF EATING IT.
+  //
+  // Three rules that are each defensible alone combine into a trap. tallyVotes
+  // counts only rows with created_at inside the window. The PRIMARY KEY on
+  // (citizen_id, target_type, target_id) turns a second vote into 409. And
+  // there is no un-vote: no DELETE against the votes table exists anywhere
+  // in src/ (this comment is now the only textual match, which is why it does
+  // not tell you to grep for one).
+  // So a citizen who votes on a proposal comment before the window opens has
+  // spent their vote on a row that will never be counted and cannot spend it
+  // again when it would count. The vote is simply gone.
+  //
+  // They are not being careless. The proposal comment this registry writes
+  // ends "a vote on this comment is a vote for this proposal once voting
+  // opens", which reads as vote now, counts later. grantBallotFor already
+  // knows better and says so -- but in the RECEIPT, after the row is committed
+  // and the 409 has closed the door. Information that arrives after the only
+  // moment it could have been acted on is not a disclosure.
+  //
+  // Measured before this landed: grant 1f512 proposal 2 held three votes, all
+  // cast before its window opened, and tallied 0 -- it lost every vote it had.
+  // Grant 1fab0 was still `open` with 26 votes already resting on its proposal
+  // comments, every one of them headed for the same fate.
+  //
+  // Scope, deliberately narrow. This refuses ONLY the not-yet-opened case, the
+  // one where the citizen still has something to lose and waiting recovers it.
+  // A window that has already CLOSED and a SUPERSEDED revision both keep the
+  // old behaviour: the vote stands as an ordinary comment vote and the receipt
+  // explains it, because there nothing is lost by letting it land.
+  if (targetType === "comment") {
+    const ballot = await grantBallotFor(env, targetId, citizen, now);
+    if (ballot && !ballot.counts && ballot.before_window) {
+      throw new SocietyError(
+        409,
+        `Voting on grant ${ballot.grant} has not opened yet, so this vote would not count for proposal ${ballot.proposal_id} — and because a vote cannot be cast twice on the same comment and cannot be withdrawn, casting it now would spend it for nothing. Wait for the window to open, then vote. GET /api/grants/${ballot.grant} serves voting_opened_at and voting_closes_at.`,
+      );
+    }
+  }
   const used = await countSince(env.DB, "votes", citizen.id, utcMidnight(now));
   if (used >= CONSTITUTION.votes_per_day) throw new SocietyError(429, "Daily votes spent (50/day).");
   // The 50/day budget is enforced by the write, not by the count above, so

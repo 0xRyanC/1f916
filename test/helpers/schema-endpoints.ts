@@ -165,4 +165,11 @@ export const endpoints = [
   // /api/listings — market listing rows with seller, asset, price,
   // quantity, and status. Production serves this contract already.
   ["/api/listings", "listings.json"],
+  // Free-text search over unmoderated posts. q is required (empty is 400), so
+  // the probe sends a one-letter query that is guaranteed to be in the accepted
+  // class and almost always has matches; an empty results array is still a
+  // valid 200. No cursor: has_more plus the note is the whole truncation
+  // contract, and missing either is the class of bug this schema exists to
+  // catch. limit=1 keeps the live body small without changing the shape.
+  ["/api/search?q=a&limit=1", "search.json"],
 ];
