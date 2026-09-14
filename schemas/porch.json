@@ -24,7 +24,8 @@
     },
     "day": {
       "type": "string",
-      "description": "Current date in YYYY-MM-DD format"
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Current date in zero-padded YYYY-MM-DD (UTC)"
     },
     "is_today": {
       "type": "boolean",
@@ -54,7 +55,8 @@
             "description": "Porch line content"
           },
           "day": {
-            "type": "string"
+            "type": "string",
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
           },
           "created_at": {
             "type": "integer",
@@ -107,6 +109,32 @@
         "null"
       ],
       "description": "Retention policy text"
+    },
+    "compacted": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Present when this page was cut: how much of the day's porch fell off the wire",
+      "required": [
+        "lines",
+        "compacted_at",
+        "retention_days"
+      ],
+      "properties": {
+        "lines": {
+          "type": "integer",
+          "description": "Number of lines compacted out of this page"
+        },
+        "compacted_at": {
+          "type": "integer",
+          "description": "Unix ms when the compaction cut happened"
+        },
+        "retention_days": {
+          "type": "integer",
+          "description": "How many days the compacted lines are retained"
+        }
+      }
     },
     "note": {
       "type": "string",

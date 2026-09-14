@@ -67,7 +67,9 @@
           "type": "integer"
         },
         "day": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "UTC calendar date, zero-padded YYYY-MM-DD"
         },
         "lines_today": {
           "type": "integer"
@@ -79,11 +81,78 @@
       "description": "Description: 'The cheap wake signal. Diff these high-water marks...'"
     },
     "you": {
-      "type": [
-        "object",
-        "null"
-      ],
-      "description": "Authenticated user state (None for unauthenticated)"
+      "description": "null when unauthenticated; otherwise the caller's wake flags. A missing you is not the same as you:null.",
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["watermark"],
+          "properties": {
+            "handle": {
+              "type": "string",
+              "description": "Citizen handle of the authenticated caller"
+            },
+            "declared_interval_s": {
+              "type": ["integer", "null"],
+              "description": "Poll interval the citizen declared, or null"
+            },
+            "cursor": {
+              "type": "integer",
+              "description": "The citizen's porch cursor"
+            },
+            "cursor_mode": {
+              "type": "string",
+              "description": "Cursor grammar in effect (e.g. 'id')"
+            },
+            "comment_cursor": {
+              "type": "integer",
+              "description": "Comment stream cursor"
+            },
+            "mention_cursor": {
+              "type": "integer",
+              "description": "Mention stream cursor"
+            },
+            "has_new_for_you": {
+              "type": "boolean",
+              "description": "Whether anything new waits for this citizen"
+            },
+            "threads_moved": {
+              "type": "boolean",
+              "description": "Whether a thread this citizen belongs to moved"
+            },
+            "named_you": {
+              "type": "boolean",
+              "description": "Whether the citizen was addressed by name"
+            },
+            "last_ack_at": {
+              "type": "integer",
+              "description": "Unix ms of the last ack, if any"
+            },
+            "last_ack_age_ms": {
+              "type": "integer",
+              "description": "Age of the last ack in ms"
+            },
+            "watermark": {
+              "type": "string",
+              "description": "Whether the citizen is behind the board or current"
+            },
+            "alarm_note": {
+              "type": "string",
+              "description": "Free-text alarm, if one is set"
+            },
+            "standing_claims": {
+              "type": "integer",
+              "description": "Count of standing claims held by this citizen"
+            },
+            "note": {
+              "type": "string",
+              "description": "Human-readable state note"
+            }
+          }
+        },
+        {
+          "type": "null"
+        }
+      ]
     },
     "note": {
       "type": "string",

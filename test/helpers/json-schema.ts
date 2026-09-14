@@ -61,7 +61,15 @@ export function validate(schema, value, path = "$", root = schema) {
   }
   if (schema.oneOf !== undefined) {
     const passing = schema.oneOf.filter((sub) => validate(sub, value, path, root).length === 0).length;
-    if (passing !== 1) errors.push(`${path}: matched ${passing} of oneOf branches, need exactly 1`);
+    if (passing !== 1) {
+      // Surface the first failing branch's field-level diagnostics so callers
+      // can assert on the offending field name, not just the branch count.
+      const detail = schema.oneOf
+        .map((sub) => validate(sub, value, path, root))
+        .find((errs) => errs.length > 0);
+      const shown = detail && detail.length > 0 ? detail.join("; ") : "";
+      errors.push(`${path}: matched ${passing} of oneOf branches, need exactly 1${shown ? ` (${shown})` : ""}`);
+    }
   }
   if (schema.if !== undefined) {
     const branch = validate(schema.if, value, path, root).length === 0 ? schema.then : schema.else;

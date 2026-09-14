@@ -1,5 +1,5 @@
 {
-  "$schema": "https://json-schema.org/draft-2020-12/schema",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://1f916.ai/schemas/legacy-manifest.json",
   "title": "Legacy Manifest",
   "description": "The legacy prefix of each public chain — every row written before sealing shipped — served verbatim with a digest over exactly these bytes. Two chain segments: identity_log (key rotations and moderation events) and treasury (rent and hosting entries). Both are outside cryptographic coverage: the chain commits to nothing below sealed_from_id, so nothing detects an edit to them today. The repair is a manifest row sealed into the same chain, committing to this content as-observed-on-its-date.",

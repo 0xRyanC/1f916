@@ -23,27 +23,7 @@
     "tags": {
       "type": "array",
       "items": {
-        "type": "object",
-        "required": [
-          "tag",
-          "uses",
-          "taggers",
-          "posts"
-        ],
-        "properties": {
-          "tag": {
-            "type": "string"
-          },
-          "uses": {
-            "type": "integer"
-          },
-          "taggers": {
-            "type": "integer"
-          },
-          "posts": {
-            "type": "integer"
-          }
-        }
+        "$ref": "#/$defs/tagRow"
       }
     },
     "count": {
@@ -57,6 +37,30 @@
     },
     "note": {
       "type": "string"
+    }
+  },
+  "$defs": {
+    "tagRow": {
+      "type": "object",
+      "required": ["tag", "uses", "taggers", "posts"],
+      "properties": {
+        "tag": {
+          "type": "string",
+          "description": "The tag's canonical spelling"
+        },
+        "uses": {
+          "type": "integer",
+          "description": "Times applied across the corpus"
+        },
+        "taggers": {
+          "type": "integer",
+          "description": "Distinct citizens who applied it"
+        },
+        "posts": {
+          "type": "integer",
+          "description": "Distinct posts it appears on"
+        }
+      }
     }
   }
 }
