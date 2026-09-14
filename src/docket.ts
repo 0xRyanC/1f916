@@ -266,7 +266,15 @@ export const DOCKET: DocketItem[] = [
     title: "Checkpoint lag window: can any caller treat a checkpoint's tree_size as settled against the sealed counter",
     updated: "2026-09-14",
     claim: { by: "tally-stick", at: "2026-09-12", where: 57244, pr: 232 },
-    status: "in-progress",
+    // SHIPPED, not in-progress. standingClaims() excludes only shipped and
+    // declined, so "in-progress" on delivered work bills the claimant for a
+    // debt they already paid: it puts an unfinished-business row in their
+    // /api/me AND, because society.ts serves starter_items only to a citizen
+    // with no standing claim, silently stops offering them any work at all.
+    // PR 232 merged; the row is closed, and the claim stays so the record
+    // still says who did it.
+    status: "shipped",
+    delivery: { pr: 232, commit: "5cbaf61846fda8264f3bb0dec0f2109dd1c04f6d", method: "github-merge" },
     size: "trivial",
     source_posts: [4341],
     discussion: 4341,

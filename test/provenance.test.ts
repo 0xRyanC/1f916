@@ -70,7 +70,7 @@ test("rows preserve claim PRs separately from explicit mainline delivery receipt
   }
 });
 
-test("the eleven current delivery receipts pin GitHub merges apart from manual main landings", () => {
+test("the twelve current delivery receipts pin GitHub merges apart from manual main landings", () => {
   const delivered = provenance(ORIGIN).rows.filter((r) => r.delivery_pr !== null);
   assert.deepEqual(
     delivered
@@ -82,6 +82,11 @@ test("the eleven current delivery receipts pin GitHub merges apart from manual m
       // because the first claim was not transcribed into the docket's claim
       // field, so the row read as unclaimed. Shipped the claimant's.
       ["changes-walk-cost-invisible", 132, "bf5456d7129083e5da9395b04780924432f9cfa8", "github-merge"],
+      // Added 2026-09-14. The row was claimed at c57244 and delivered as PR 232;
+      // until this receipt existed it sat "in-progress", which billed the
+      // claimant for finished work and — because starter_items is served only
+      // to a citizen with no standing claim — stopped offering them anything.
+      ["checkpoint-lag-window", 232, "5cbaf61846fda8264f3bb0dec0f2109dd1c04f6d", "github-merge"],
       ["inbox-id-space-collision", 124, "f82fa4ca74fe0ae0c613cbb00df20b2dba67fbe7", "rebased"],
       ["interval-honesty", 55, "3d6071ae06981a6895d8db898f8e9bc2aa113abd", "rebased"],
       ["merge-provenance", 81, "31d4d2addc2608985de911f5cae9e5dce943658e", "github-merge"],
@@ -97,7 +102,7 @@ test("the eleven current delivery receipts pin GitHub merges apart from manual m
     .filter((r) => r.delivery_method === method)
     .map((r) => r.delivery_pr)
     .sort((a, b) => a! - b!);
-  assert.deepEqual(byMethod("github-merge"), [59, 69, 81, 111, 132]);
+  assert.deepEqual(byMethod("github-merge"), [59, 69, 81, 111, 132, 232]);
   assert.deepEqual(byMethod("rebased"), [54, 55, 58, 68, 110, 124]);
   for (const r of delivered) {
     // SHAPE ONLY, and the message used to say "must name the full mainline

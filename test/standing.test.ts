@@ -82,6 +82,21 @@ test("a claimed-and-delivered row is not still offered at the door (checkpoint-l
     !starterItems(50).some((s) => s.id === "checkpoint-lag-window"),
     "a claimed-and-delivered row must not appear in starter_items",
   );
+  // AND IT MUST NOT BILL THE PERSON WHO DELIVERED IT. standingClaims()
+  // excludes only "shipped" and "declined", so marking a delivered row
+  // "in-progress" does two things nobody asked for: it shows the claimant an
+  // unfinished-business row for work they finished, and because society.ts
+  // serves starter_items only to a citizen whose standing claims are empty, it
+  // silently stops offering them any work at all. Caught by the pre-deploy
+  // auditor as an undeclared second effect of the fix above.
+  //
+  // Killing mutation: set this row's status back to "in-progress" and this
+  // assertion goes red while the starter_items one above stays green.
+  assert.equal(
+    standingClaims("tally-stick").some((c) => c.id === "checkpoint-lag-window"),
+    false,
+    "a delivered row must not read as an open obligation on its claimant",
+  );
 });
 
 test("starter items honour their limit and point at a thread to claim in", () => {

@@ -87,23 +87,28 @@ test("a custom-scheme redirect contributes its scheme, never the string 'null'",
   assert.doesNotMatch(policy, /null/, "the string 'null' must never reach the header");
 });
 
-test("a redirect that could break out of the directive cannot be registered in the first place", async () => {
-  // The guard in formActionSource is a second line, not the only one: a source
-  // carrying a space or a semicolon could break out of the directive, and
-  // registration refuses such a URI before any client_id exists for it. Both
-  // layers are asserted because relying on either alone is how this class
-  // survives -- the validator could loosen, or the header could be reused on a
-  // page whose URI came from somewhere else.
-  const env = makeEnv();
-  const r = await worker.fetch(
-    new Request(`${ORIGIN}/oauth/register`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ client_name: "Bad", redirect_uris: ["https://exa mple.com/cb"] }),
-    }),
-    env,
+test("a registrable redirect whose origin carries a semicolon is NOT emitted", async () => {
+  // THIS IS THE GUARD'S ONLY REAL TEST, and the first version of this file did
+  // not have it. That version used "https://exa mple.com/cb", which
+  // registration refuses outright, so the request never reached the header and
+  // the regex in formActionSource had ZERO coverage while this file's own
+  // comment claimed a mutation would kill it. The pre-deploy auditor dropped
+  // the guard, printed the mutated line, and watched all 1692 tests stay green.
+  //
+  // "https://a;b.com/cb" IS registrable today. Without the guard the header
+  // becomes `form-action 'self' https://a;b.com`, and a CSP parser splits that
+  // on the semicolon into a second directive. That is the injection.
+  //
+  // Killing mutation: delete the regex test in formActionSource and return the
+  // source unconditionally. This goes red; nothing else does.
+  const policy = await csp("https://a;b.com/cb");
+  assert.doesNotMatch(policy, /a;b\.com/, "a source with a semicolon must never reach the header");
+  assert.equal(
+    (policy.match(/;/g) ?? []).length,
+    2,
+    "exactly the two separators the policy's own three directives need — no third",
   );
-  assert.equal(r.status, 400, "a malformed redirect_uri never becomes a registered client");
+  assert.match(policy, /form-action 'self'$/, "and the directive falls back to bare 'self'");
 });
 
 test("an unregistered redirect_uri is still refused before any page is rendered", async () => {
