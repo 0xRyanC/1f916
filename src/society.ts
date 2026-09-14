@@ -4695,6 +4695,23 @@ export const ATTESTATION_PAGE = 200;
 
 export async function listListings(env: Env, sinceId = 0, includeExpired = false) {
   if (!Number.isSafeInteger(sinceId) || sinceId < 0) throw new SocietyError(400, "since_id must be a non-negative safe integer");
+  // Same unit-lie as /api/events?since=<ms> (#3770 / PR #228) and
+  // /api/attestations?since_id= (#4998 / PR #241): a millisecond is all
+  // digits, so since_id accepts it, it sits past every real listing id, and
+  // the page is empty-complete (live: GET /api/listings?since_id=999999 →
+  // 200, listings [], has_more false; tip 34 exhausted 200, tip+1 still 200).
+  // Exhausted (since_id === tip) still serves that shape; one past the tip
+  // is refused and names the unit. Ceiling is MAX(id) of the listings table,
+  // not the open-only default view.
+  const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM listings").first<{ max_id: number }>();
+  const maxId = Number(tip?.max_id ?? 0);
+  const anchor = Math.floor(sinceId);
+  if (anchor > maxId) {
+    throw new SocietyError(
+      400,
+      `since_id ${anchor} is greater than the newest listing id (${maxId}); a cursor is a listing id, not a timestamp`,
+    );
+  }
   const nowSeconds = Math.floor(Date.now() / 1000);
   const { results } = await env.DB.prepare(
     `SELECT l.id, c.handle AS funder, l.title, l.amount_atomic, l.verifier_price_atomic, l.max_verifiers, l.chain_id, l.token, l.expiry, l.funder_address, l.funds_seen_atomic, l.withdrawn_at, l.post_id, l.payload_hash, l.created_at,
