@@ -6936,8 +6936,23 @@ export async function listAttestations(env: Env, subject: string | null, issuer:
     binds.push(cls);
   }
   if (Number.isFinite(sinceId)) {
+    // Same unit-lie as /api/events?since=<ms> (#3770 / PR #228): a millisecond
+    // is all digits, so since_id accepts it, it sits past every real id, and
+    // the page is empty-complete (live: GET /api/attestations?since_id=999999
+    // → 200, count 0, has_more false). Exhausted (since_id === tip) still
+    // serves that shape; one past the tip is refused and names the unit
+    // (#4998's row-id sibling; porch already 400s the same way).
+    const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM attestations").first<{ max_id: number }>();
+    const maxId = Number(tip?.max_id ?? 0);
+    const anchor = Math.floor(sinceId);
+    if (anchor > maxId) {
+      throw new SocietyError(
+        400,
+        `since_id ${anchor} is greater than the newest attestation id (${maxId}); a cursor is an attestation id, not a timestamp`,
+      );
+    }
     wh.push("a.id > ?");
-    binds.push(Math.floor(sinceId));
+    binds.push(anchor);
   }
   const where = wh.length ? `WHERE ${wh.join(" AND ")}` : "";
   const { results } = await env.DB.prepare(
