@@ -402,6 +402,20 @@ async function walkWallet(env: Env, wallet: WalletRow, deps: ObserverDeps): Prom
   // A page cut at the cap advances only to the last block fully covered, so
   // nothing in a partially read block is skipped.
   const coveredTo = logs.length === OBSERVER_MAX_ROWS_PER_CYCLE ? logs[logs.length - 1]!.block_number - 1 : walkedTo;
+  // THE ROW CAP IS A REASON TOO. The loop above exits on three conditions and
+  // only two of them set `partial`: a refused page and a disagreement. Hitting
+  // OBSERVER_MAX_ROWS_PER_CYCLE exits with `partial` empty, so last_error was
+  // written NULL and a stride cut short by the cap read as a clean full cycle
+  // -- while the walk_note served on GET /api/rail says last_error "names the
+  // reason the last cycle wrote nothing, or stopped short of the full stride".
+  // That sentence was an over-claim for exactly this path. Flagged by the
+  // pre-deploy auditor as an advisory on PR #233; this makes the sentence true
+  // rather than softening it. Rare (it needs OBSERVER_MAX_ROWS_PER_CYCLE
+  // transfers from one wallet inside a single stride) and never wrong about
+  // the mark, which is why it was an advisory and not a block.
+  if (!partial && coveredTo < toBlock) {
+    partial = `row cap: ${OBSERVER_MAX_ROWS_PER_CYCLE} transfers filled the cycle at block ${coveredTo}, short of ${toBlock}`;
+  }
   const index = await bindingIndexFor(env, funder);
   let payments = 0;
   let zero = 0;

@@ -181,6 +181,23 @@ test("the walk is bounded per cycle, resumes from its mark, never double-writes,
   const lastFull = many[OBSERVER_MAX_ROWS_PER_CYCLE - 1]!;
   assert.equal(r2.to_block, Number(BigInt(lastFull.blockNumber)) - 1, "the mark stops before the block the cap cut into");
   assert.ok(db2.prepare("SELECT COUNT(*) AS n FROM observed_transfers").get()!.n < OBSERVER_MAX_ROWS_PER_CYCLE, "rows in the cut block are left for next cycle");
+
+  // A STRIDE CUT BY THE ROW CAP MUST SAY SO. The paging loop exits on three
+  // conditions and only two of them used to set `partial`: a refused page and
+  // a disagreement. Filling OBSERVER_MAX_ROWS_PER_CYCLE exited with `partial`
+  // empty, so last_error was written NULL and a short cycle read as a clean
+  // full one -- while the walk_note served on GET /api/rail promises that
+  // last_error "names the reason the last cycle wrote nothing, or stopped
+  // short of the full stride". Raised by the pre-deploy auditor on PR #233.
+  //
+  // KILLING MUTATION: delete the `if (!partial && coveredTo < toBlock)` block
+  // in src/observer.ts. partial goes undefined, last_error goes NULL, and both
+  // assertions below go red while every other observer test stays green.
+  assert.ok(r2.partial, "a cap-shortened stride reports a reason");
+  assert.match(String(r2.partial), /row cap/, "and the reason names the cap rather than a fetch failure");
+  const mark = db2.prepare("SELECT last_error FROM observer_marks WHERE funder_address = ?").get(FUNDER.toLowerCase()) as { last_error: string | null } | undefined;
+  assert.ok(mark?.last_error, "and it is persisted, because the served sentence points a reader at last_error");
+  assert.match(String(mark!.last_error), /row cap/);
 });
 
 test("the listing page and the rail serve observed payments as their own tier, beside receipts", async () => {
