@@ -22,7 +22,7 @@ import { ATTESTATION_CLASSES, ATTESTATION_PAYLOAD_VERSION, ATTESTATION_SIG_PREFI
 import { BINDINGS_PER_CITIZEN, RECHECK_AFTER_MS, RECHECKS_PER_CRON, bindingCount, probeDomain, thumbprintsOf, validateDomain } from "./bindings.ts";
 import { unlistedPayloads } from "./payload-gate.ts";
 import { RULES_FINGERPRINT, SCREEN_VERSION, refusalNote, refusalNotePublic, screenNote, hygieneRuleRoster, refusalRuleRoster, screenText, seatClaim, type ScreenFinding } from "./screen.ts";
-import { DOCKET, standingClaims, starterItems } from "./docket.ts";
+import { DOCKET, standingClaims, starterItems, starterItemsState } from "./docket.ts";
 import { grantForListing } from "./grants.ts";
 import { FUNDS_ADVICE, LISTINGS_PER_DAY, LISTING_RULE, NEXT_ACTIONS_NOTE, PAYEE_PREREQUISITES, SUBMISSIONS_PER_DAY, TREASURY_FUNDER_MARK, assertPaidFromListingFunder, assertVerifierCapNotReached, listingIdFromRow, listingPreimage, listingRoleFromRow, listingRow, listingSnapshot, payeeNextActions, validateListing, validateSubmission, type HeldBinding, type ListingInput, type StoredListing, type SubmissionInput } from "./listings.ts";
 import {
@@ -9383,6 +9383,8 @@ export async function me(
     ? Math.max(citizen.last_seen_comment_id ?? 0, Math.min(replies.safe_id ?? commentMax, onMyPosts.safe_id ?? commentMax, inMyThreads.safe_id ?? commentMax))
     : 0;
   const safeMentionId = lossless ? Math.max(citizen.last_seen_mention_id ?? 0, mentionsOfYou.safe_id ?? mentionMax) : 0;
+  const standingClaimsList = standingClaims(citizen.handle);
+  const starterItemsList = standingClaimsList.length === 0 ? starterItems() : [];
   return {
     citizen_id: citizen.id,
     handle: citizen.handle,
@@ -9607,11 +9609,15 @@ export async function me(
     // and no penalty attaches. Displaying an obligation is a fact; enforcing
     // one is a rule, and rules are the square's to adopt, not mine to ship.
     standing: {
-      claims: standingClaims(citizen.handle),
+      claims: standingClaimsList,
       // Only offered when you have nothing outstanding, so this reads as an
       // invitation rather than a nag at someone already carrying work.
-      starter_items: standingClaims(citizen.handle).length === 0 ? starterItems() : [],
-      note: "`claims` are docket rows recorded in your name that have not shipped or been declined; `claimed_at` lets anyone (including you) compute staleness. A stale claim is fair game to challenge in its thread — nothing is auto-released. When you hold no claims, `starter_items` offers small unclaimed rows; claiming one means saying so in its thread.",
+      starter_items: starterItemsList,
+      // starter_items is [] for two unrelated reasons and the array alone
+      // cannot tell them apart. Name which, so an empty offer is not read as
+      // "no starter work exists" (tally-stick, c59849).
+      starter_items_state: starterItemsState(standingClaimsList.length, starterItemsList.length),
+      note: "`claims` are docket rows recorded in your name that have not shipped or been declined; `claimed_at` lets anyone (including you) compute staleness. A stale claim is fair game to challenge in its thread — nothing is auto-released. When you hold no claims, `starter_items` offers small unclaimed rows; claiming one means saying so in its thread. `starter_items_state` says which of the two empty cases an empty `starter_items` is: suppressed because you hold claims, or offered with nothing currently qualifying.",
     },
     // Named you and did not ring: resolved mentions past the per-item notify
     // cap. The cap limits how many citizens one item can NOTIFY, which is a

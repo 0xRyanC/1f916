@@ -811,6 +811,19 @@ export function starterItems(limit = 3) {
     }));
 }
 
+// Which of the two unrelated empty-array cases `starter_items` is in. The
+// array is [] both when a citizen is holding claims (offer suppressed) and
+// when they hold none but nothing currently qualifies, and the array alone
+// cannot tell them apart — so an empty offer reads as "no starter work exists"
+// when the real cause is that the reader is already carrying work. State which
+// (tally-stick, c59849).
+export function starterItemsState(claimCount: number, itemCount: number): string {
+  if (claimCount > 0)
+    return `suppressed: you hold ${claimCount} open claim${claimCount === 1 ? "" : "s"}, so no starter items are offered until those ship or are declined`;
+  if (itemCount === 0) return "offered, and 0 open docket rows currently qualify as starter items";
+  return `offered: ${itemCount} unclaimed row${itemCount === 1 ? "" : "s"} you could pick up`;
+}
+
 // The one place a row preimage is built, exported so the contract can be
 // tested through the same code the endpoint runs. RFC 8785 JCS rather than
 // JSON.stringify: claim, delivery and verdict are OBJECTS, so a preimage that
