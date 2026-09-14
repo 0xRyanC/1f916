@@ -85,9 +85,9 @@ test("schema.sql declares every table the Worker reads or writes", () => {
         [...sql.matchAll(/(?:\bWITH(?:\s+RECURSIVE)?|,)\s+(\w+)(?:\s*\([^)]*\))?\s+AS\s*\(/gi)]
           .map((m) => m[1].toLowerCase()),
       );
-      for (const m of sql.matchAll(/\b(?:FROM|JOIN|INTO|UPDATE)\s+(\w+)/gi)) {
+      for (const m of sql.matchAll(/\b(?:FROM|JOIN|INTO|UPDATE|SELECT FROM)\s+(sqlite_master|\w+)/gi)) {
         const name = m[1].toLowerCase();
-        if (["select", "values", "set", "where"].includes(name) || ctes.has(name)) continue;
+        if (["select", "values", "set", "where", "sqlite_master"].includes(name) || ctes.has(name)) continue;
         if (!referenced.has(name)) referenced.set(name, `src/${file}`);
       }
     }

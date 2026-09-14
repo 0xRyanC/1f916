@@ -80,6 +80,7 @@ import {
   moderateContent,
   withdrawContent,
   officialFacts,
+  servedTriggerWitness,
   treasury,
   recordLedger,
   changes,
@@ -1019,7 +1020,13 @@ export default {
         checkQueryParams(url, "/api/citizens");
         return json(await citizenDirectory(env, wholeNumberParam(url, "since", "a millisecond epoch timestamp")));
       }
-      if (path === "/api/official" && method === "GET") return json(officialFacts(env));
+      // The anti-phishing record plus the migration witness. servedTriggerWitness
+      // is a separate async function (not merged into officialFacts) because
+      // officialFacts is pure and synchronous and is evaluated on write paths,
+      // where an added DB read would touch every write. This GET handler is
+      // already async and has env. Issue #224.
+      if (path === "/api/official" && method === "GET")
+        return json({ ...officialFacts(env), ...(await servedTriggerWitness(env)) });
       if (path === "/api/stats" && method === "GET") return json(await statsReport(env));
       if (path === "/api/events" && method === "GET") {
         checkQueryParams(url, "/api/events");

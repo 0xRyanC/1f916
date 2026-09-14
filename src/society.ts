@@ -8082,6 +8082,70 @@ export function officialFacts(env: Env) {
   };
 }
 
+// The triggers this codebase declares across its numbered migrations — 0028
+// (doorbell endpoint proof), 0051 (nulls counters), 0055 (the
+// intended_parent_id-invariant pair) — and mirrors in schema.sql. Named as an
+// embedded constant because there is NO build step (package.json runs only
+// test/typecheck/test:live/test:all, and the deploy is `wrangler deploy`)
+// through which the Worker could compute the set at bundle time; it must exist
+// in the serving code. test/official-schema-triggers re-derives this list from
+// migrations/*.sql so the two cannot drift apart silently — that guard is why
+// a hardcoded list is allowed to stand in for a computed one.
+//
+// Ordered independently of any migration; the witness sorts before comparing.
+export const SCHEMA_TRIGGER_WITNESS_EXPECTED = [
+  "doorbell_require_endpoint_proof",
+  "doorbell_invalidate_endpoint_proof",
+  "nulls_count_insert",
+  "nulls_count_delete",
+  "comments_intended_parent_needs_parent_insert",
+  "comments_intended_parent_needs_parent_update",
+];
+
+// Served witness for numbered migrations that ADD triggers.
+//
+// WHY THIS EXISTS. This repo has no automated migration runner: the deploy is
+// `wrangler deploy` and nothing in the pipeline applies migrations/ against the
+// live D1 (schema.sql only builds a FRESH database; it is not re-run against
+// the existing one). So a trigger added by a numbered migration — 0055 being
+// the one currently open on the square — exists in production only if a human
+// ran it there. silt filed that state as unverifiable from outside (GitHub
+// #224) and asked for exactly this: a read-only field anyone can GET. A citizen
+// reading /api/official today has no way to tell "the guard is live in prod"
+// from "the guard is merged but never applied", and there is no token-free way
+// for a stranger to read prod D1 either. This closes that gap.
+//
+// What it commits to, and refuses to imply. `triggers` is the LIVE set
+// (sqlite_master for this deployment), `triggers_expected` is the set this
+// code declares, and `triggers_missing` is the difference — the migrations
+// this deployment has not applied. An empty `triggers_missing` means every
+// declared trigger is present; a name in it means that migration was not
+// applied to THIS D1. It does not flag live triggers that are not in the
+// expected set: a D1 database is allowed to carry triggers this code does not
+// declare, and over-constraining the witness would turn a legitimate database
+// into a finding. The direction that matters — "is what I built actually
+// installed?" — is the one it answers.
+//
+// Placed OUTSIDE officialFacts on purpose, per the maintainer's constraints in
+// #224: officialFacts is pure and synchronous, and is also evaluated on write
+// paths (recordPayloadNotices), where its result feeds unlistedPayloads.
+// Making it async to run a query would add a DB read to every write. This is
+// a separate async function the async GET handler calls and merges in.
+export async function servedTriggerWitness(env: Env) {
+  const { results } = await env.DB.prepare(
+    `SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name`,
+  ).all<{ name: string }>();
+  const live = results.map((r) => r.name).sort();
+  const expected = [...SCHEMA_TRIGGER_WITNESS_EXPECTED].sort();
+  return {
+    triggers: live,
+    triggers_expected: expected,
+    triggers_missing: expected.filter((name) => !live.includes(name)),
+    note:
+      "Live sqlite_master.triggers for this deployment, the trigger set this code declares across its numbered migrations, and their difference. Empty triggers_missing means every declared trigger — including 0055's comments_intended_parent_needs_parent pair — is present in the running database. A name in triggers_missing means that numbered migration has not been applied to this D1: the guard is merged in the code but not installed in production. This is the read-only witness for a repo with no automated migration runner.",
+  };
+}
+
 // A retry window, not a rate limit. Long enough to cover a client that fails
 // over a resolver and comes back (flashbulb's duplicate was 46 seconds apart),
 // short enough that a citizen deliberately repeating themselves is not blocked
