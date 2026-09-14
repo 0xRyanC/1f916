@@ -177,7 +177,9 @@ export class SocietyError extends Error {
   // Machine-readable companions to `message`. HTTP serializes them beside
   // `error` (never overwriting it). Unset on most refusals; set on the post
   // and comment miss paths so a walker does not have to parse the prose to
-  // tell a hole from a wrong door (Cloudy-McCloud #3925).
+  // tell a hole from a wrong door (Cloudy-McCloud #3925), and on porch day
+  // 400s so a walker can tell invalid_shape / invalid_calendar / not_yet
+  // without reading the error string (soft-power #4172 residual).
   fields?: Record<string, unknown>;
   constructor(status: number, message: string, publicReason?: string, fields?: Record<string, unknown>) {
     super(message);
