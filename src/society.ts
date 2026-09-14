@@ -8775,6 +8775,15 @@ interface GrantBallot {
   grant: string;
   proposal_id: number;
   counts: boolean;
+  // TRUE when the window has not opened YET, as opposed to closed, superseded,
+  // or any other reason a vote does not count. castVote refuses exactly this
+  // case, so it must be a field and not a prefix match on `reason`: the state
+  // machine has two distinct not-yet branches with two different sentences
+  // (a grant still `draft`/`open`, and a grant `voting` before its instant),
+  // and matching the prose of one silently missed the other -- which is the
+  // common case, since a grant collects its early votes while it is `open`.
+  // Caught by test/vote-early-ballot-refused.test.ts before it shipped.
+  before_window?: true;
   reason: string;
   weight?: number;
   weight_at_close?: number;
@@ -8798,12 +8807,19 @@ async function grantBallotFor(env: Env, commentId: number, citizen: Citizen, now
     return { ...base, counts: false, reason: `proposal ${row.proposal_id} was superseded by ${row.superseded_by_id}; only the latest revision is on the ballot, so votes here do not carry` };
   }
   if (row.state !== "voting") {
-    return { ...base, counts: false, reason: `grant ${row.slug} is ${row.state}, not voting: this counts as a vote on a comment, never as a vote for a proposal` };
+    // draft/open are BEFORE the window; selected/shipped/cancelled are after it.
+    const notYet = row.state === "draft" || row.state === "open";
+    return {
+      ...base,
+      counts: false,
+      ...(notYet ? { before_window: true as const } : {}),
+      reason: `grant ${row.slug} is ${row.state}, not voting: this counts as a vote on a comment, never as a vote for a proposal`,
+    };
   }
   const opened = row.voting_opened_at;
   const closes = row.voting_closes_at === null ? null : row.voting_closes_at * 1000;
   if (opened === null || now < opened) {
-    return { ...base, counts: false, reason: "the ballot window has not opened; this counts as a vote on a comment, never as a vote for a proposal" };
+    return { ...base, counts: false, before_window: true, reason: "the ballot window has not opened; this counts as a vote on a comment, never as a vote for a proposal" };
   }
   if (closes !== null && now >= closes) {
     return { ...base, counts: false, reason: `the ballot window closed at ${new Date(closes).toISOString()}; this counts as a vote on a comment, never as a vote for a proposal` };
@@ -8868,6 +8884,42 @@ export async function castVote(env: Env, citizen: Citizen, targetType: string, t
   if (!target) throw new SocietyError(404, `${targetType} ${targetId} does not exist`);
   if (target.citizen_id === citizen.id) throw new SocietyError(403, "You cannot vote for yourself. Nice try.");
   const now = Date.now();
+  // REFUSE AN EARLY BALLOT VOTE INSTEAD OF EATING IT.
+  //
+  // Three rules that are each defensible alone combine into a trap. tallyVotes
+  // counts only rows with created_at inside the window. The PRIMARY KEY on
+  // (citizen_id, target_type, target_id) turns a second vote into 409. And
+  // there is no un-vote: grep "DELETE FROM votes" across src/ returns nothing.
+  // So a citizen who votes on a proposal comment before the window opens has
+  // spent their vote on a row that will never be counted and cannot spend it
+  // again when it would count. The vote is simply gone.
+  //
+  // They are not being careless. The proposal comment this registry writes
+  // ends "a vote on this comment is a vote for this proposal once voting
+  // opens", which reads as vote now, counts later. grantBallotFor already
+  // knows better and says so -- but in the RECEIPT, after the row is committed
+  // and the 409 has closed the door. Information that arrives after the only
+  // moment it could have been acted on is not a disclosure.
+  //
+  // Measured before this landed: grant 1f512 proposal 2 held three votes, all
+  // cast before its window opened, and tallied 0 -- it lost every vote it had.
+  // Grant 1fab0 was still `open` with 26 votes already resting on its proposal
+  // comments, every one of them headed for the same fate.
+  //
+  // Scope, deliberately narrow. This refuses ONLY the not-yet-opened case, the
+  // one where the citizen still has something to lose and waiting recovers it.
+  // A window that has already CLOSED and a SUPERSEDED revision both keep the
+  // old behaviour: the vote stands as an ordinary comment vote and the receipt
+  // explains it, because there nothing is lost by letting it land.
+  if (targetType === "comment") {
+    const ballot = await grantBallotFor(env, targetId, citizen, now);
+    if (ballot && !ballot.counts && ballot.before_window) {
+      throw new SocietyError(
+        409,
+        `Voting on grant ${ballot.grant} has not opened yet, so this vote would not count for proposal ${ballot.proposal_id} — and because a vote cannot be cast twice on the same comment and cannot be withdrawn, casting it now would spend it for nothing. Wait for the window to open, then vote. GET /api/grants/${ballot.grant} serves voting_opened_at and voting_closes_at.`,
+      );
+    }
+  }
   const used = await countSince(env.DB, "votes", citizen.id, utcMidnight(now));
   if (used >= CONSTITUTION.votes_per_day) throw new SocietyError(429, "Daily votes spent (50/day).");
   // The 50/day budget is enforced by the write, not by the count above, so
