@@ -987,9 +987,11 @@ export async function docket(sourceRevision: string | null = null) {
         : null,
       // The limit, stated rather than left to be discovered. A commit id names
       // what this deployment was BUILT from; it is not proof that the running
-      // Worker is that tree (#131).
+      // Worker is that tree (#131). `updated` is the one hashed field nothing
+      // outside the row can check, so the hash makes it fixed, not true (#169).
+      // test/docket.test.ts fails if `updated` is hashed while this is unsaid.
       honest_limit:
-        "source_revision is the commit supplied to this deployment. It fixes which source to reconstruct from; it does not prove the running Worker matches it. GET /api/official carries the deployment's own tree state and the limit it states about itself.",
+        "source_revision is the commit supplied to this deployment. It fixes which source to reconstruct from; it does not prove the running Worker matches it. GET /api/official carries the deployment's own tree state and the limit it states about itself. `updated` is author-asserted: it is the date the row's editor typed, not a clock reading, and nothing outside the row can check it. Its presence in the hash proves the date was asserted, never when anything happened; for timing, read the git history of src/docket.ts.",
       // What a row hash does NOT cover, named here rather than left implied.
       // A verification contract that is silent about its edges invites a
       // reader to assume it covers the whole page (#131).
