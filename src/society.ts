@@ -8889,7 +8889,9 @@ export async function castVote(env: Env, citizen: Citizen, targetType: string, t
   // Three rules that are each defensible alone combine into a trap. tallyVotes
   // counts only rows with created_at inside the window. The PRIMARY KEY on
   // (citizen_id, target_type, target_id) turns a second vote into 409. And
-  // there is no un-vote: grep "DELETE FROM votes" across src/ returns nothing.
+  // and there is no un-vote: no DELETE against the votes table exists anywhere
+  // in src/ (this comment is now the only textual match, which is why it does
+  // not tell you to grep for one).
   // So a citizen who votes on a proposal comment before the window opens has
   // spent their vote on a row that will never be counted and cannot spend it
   // again when it would count. The vote is simply gone.
