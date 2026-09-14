@@ -325,13 +325,54 @@ function text(body: string): Response {
 }
 
 // The OAuth authorize page: never cached, no scripts, forms only to us.
-function authorizeHtml(body: string): Response {
+// FORM-ACTION MUST NAME THE DESTINATION, NOT JUST US.
+//
+// This page's whole purpose is to hand the person back to the client's origin:
+// the form POSTs here, and this route answers 303 to the client's redirect_uri.
+// `form-action 'self'` permits the POST and forbids that redirect in every
+// engine that enforces form-action ACROSS a redirect. The spec left that
+// ambiguous and engines split: CHROME AND WEBKIT BLOCK the redirect, Firefox
+// allows it (MDN records Firefox 57 not blocking where Chrome 63 does). I had
+// this pair backwards in the first version of this comment, and the inversion
+// mattered: #179 is filed from Edge/Chrome and iPhone Safari, which are exactly
+// the engines that DO block, so the wrong version would have told the reporter
+// their own browser was the one unaffected.
+//
+// It fails the way CSP fails: silently. No request, no console error the person
+// sees, just a 303 that never navigates. Which is exactly what #179 reports and
+// what #175 is the damage from: the citizen is
+// already registered by then, so an interrupted flow leaves a real handle whose
+// secret nobody ever received.
+//
+// Naming the destination grants nothing new. connect.ts:290 refuses any
+// redirect_uri the client did not register before this page is ever rendered,
+// so the origin below is always one the client already owns; CSP is being told
+// what the route is already committed to doing.
+//
+// Custom schemes: URL.origin is the string "null" for a non-special scheme, and
+// emitting that would be worse than useless, so those contribute `scheme:`
+// instead. Anything that does not parse, or that carries a character which
+// could break out of the directive, contributes nothing and the policy stays at
+// 'self' -- a malformed source is not worth a loosened header.
+function formActionSource(redirectUri: string | null): string {
+  if (!redirectUri) return "";
+  let u: URL;
+  try {
+    u = new URL(redirectUri);
+  } catch {
+    return "";
+  }
+  const src = u.protocol === "http:" || u.protocol === "https:" ? u.origin : u.protocol;
+  return /^[A-Za-z][A-Za-z0-9+.-]*:(\/\/[A-Za-z0-9.-]+(:[0-9]{1,5})?)?$/.test(src) ? ` ${src}` : "";
+}
+
+function authorizeHtml(body: string, redirectUri: string | null = null): Response {
   return new Response(body, {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
       "Referrer-Policy": "no-referrer",
-      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
+      "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self'${formActionSource(redirectUri)}`,
     },
   });
 }
@@ -562,13 +603,13 @@ export default {
         // see the name in the 400 rather than a page that ignored it.
         checkQueryParams(url, "/oauth/authorize");
         const p = await authorizeParams(env, url.searchParams);
-        return authorizeHtml(authorizePage(url.origin, p, null));
+        return authorizeHtml(authorizePage(url.origin, p, null), p.redirect_uri);
       }
       if (path === "/oauth/authorize" && method === "POST") {
         assertSameOrigin(request, url.origin);
         const d = await authorizeDecision(env, await formParams(request), request.headers.get("CF-Connecting-IP"));
         if ("redirect" in d) return new Response(null, { status: 303, headers: { Location: d.redirect, "Cache-Control": "no-store" } });
-        return authorizeHtml(authorizePage(url.origin, d.page, d.error));
+        return authorizeHtml(authorizePage(url.origin, d.page, d.error), d.page.redirect_uri);
       }
       if (path === "/oauth/token" && method === "POST") {
         const r = await oauthToken(env, await formParams(request));
