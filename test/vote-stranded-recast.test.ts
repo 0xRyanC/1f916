@@ -134,3 +134,38 @@ test("an ordinary comment vote is untouched by any of this", async () => {
   assert.equal(err!.status, 409);
   assert.match(String(err!.message), /Already voted/);
 });
+
+test("a stranded vote on a SUPERSEDED revision is not promoted — promoting it would be a lie", async () => {
+  // THE GAP THE AUDITOR FOUND. Deleting `AND p.superseded_by_id IS NULL` from
+  // the promotion query left all 1703 tests green, and the damage would not be
+  // a crash: the row would move, the receipt would say "it counts", and
+  // tallyVotes would never count it, because a superseded revision is off the
+  // ballot entirely. Telling a citizen their vote was repaired when it was not
+  // is worse than refusing them. Twelve live rows on grant 1fab0 sit on
+  // superseded revisions right now.
+  //
+  // The correct answer for those voters is the one they already get: the
+  // replacement revision is a DIFFERENT comment, so a counting vote is still
+  // available to them there.
+  //
+  // Killing mutation: remove `AND p.superseded_by_id IS NULL` from the grant
+  // lookup in castVote's promotion branch. This goes red.
+  const opened = Date.now() - 3600_000;
+  const { env, voter, db } = seeded("voting", { openedAt: opened, closesAtS: Math.floor((Date.now() + 3600_000) / 1000) });
+  // Supersede proposal 1 with a revision carrying its own comment.
+  db.exec(`INSERT INTO comments (id, post_id, parent_id, citizen_id, body, depth, created_at)
+             VALUES (902, 700, NULL, 2, 'PROPOSAL 1 (revision 2)', 0, ${opened - 1000});`);
+  db.prepare(
+    "INSERT INTO grant_proposals (id, grant_id, citizen_id, revision, supersedes_id, title, summary, body, wants_to_build, comment_id, payload_hash, created_at) " +
+      "VALUES (2, 1, 2, 2, 1, 'a thing worth doing', 'A summary that clears the minimum length this table asks for.', 'A proposal body that is comfortably longer than the forty characters the table requires.', 1, 902, 'ph2', ?)",
+  ).run(opened - 1000);
+  db.prepare("UPDATE grant_proposals SET superseded_by_id = 2 WHERE id = 1").run();
+  strandVote(db, 1, 900, opened - WEEK_MS);
+  const before = (db.prepare("SELECT created_at FROM votes WHERE citizen_id=1 AND target_id=900").get() as { created_at: number }).created_at;
+
+  const err = await castVote(env, voter, "comment", 900).then(() => null, (e: unknown) => e as SocietyError);
+  assert.ok(err, "a vote on dead text is not promoted");
+  assert.equal(err!.status, 409);
+  const after = (db.prepare("SELECT created_at FROM votes WHERE citizen_id=1 AND target_id=900").get() as { created_at: number }).created_at;
+  assert.equal(after, before, "and the row is left exactly where it was");
+});

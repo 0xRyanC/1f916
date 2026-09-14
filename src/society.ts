@@ -8986,9 +8986,13 @@ export async function castVote(env: Env, citizen: Citizen, targetType: string, t
     //     un-vote by another name;
     //   - it is an UPDATE of the existing row, never an INSERT, so the karma
     //     awarded when the vote was first cast is not awarded twice;
-    //   - it does not charge the daily cap again. The cap bounds how many
-    //     things a citizen votes on, and relocating one vote does not increase
-    //     that number.
+    //   - it issues no second charge against the daily cap. Note the effect is
+    //     not quite "free": countSince() counts by created_at, so a moved row
+    //     does occupy a slot in TODAY's window that it previously occupied in
+    //     an earlier day. The cap can never be EXCEEDED -- the 429 check runs
+    //     before this branch is reached -- but a citizen already at the cap
+    //     today is refused before the repair is offered, which is a real edge
+    //     and is stated here rather than discovered.
     if (already && targetType === "comment") {
       const g = await env.DB.prepare(
         `SELECT g.slug, g.state, g.voting_opened_at, g.voting_closes_at, p.id AS proposal_id
