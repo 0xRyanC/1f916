@@ -169,3 +169,66 @@ test("a stranded vote on a SUPERSEDED revision is not promoted — promoting it 
   const after = (db.prepare("SELECT created_at FROM votes WHERE citizen_id=1 AND target_id=900").get() as { created_at: number }).created_at;
   assert.equal(after, before, "and the row is left exactly where it was");
 });
+
+test("a stranded vote is NOT promoted after the window has CLOSED (F3)", async () => {
+  // Same failure shape as F1: the row moves, the receipt says "it counts", and
+  // tallyVotes never counts it -- because its window filter is
+  // created_at < voting_closes_at. Dropping either the close check or the
+  // state === "voting" check left all 1704 tests green; the suite covered
+  // not-yet-opened and never already-closed.
+  //
+  // Killing mutation: delete `(closes === null || now < closes)` from
+  // windowOpenNow. This goes red.
+  const opened = Date.now() - 7200_000;
+  const closedAtS = Math.floor((Date.now() - 3600_000) / 1000);
+  const { env, voter, db } = seeded("voting", { openedAt: opened, closesAtS: closedAtS });
+  strandVote(db, 1, 900, opened - WEEK_MS);
+  const before = (db.prepare("SELECT created_at FROM votes WHERE citizen_id=1 AND target_id=900").get() as { created_at: number }).created_at;
+
+  const err = await castVote(env, voter, "comment", 900).then(() => null, (e: unknown) => e as SocietyError);
+  assert.ok(err, "a closed window cannot be repaired into");
+  assert.equal(err!.status, 409);
+  const after = (db.prepare("SELECT created_at FROM votes WHERE citizen_id=1 AND target_id=900").get() as { created_at: number }).created_at;
+  assert.equal(after, before, "and the row stays where it was");
+});
+
+test("a stranded vote is NOT promoted once the grant has left `voting` (F3, state arm)", async () => {
+  // The same gap by the other route: a grant at `selected` still carries a
+  // voting_opened_at and a voting_closes_at, so a state check is what stops a
+  // decided grant from accepting a repair into its finished tally.
+  //
+  // Killing mutation: drop `g?.state === "voting"` from windowOpenNow. Red.
+  const opened = Date.now() - 3600_000;
+  const { env, voter, db } = seeded("selected", { openedAt: opened, closesAtS: Math.floor((Date.now() + 3600_000) / 1000) });
+  strandVote(db, 1, 900, opened - WEEK_MS);
+  const before = (db.prepare("SELECT created_at FROM votes WHERE citizen_id=1 AND target_id=900").get() as { created_at: number }).created_at;
+
+  const err = await castVote(env, voter, "comment", 900).then(() => null, (e: unknown) => e as SocietyError);
+  assert.ok(err, "a decided grant does not accept a repair");
+  const after = (db.prepare("SELECT created_at FROM votes WHERE citizen_id=1 AND target_id=900").get() as { created_at: number }).created_at;
+  assert.equal(after, before, "and the decided tally is undisturbed");
+});
+
+test("the promotion touches only the voter's own row (F2)", async () => {
+  // Removing `citizen_id = ?` from the UPDATE's WHERE left all 1704 green.
+  // That weakening would let one citizen silently relocate EVERY other
+  // citizen's stranded row on the same comment -- moving votes nobody asked to
+  // move, on a live ballot. The consent this repair rests on is the voter's
+  // own re-vote; it cannot extend to anyone else.
+  //
+  // Killing mutation: drop `citizen_id = ?` from the UPDATE. This goes red.
+  const opened = Date.now() - 3600_000;
+  const { env, voter, db } = seeded("voting", { openedAt: opened, closesAtS: Math.floor((Date.now() + 3600_000) / 1000) });
+  db.exec(`INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at)
+             VALUES (3, 'bystander', 'test-model', 'h3', ${opened - WEEK_MS}, ${opened});`);
+  strandVote(db, 1, 900, opened - WEEK_MS);
+  const strandedOther = opened - WEEK_MS + 5;
+  strandVote(db, 3, 900, strandedOther);
+
+  await castVote(env, voter, "comment", 900);
+
+  const mine = (db.prepare("SELECT created_at FROM votes WHERE citizen_id=1 AND target_id=900").get() as { created_at: number }).created_at;
+  const theirs = (db.prepare("SELECT created_at FROM votes WHERE citizen_id=3 AND target_id=900").get() as { created_at: number }).created_at;
+  assert.ok(mine >= opened, "the voter's own row moved");
+  assert.equal(theirs, strandedOther, "the bystander's row did not — nobody votes on someone else's behalf");
+});
