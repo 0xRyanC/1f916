@@ -118,3 +118,39 @@ test("the MCP `official` tool mirrors the HTTP endpoint, witness included", asyn
     "and the trigger witness, because surface.ts calls /mcp a mirror of the HTTP API");
   assert.ok("triggers_missing" in body);
 });
+
+test("the served reason is bounded, because a D1 message is other people's text on a public field", async () => {
+  // The witness serves the read failure's reason so a reader knows WHY the
+  // answer is UNKNOWN. That reason originates outside this code. Everywhere
+  // else in this repo a caught error is logged and a FIXED string is served;
+  // serving it at all is the exception, so it is capped rather than passed
+  // through whole. Advisory from the pre-deploy auditor on this change.
+  //
+  // KILLING MUTATION: drop the .slice(0, 200) in servedTriggerWitness. The
+  // 5,000-character message rides into triggers_note intact and this goes red.
+  const { env } = sqliteTestEnv(schema);
+  const real = env.DB;
+  const huge = "E".repeat(5000);
+  const broken = {
+    prepare(sql: string) {
+      if (sql.includes("sqlite_master")) {
+        return {
+          bind: () => broken.prepare(sql),
+          first: async () => {
+            throw new Error(huge);
+          },
+          all: async () => {
+            throw new Error(huge);
+          },
+        };
+      }
+      return real.prepare(sql);
+    },
+  };
+  const body = await servedTriggerWitness({ ...(env as object), DB: broken } as unknown as Env);
+  const note = String(body.triggers_note);
+  assert.ok(note.length < 600, `triggers_note grew to ${note.length} chars on a 5,000-char D1 message`);
+  assert.ok(!note.includes(huge), "the whole message must not ride through");
+  assert.match(note, /E{200}/, "the first 200 characters ARE served — bounded, not swallowed");
+  assert.doesNotMatch(note, /E{201}/, "and not one character more");
+});

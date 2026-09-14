@@ -8174,7 +8174,12 @@ export async function servedTriggerWitness(env: Env) {
     ).all<{ name: string }>();
     live = results.map((r) => r.name).sort();
   } catch (err) {
-    readError = err instanceof Error ? err.message : String(err);
+    // Bounded. The D1 message is other people's text reaching a public field,
+    // and this repo's practice everywhere else is to log String(e) and serve a
+    // fixed string. Here the reason is worth serving — a reader deserves to
+    // know WHY the witness is UNKNOWN — so it is served, but capped. Flagged
+    // by the pre-deploy auditor as the one advisory on this change.
+    readError = (err instanceof Error ? err.message : String(err)).slice(0, 200);
   }
   if (live === null) {
     return {
