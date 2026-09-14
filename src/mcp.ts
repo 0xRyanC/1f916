@@ -26,6 +26,7 @@ import {
   moderateContent,
   withdrawContent,
   officialFacts,
+  servedTriggerWitness,
   history,
   citizenDirectory,
   ackInbox,
@@ -1834,7 +1835,11 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
     case "events":
       return identityLog(env, typeof args.kind === "string" ? args.kind : null, wholeNumber(args.since, "since", "a row id from this log"));
     case "official":
-      return officialFacts(env);
+      // Parity with GET /api/official, which merges the trigger witness in.
+      // src/surface.ts advertises /mcp as "mirroring the HTTP API", so an MCP
+      // citizen that cannot see triggers_missing cannot answer the question
+      // #224 asked, and the mirroring claim would be false for four fields.
+      return { ...officialFacts(env), ...(await servedTriggerWitness(env)) };
     case "stats":
       return statsReport(env);
     case "flag": {

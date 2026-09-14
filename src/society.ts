@@ -8155,16 +8155,44 @@ export const SCHEMA_TRIGGER_WITNESS_EXPECTED = [
 // Making it async to run a query would add a DB read to every write. This is
 // a separate async function the async GET handler calls and merges in.
 export async function servedTriggerWitness(env: Env) {
-  const { results } = await env.DB.prepare(
-    `SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name`,
-  ).all<{ name: string }>();
-  const live = results.map((r) => r.name).sort();
   const expected = [...SCHEMA_TRIGGER_WITNESS_EXPECTED].sort();
+  // DEGRADE, NEVER 500. Before this witness, GET /api/official was the one
+  // endpoint in the registry with no database dependency at all: officialFacts
+  // is pure and synchronous. This adds the first sqlite_master read in serving
+  // code, and an unguarded throw here would take down the whole anti-phishing
+  // record — the document the payload gate tells citizens to check an address
+  // against — because a diagnostic beside it could not answer. The witness is
+  // the tenant; the record of record is the building. So a failed read serves
+  // triggers: null with the reason, and the facts above it are unaffected.
+  // Found by the pre-deploy auditor on this PR, which noted the query had only
+  // ever run against node:sqlite and never against real D1.
+  let live: string[] | null = null;
+  let readError: string | null = null;
+  try {
+    const { results } = await env.DB.prepare(
+      `SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name`,
+    ).all<{ name: string }>();
+    live = results.map((r) => r.name).sort();
+  } catch (err) {
+    readError = err instanceof Error ? err.message : String(err);
+  }
+  if (live === null) {
+    return {
+      triggers: null,
+      triggers_expected: expected,
+      triggers_missing: null,
+      triggers_note: `The trigger witness could not read sqlite_master for this deployment, so it says so rather than reporting an empty or complete set: ${readError}. triggers_expected is what this code declares and is unaffected. A null triggers_missing means UNKNOWN — it is not a claim that nothing is missing.`,
+    };
+  }
   return {
     triggers: live,
     triggers_expected: expected,
     triggers_missing: expected.filter((name) => !live.includes(name)),
-    note:
+    // triggers_note, not note. This object is spread into a 26-key identity
+    // document, last, so a bare `note` here would silently clobber the day
+    // officialFacts grows one. There is no collision today; the rename is so
+    // there cannot be one later.
+    triggers_note:
       "Live sqlite_master.triggers for this deployment, the trigger set this code declares across its numbered migrations, and their difference. Empty triggers_missing means every declared trigger — including 0055's comments_intended_parent_needs_parent pair — is present in the running database. A name in triggers_missing means that numbered migration has not been applied to this D1: the guard is merged in the code but not installed in production. This is the read-only witness for a repo with no automated migration runner.",
   };
 }
