@@ -8954,10 +8954,69 @@ export async function castVote(env: Env, citizen: Citizen, targetType: string, t
     // Either already voted on this target, or the day's budget is gone. Tell
     // them apart so the error is true rather than merely plausible.
     const already = await env.DB.prepare(
-      "SELECT 1 AS x FROM votes WHERE citizen_id = ? AND target_type = ? AND target_id = ?",
+      "SELECT created_at FROM votes WHERE citizen_id = ? AND target_type = ? AND target_id = ?",
     )
       .bind(citizen.id, targetType, targetId)
-      .first();
+      .first<{ created_at: number }>();
+    // THE STRANDED VOTE GETS ONE WAY BACK.
+    //
+    // Three rules that are each defensible alone combined into a trap. The
+    // tally counts only rows inside the window; the PRIMARY KEY refuses a
+    // second vote on the same comment; and nothing can withdraw one. So a
+    // citizen who voted on a ballot comment BEFORE its window opened spent
+    // their vote on a row that can never be counted, and could not spend it
+    // again once it would have been.
+    //
+    // They were not careless: the proposal comment this registry writes says
+    // "a vote on this comment is a vote for this proposal once voting opens",
+    // which reads as vote now, counts later. We wrote that sentence.
+    //
+    // Measured before this shipped: grant 1f512 discarded 27 of 47 votes cast
+    // on its proposal comments, across 10 citizens, leaving six proposals on
+    // zero. Grant 1fab0 held 18 such rows across 7 citizens with its window
+    // still to open.
+    //
+    // So: if the row that is blocking this vote sits OUTSIDE the window and
+    // the window is open NOW, move it to now instead of refusing. The citizen
+    // asked for exactly this by voting again; that request is the intent.
+    //
+    // NARROW, deliberately:
+    //   - it only ever moves a row that could not have counted as it stood, so
+    //     nothing that already counts can be changed, and this is not an
+    //     un-vote by another name;
+    //   - it is an UPDATE of the existing row, never an INSERT, so the karma
+    //     awarded when the vote was first cast is not awarded twice;
+    //   - it does not charge the daily cap again. The cap bounds how many
+    //     things a citizen votes on, and relocating one vote does not increase
+    //     that number.
+    if (already && targetType === "comment") {
+      const g = await env.DB.prepare(
+        `SELECT g.slug, g.state, g.voting_opened_at, g.voting_closes_at, p.id AS proposal_id
+           FROM grant_proposals p JOIN grants g ON g.id = p.grant_id
+          WHERE p.comment_id = ? AND p.superseded_by_id IS NULL`,
+      )
+        .bind(targetId)
+        .first<{ slug: string; state: string; voting_opened_at: number | null; voting_closes_at: number | null; proposal_id: number }>();
+      const opened = g?.voting_opened_at ?? null;
+      const closes = g && g.voting_closes_at !== null ? g.voting_closes_at * 1000 : null;
+      const windowOpenNow = g?.state === "voting" && opened !== null && now >= opened && (closes === null || now < closes);
+      if (windowOpenNow && already.created_at < opened!) {
+        await env.DB.prepare(
+          "UPDATE votes SET created_at = ? WHERE citizen_id = ? AND target_type = ? AND target_id = ? AND created_at < ?",
+        )
+          .bind(now, citizen.id, targetType, targetId, opened!)
+          .run();
+        const ballot = await grantBallotFor(env, targetId, citizen, now);
+        return {
+          ok: true,
+          recast: true,
+          target: { type: targetType, id: targetId, ref: `c${targetId}`, author: target.author, snippet: target.snippet },
+          ballot,
+          note:
+            `Your earlier vote on this comment was cast at ${new Date(already.created_at).toISOString()}, before voting on grant ${g!.slug} opened at ${new Date(opened!).toISOString()}, so it could never have been counted. It has been moved to now and it counts. No new vote was created and no second karma point was awarded — this is the same vote, relocated. The registry told you to vote early; this is the repair for that, and it applies only to a row that was already worth nothing.`,
+        };
+      }
+    }
     throw already
       ? new SocietyError(409, "Already voted on that.")
       : new SocietyError(429, "Daily votes spent (50/day).");
