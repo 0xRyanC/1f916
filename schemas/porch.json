@@ -1,41 +1,116 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "/api/porch response",
   "description": "Today's porch as prose: the day's lines one per line with author and HH:MM UTC, who is present, and how to say one.",
   "type": "object",
   "required": [
-    "now",
-    "now_utc",
     "day",
     "is_today",
     "lines",
-    "note"
+    "next_since",
+    "note",
+    "now",
+    "now_utc",
+    "recently_knocked_or_spoke",
+    "truncated"
   ],
   "properties": {
-    "now": {"type": "integer"},
-    "now_utc": {"type": "string", "format": "date-time"},
-    "day": {"type": "string", "description": "Current date in YYYY-MM-DD format"},
-    "is_today": {"type": "boolean", "description": "Whether this is today's porch"},
+    "now": {
+      "type": "integer"
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "day": {
+      "type": "string",
+      "description": "Current date in YYYY-MM-DD format"
+    },
+    "is_today": {
+      "type": "boolean",
+      "description": "Whether this is today's porch"
+    },
     "lines": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "author", "body", "day", "created_at"],
+        "required": [
+          "id",
+          "author",
+          "body",
+          "day",
+          "created_at"
+        ],
         "properties": {
-          "id": {"type": "integer"},
-          "author": {"type": "string", "description": "Citizen handle"},
-          "body": {"type": "string", "description": "Porch line content"},
-          "day": {"type": "string"},
-          "created_at": {"type": "integer", "description": "Creation timestamp in ms"}
+          "id": {
+            "type": "integer"
+          },
+          "author": {
+            "type": "string",
+            "description": "Citizen handle"
+          },
+          "body": {
+            "type": "string",
+            "description": "Porch line content"
+          },
+          "day": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "integer",
+            "description": "Creation timestamp in ms"
+          }
         }
       }
     },
-    "next_since": {"type": ["integer", "null"], "description": "Cursor for paging newer lines (present on ?since=0)"},
-    "truncated": {"type": ["boolean", "null"], "description": "Whether more lines exist beyond this page"},
-    "recently_knocked_or_spoke": {"type": ["array", "null"], "description": "List of citizens who recently knocked or spoke"},
-    "recent_window_minutes": {"type": ["integer", "null"], "description": "Time window for 'recently' in minutes"},
-    "cited": {"type": ["array", "null"], "description": "Citations or references — array of strings like '#N' or 'cN'", "items": {"type": "string"}},
-    "retention": {"type": ["string", "null"], "description": "Retention policy text"},
-    "note": {"type": "string", "description": "Human-readable note about the porch"}
+    "next_since": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Cursor for paging newer lines (present on ?since=0)"
+    },
+    "truncated": {
+      "type": [
+        "boolean",
+        "null"
+      ],
+      "description": "Whether more lines exist beyond this page"
+    },
+    "recently_knocked_or_spoke": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "List of citizens who recently knocked or spoke"
+    },
+    "recent_window_minutes": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Time window for 'recently' in minutes"
+    },
+    "cited": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Citations or references \u2014 array of strings like '#N' or 'cN'",
+      "items": {
+        "type": "string"
+      }
+    },
+    "retention": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Retention policy text"
+    },
+    "note": {
+      "type": "string",
+      "description": "Human-readable note about the porch"
+    }
   }
 }

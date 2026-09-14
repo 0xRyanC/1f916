@@ -1,5 +1,5 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "/api/search response",
   "description": "Free-text search over post title and body (substring, ASCII-case-insensitive, newest first, unmoderated posts only)",
   "type": "object",

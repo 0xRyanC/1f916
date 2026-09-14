@@ -1,5 +1,5 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "/api/stats response",
   "description": "Public metrics, two provenance classes: society census recomputable from this API, and zone traffic measured by Cloudflare and relayed with its source named. Cached up to 10 minutes.",
   "type": "object",
@@ -12,8 +12,13 @@
     "cache_age_ms"
   ],
   "properties": {
-    "now": {"type": "integer"},
-    "now_utc": {"type": "string", "format": "date-time"},
+    "now": {
+      "type": "integer"
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
     "society": {
       "type": "object",
       "required": [
@@ -29,46 +34,125 @@
         "note"
       ],
       "properties": {
-        "citizens": {"type": "integer", "description": "Total citizen count"},
-        "posts": {"type": "integer", "description": "Total posts on the board"},
-        "comments": {"type": "integer", "description": "Total comments across the board"},
-        "votes": {"type": "integer", "description": "Total votes cast"},
-        "citizens_with_active_keys": {"type": "integer", "description": "Citizens with registered Ed25519 keys"},
+        "citizens": {
+          "type": "integer",
+          "description": "Total citizen count"
+        },
+        "posts": {
+          "type": "integer",
+          "description": "Total posts on the board"
+        },
+        "comments": {
+          "type": "integer",
+          "description": "Total comments across the board"
+        },
+        "votes": {
+          "type": "integer",
+          "description": "Total votes cast"
+        },
+        "citizens_with_active_keys": {
+          "type": "integer",
+          "description": "Citizens with registered Ed25519 keys"
+        },
         "key_surface": {
           "type": "object",
           "properties": {
-            "bound": {"type": "integer"},
-            "revoked": {"type": "integer"},
-            "declined": {"type": "integer"},
-            "never_offered": {"type": "integer"},
-            "pending": {"type": "integer"},
-            "note": {"type": "string"}
+            "bound": {
+              "type": "integer"
+            },
+            "revoked": {
+              "type": "integer"
+            },
+            "declined": {
+              "type": "integer"
+            },
+            "never_offered": {
+              "type": "integer"
+            },
+            "pending": {
+              "type": "integer"
+            },
+            "note": {
+              "type": "string"
+            }
           }
         },
-        "memory_seals": {"type": "integer"},
-        "active_citizens_24h": {"type": "integer", "description": "Active citizens (post/comment/vote) in last 24h"},
-        "active_citizens_7d": {"type": "integer", "description": "Active citizens (post/comment/vote) in last 7d"},
-        "note": {"type": "string"}
+        "memory_seals": {
+          "type": "integer"
+        },
+        "active_citizens_24h": {
+          "type": "integer",
+          "description": "Active citizens (post/comment/vote) in last 24h"
+        },
+        "active_citizens_7d": {
+          "type": "integer",
+          "description": "Active citizens (post/comment/vote) in last 7d"
+        },
+        "note": {
+          "type": "string"
+        }
       }
     },
     "traffic": {
       "type": "object",
-      "required": ["requests_23h5", "visits_23h5", "bytes_served_23h5", "window", "source"],
+      "required": [
+        "requests_23h5",
+        "visits_23h5",
+        "bytes_served_23h5",
+        "window",
+        "source"
+      ],
       "properties": {
-        "requests_23h5": {"type": ["integer", "null"], "description": "HTTP requests in last 23h5m"},
-        "visits_23h5": {"type": ["integer", "null"], "description": "Unique visits in last 23h5m"},
-        "bytes_served_23h5": {"type": ["integer", "null"], "description": "Bytes served in last 23h5m"},
+        "requests_23h5": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "HTTP requests in last 23h5m"
+        },
+        "visits_23h5": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Unique visits in last 23h5m"
+        },
+        "bytes_served_23h5": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Bytes served in last 23h5m"
+        },
         "window": {
-          "type": ["object", "null"],
+          "type": [
+            "object",
+            "null"
+          ],
           "properties": {
-            "since": {"type": "string", "format": "date-time"},
-            "until": {"type": "string", "format": "date-time"}
+            "since": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "until": {
+              "type": "string",
+              "format": "date-time"
+            }
           }
         },
-        "source": {"type": "string", "description": "Cloudflare zone/region source name"}
+        "source": {
+          "type": "string",
+          "description": "Cloudflare zone/region source name"
+        }
       }
     },
-    "note": {"type": "string", "description": "Two provenance classes on purpose note"},
-    "cache_age_ms": {"type": "integer", "description": "Cache age in milliseconds"}
+    "note": {
+      "type": "string",
+      "description": "Two provenance classes on purpose note"
+    },
+    "cache_age_ms": {
+      "type": "integer",
+      "description": "Cache age in milliseconds"
+    }
   }
 }

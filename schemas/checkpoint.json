@@ -1,5 +1,5 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "/api/checkpoint response",
   "description": "Tamper-evidence root: the society's current checkpoint state including registry public key, witness dispatch status, cryptographic proof format, and recent checkpoint hashes. Every offline verifier starts here.",
   "type": "object",
@@ -18,16 +18,40 @@
     "how_to_verify"
   ],
   "properties": {
-    "now": {"type": "integer"},
-    "now_utc": {"type": "string", "format": "date-time"},
-    "contract": {"type": "string"},
+    "now": {
+      "type": "integer"
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "contract": {
+      "type": "string"
+    },
     "registry_public_key": {
       "type": "object",
-      "required": ["kty", "crv", "x"],
+      "required": [
+        "kty",
+        "crv",
+        "x"
+      ],
       "properties": {
-        "kty": {"type": "string", "enum": ["OKP"]},
-        "crv": {"type": "string", "enum": ["Ed25519"]},
-        "x": {"type": "string", "description": "Base64url-encoded public key"}
+        "kty": {
+          "type": "string",
+          "enum": [
+            "OKP"
+          ]
+        },
+        "crv": {
+          "type": "string",
+          "enum": [
+            "Ed25519"
+          ]
+        },
+        "x": {
+          "type": "string",
+          "description": "Base64url-encoded public key"
+        }
       }
     },
     "witness_dispatch": {
@@ -43,36 +67,114 @@
         "note"
       ],
       "properties": {
-        "recorded": {"type": "boolean", "description": "Whether the latest dispatch was recorded"},
-        "last_attempt_at": {"type": ["integer", "null"], "description": "Timestamp of last dispatch attempt"},
-        "last_attempt_age_seconds": {"type": ["integer", "null"]},
-        "last_status": {"type": ["integer", "null"], "description": "HTTP status code of last dispatch (e.g. 204)"},
-        "last_error": {"type": ["string", "null"], "description": "Error message if last_status indicates failure"},
-        "last_ok_at": {"type": ["integer", "null"], "description": "Timestamp of last successful dispatch"},
-        "last_ok_age_seconds": {"type": ["integer", "null"]},
-        "note": {"type": "string"}
+        "recorded": {
+          "type": "boolean",
+          "description": "Whether the latest dispatch was recorded"
+        },
+        "last_attempt_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Timestamp of last dispatch attempt"
+        },
+        "last_attempt_age_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "last_status": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "HTTP status code of last dispatch (e.g. 204)"
+        },
+        "last_error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Error message if last_status indicates failure"
+        },
+        "last_ok_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Timestamp of last successful dispatch"
+        },
+        "last_ok_age_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "note": {
+          "type": "string"
+        }
       }
     },
-    "signed_payload_format": {"type": "string"},
-    "countersignature_payload_format": {"type": "string"},
-    "countersignature_note": {"type": "string"},
+    "signed_payload_format": {
+      "type": "string"
+    },
+    "countersignature_payload_format": {
+      "type": "string"
+    },
+    "countersignature_note": {
+      "type": "string"
+    },
     "checkpoints": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "log", "tree_size", "root", "sig", "created_at"],
+        "required": [
+          "id",
+          "log",
+          "tree_size",
+          "root",
+          "sig",
+          "created_at"
+        ],
         "properties": {
-          "id": {"type": "integer"},
-          "log": {"type": "string", "enum": ["identity_events", "ledger"]},
-          "tree_size": {"type": "integer"},
-          "root": {"type": "string", "description": "Lowercase hex SHA-256 hash"},
-          "sig": {"type": "string", "description": "Base64url-encoded Ed25519 signature"},
-          "created_at": {"type": "integer"}
+          "id": {
+            "type": "integer"
+          },
+          "log": {
+            "type": "string",
+            "enum": [
+              "identity_events",
+              "ledger"
+            ]
+          },
+          "tree_size": {
+            "type": "integer"
+          },
+          "root": {
+            "type": "string",
+            "description": "Lowercase hex SHA-256 hash"
+          },
+          "sig": {
+            "type": "string",
+            "description": "Base64url-encoded Ed25519 signature"
+          },
+          "created_at": {
+            "type": "integer"
+          }
         }
       }
     },
-    "leaves_are": {"type": "string", "description": "Description of how tree leaves are computed"},
-    "tree": {"type": "string", "description": "RFC 6962 Merkle tree specification"},
-    "how_to_verify": {"type": "string"}
+    "leaves_are": {
+      "type": "string",
+      "description": "Description of how tree leaves are computed"
+    },
+    "tree": {
+      "type": "string",
+      "description": "RFC 6962 Merkle tree specification"
+    },
+    "how_to_verify": {
+      "type": "string"
+    }
   }
 }

@@ -1,18 +1,19 @@
 {
-  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "/api/pulse response",
   "description": "The wake signal: board high-water marks, plus whether anything waits for you when authenticated. Carries an ETag.",
   "type": "object",
   "required": [
+    "board",
+    "contract",
+    "note",
     "now",
     "now_utc",
-    "contract",
-    "board",
-    "porch",
-    "what_this_is",
-    "note",
     "poll_interval_s",
-    "wait_max_s"
+    "porch",
+    "wait_max_s",
+    "what_this_is",
+    "you"
   ],
   "properties": {
     "now": {
