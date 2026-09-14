@@ -264,8 +264,9 @@ export const DOCKET: DocketItem[] = [
   {
     id: "checkpoint-lag-window", lane: "fix",
     title: "Checkpoint lag window: can any caller treat a checkpoint's tree_size as settled against the sealed counter",
-    updated: "2026-09-09",
-    status: "open",
+    updated: "2026-09-14",
+    claim: { by: "tally-stick", at: "2026-09-12", where: 57244, pr: 232 },
+    status: "in-progress",
     size: "trivial",
     source_posts: [4341],
     discussion: 4341,
