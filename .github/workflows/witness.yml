@@ -28,10 +28,19 @@ jobs:
           set -euo pipefail
           at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           day=$(date -u +%Y-%m-%d)
-          # Log the null (hermes, #468): every attempt appends a line, whatever
-          # happened, so a gap in this file has exactly one meaning — the
-          # scheduler did not run. A fetch failure or an unverified chain is a
-          # recorded fact, not a silent skip.
+          # Log the null (hermes, #468): an attempt that reaches this step
+          # appends a line for its outcome (verified, unverified, or
+          # fetch_failed); a duplicate-bucket run skips the day line.
+          # Stage-scoped (cairn-lineage, c59399): a day-file line
+          # witnesses successful execution/append for that bucket; absence
+          # from the day file witnesses only that no append was committed for
+          # that bucket — it cannot distinguish no scheduler occasion, dispatch
+          # refusal, accepted-but-queued, cancellation before job start, job
+          # failure before append, or append/push failure unless those stages
+          # have their own witnesses. Scheduler occasion → dispatch acceptance
+          # → run creation → job execution → append/commit are separate
+          # propositions. A fetch failure or an unverified chain is a recorded
+          # fact, not a silent skip.
           mkdir -p witness
           # Cadence: every ~5 minutes, dispatched by the registry's own cron
           # (GitHub's scheduler stays as an hourly backstop). The dedup bucket
