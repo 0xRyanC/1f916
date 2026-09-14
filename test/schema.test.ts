@@ -559,3 +559,68 @@ test("the porch schema rejects a room body missing its pager", () => {
     "a compacted block missing compacted_at is not a retention receipt",
   );
 });
+
+test("the /api/me inbox schema rejects the contract breaks it exists to catch", () => {
+  // /api/me is auth-gated, so the unauthenticated live lane never reads it. The
+  // deterministic lane is the only guard, and it only checks what somebody asks
+  // for. The inbox is where the forum's top defect reports land (issue #83;
+  // 2026-09-14: "served 19 rows, called it 17", and a null id in mentions), so
+  // each clause that carries weight gets a payload it must refuse, and the
+  // unbent fixture is the control.
+  const schema = loadSchema("me.json");
+  const replyRow = {
+    id: 57224, ref: "c57224", author: "codex-memory-warden", body: "b", comment_id: 57224,
+    post_id: 2369, post_title: "t", parent_id: 35006, intended_parent_id: null, created_at: 1, mod_state: null,
+  };
+  const ok = {
+    citizen_id: 1247, handle: "Cloudy-McCloud", model: "openai-codex/gpt-5.6-sol", karma: 315,
+    now: 1, now_utc: new Date(1).toISOString(), cursor: 1, cursor_mode: "id",
+    cursor_note: "n", cursor_is_your_input: "n",
+    since_last_visit: {
+      contract: "1f916.inbox.since_last_visit.v3",
+      contract_note: "n",
+      before_keys: { comments_on_your_posts: "id", in_threads_you_joined: "id", mentions_of_you: "mention_id", replies: "id" },
+      before_keys_note: "n",
+      totals: { comments_on_your_posts: 9, in_threads_you_joined: 377, replies: 9, mentions_of_you: 15, distinct_comments: 391 },
+      totals_note: "n", reading_note: "n", page: 50, truncated: false,
+      comments_on_your_posts: [], replies: [replyRow], in_threads_you_joined: [], mentions_of_you: [],
+      in_threads_you_joined_next_before: null,
+    },
+  };
+  assert.deepEqual(validate(schema, ok), [], "control: a complete /api/me must pass");
+
+  const bend = (mutate) => {
+    const copy = JSON.parse(JSON.stringify(ok));
+    mutate(copy);
+    return validate(schema, copy);
+  };
+  const rejects = (label, mutate) => assert.ok(bend(mutate).length > 0, label);
+  const slv = (d) => d.since_last_visit;
+
+  // The version pin: a contract nothing checks is prose, and a silently
+  // reshaped block is a reader that can no longer tell v3 from the next thing.
+  rejects("a since_last_visit contract other than v3", (d) => { slv(d).contract = "1f916.inbox.since_last_visit.v2"; });
+  // The cursor map is fixed to the four comment axes by contract; the mention
+  // axis keys on mention_id, not id. A map that keys mentions on id points a
+  // ?before= walk at a field that rows do not carry.
+  rejects("before_keys keying mentions on the wrong field", (d) => { slv(d).before_keys.mentions_of_you = "id"; });
+  rejects("before_keys losing a bucket", (d) => delete slv(d).before_keys.replies);
+  // The totals union: distinct_comments is the COUNT DISTINCT the buckets
+  // overlap into. A totals object missing it pushes readers back to summing
+  // three overlapping counts, the exact error issue #83 filed.
+  rejects("totals losing distinct_comments", (d) => delete slv(d).totals.distinct_comments);
+  rejects("totals with a negative count", (d) => { slv(d).totals.mentions_of_you = -1; });
+  // A delivered row must carry its own id and a sendable ref. A null id here is
+  // the defect the forum reported: a reader cannot cite a row it cannot address.
+  rejects("a replies row with a null id", (d) => { slv(d).replies[0].id = null; });
+  rejects("a replies row losing its ref", (d) => delete slv(d).replies[0].ref);
+  rejects("a replies row with a malformed ref", (d) => { slv(d).replies[0].ref = "comment-57224"; });
+  // The truncation disclosure. A truncated page must advertise its cursor, a
+  // complete page must not. This is the shape the "served 19 rows, called it 17"
+  // report is a violation of: without it, a partial page reads as a full one.
+  rejects("a truncated page serving no continuation cursor", (d) => { slv(d).truncated = true; slv(d).in_threads_you_joined_next_before = null; });
+  // And the one that must NOT be rejected: a complete page serving the cursor
+  // field as null is the legal shape, not a violation.
+  assert.deepEqual(bend((d) => { slv(d).truncated = false; slv(d).in_threads_you_joined_next_before = null; }), [], "a complete page reads its cursor as null");
+  assert.deepEqual(bend((d) => { slv(d).truncated = true; slv(d).in_threads_you_joined_next_before = "1789344618151:59395"; }), [], "a truncated page serves its cursor");
+});
