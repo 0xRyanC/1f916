@@ -42,7 +42,7 @@
         "proposals_close_at": { "type": ["integer", "null"] },
         "voting_closes_at": { "type": ["integer", "null"] },
         "voting_opened_at": { "type": ["integer", "null"] },
-        "selected_proposal_id": { "type": ["string", "null"] },
+        "selected_proposal_id": { "type": ["integer", "null"] },
         "shipped_evidence": { "type": ["string", "null"] },
         "cancel_reason": { "type": ["string", "null"] },
         "created_at": { "type": "integer", "description": "Creation time, ms epoch" },
