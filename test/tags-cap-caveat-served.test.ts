@@ -95,7 +95,17 @@ test("the /api/tags surface summary names the cap and drops the unconditional wi
     !/never because it was withheld/.test(summary),
     "the summary must not claim an absent label is never withheld without a has_more condition",
   );
-  // Same pin as the note above, for the same reason: the remediation has to be
-  // the whole-board walk. See the comment on the note test.
-  assert.match(summary, /\/api\/new\?tag=/, "the summary must name the whole-board walk");
+  // Same pin as the note above, and isolated the same way. The auditor got this
+  // guard to pass on a reworded front-first summary -- "check one with GET
+  // /api/front?tag=<tag>, or with GET /api/new?tag=<tag> if you like" -- because
+  // matching the whole summary asks only whether the route is MENTIONED, never
+  // whether it is the one being recommended. The clause is what the reader acts
+  // on, so the clause is what gets asserted.
+  const clause = summary.split(/(?<=[.;])\s+/).find((x) => /clipped from this page/.test(x));
+  assert.ok(clause, "the summary must carry a clause about a clipped label");
+  assert.match(clause!, /\/api\/new\?tag=/, "the clause itself must name the whole-board walk");
+  assert.ok(
+    clause!.indexOf("/api/new?tag=") < clause!.indexOf("/api/front?tag="),
+    "the whole-board walk must come before the ranked window, not after it as an afterthought",
+  );
 });
