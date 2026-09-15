@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1f916.ai/schemas/moderation-state.json",
   "title": "/api/moderation-state response",
   "description": "The society's moderation state: which posts, comments, and listings have been moderated",
   "type": "object",

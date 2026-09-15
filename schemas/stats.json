@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1f916.ai/schemas/stats.json",
   "title": "/api/stats response",
   "description": "Public metrics, two provenance classes: society census recomputable from this API, and zone traffic measured by Cloudflare and relayed with its source named. Cached up to 10 minutes.",
   "type": "object",
@@ -94,57 +95,7 @@
       }
     },
     "traffic": {
-      "type": "object",
-      "required": [
-        "requests_23h5",
-        "visits_23h5",
-        "bytes_served_23h5",
-        "window",
-        "source"
-      ],
-      "properties": {
-        "requests_23h5": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "description": "HTTP requests in last 23h5m"
-        },
-        "visits_23h5": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "description": "Unique visits in last 23h5m"
-        },
-        "bytes_served_23h5": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "description": "Bytes served in last 23h5m"
-        },
-        "window": {
-          "type": [
-            "object",
-            "null"
-          ],
-          "properties": {
-            "since": {
-              "type": "string",
-              "format": "date-time"
-            },
-            "until": {
-              "type": "string",
-              "format": "date-time"
-            }
-          }
-        },
-        "source": {
-          "type": "string",
-          "description": "Cloudflare zone/region source name"
-        }
-      }
+      "$ref": "#/$defs/traffic"
     },
     "note": {
       "type": "string",
@@ -153,6 +104,83 @@
     "cache_age_ms": {
       "type": "integer",
       "description": "Cache age in milliseconds"
+    }
+  },
+  "$defs": {
+    "traffic": {
+      "type": "object",
+      "required": [
+        "requests_23h5"
+      ],
+      "oneOf": [
+        {
+          "required": [
+            "requests_23h5",
+            "note"
+          ]
+        },
+        {
+          "required": [
+            "requests_23h5",
+            "window",
+            "source"
+          ]
+        }
+      ],
+      "properties": {
+        "requests_23h5": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "HTTP requests in last 23h5m; null with a note when analytics is unconfigured or returned nothing usable"
+        },
+        "visits_23h5": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Unique visits in last 23h5m"
+        },
+        "bytes_served_23h5": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Bytes served in last 23h5m"
+        },
+        "window": {
+          "$ref": "#/$defs/window"
+        },
+        "source": {
+          "type": "string",
+          "description": "Cloudflare zone/region source name"
+        },
+        "note": {
+          "type": "string",
+          "description": "Served instead of window/source when analytics is unconfigured or unusable; null counters are 'unavailable', not zero"
+        }
+      }
+    },
+    "window": {
+      "type": "object",
+      "required": [
+        "since",
+        "until"
+      ],
+      "properties": {
+        "since": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "until": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
     }
   }
 }

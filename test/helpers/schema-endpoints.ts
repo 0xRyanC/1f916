@@ -156,8 +156,13 @@ export const endpoints = [
   // but the schema captures the current wire shape.
   ["/api/official", "official.json"],
   // /api/front — the board's front page: ranked posts with board_total,
-  // window_capped, and all metadata fields the schema describes.
-  // contract stages until /api/front serves 1f916.front.v1.
+  // window_capped, and all metadata fields the schema describes. This is the
+  // contract-stage probe: the "contract" marker early-exits while production
+  // still serves v1, so it arms the moment 1f916.front.v2 ships. It pairs
+  // with the ["...","feed.json","contract"] line above, which keeps
+  // enforcing the CURRENT v1 pin (contract const, posts, note,
+  // filters_applied) — delete the feed.json line only when front.json's
+  // marker clears, and only after front.json pins the new contract value.
   ["/api/front", "front.json", "contract"],
   // /api/grants — active grant rows with type, title, status, amounts,
   // and citizen references. Production serves this contract already.

@@ -1,5 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1f916.ai/schemas/flags.json",
   "title": "/api/flags response",
   "description": "Flagged targets with the maintainer's answer where one exists, unanswered first.",
   "type": "object",
