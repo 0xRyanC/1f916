@@ -98,6 +98,14 @@ const workerError = (status: number) => ({ kind: JSON_KIND, status, body: { erro
 
 // One edit each to a copy of the witness; the marker must be present or the
 // mutant is the original and the run proves nothing.
+const WITHHELD = "refused-consistency-withheld";
+const DAY_MS = 24 * 3_600_000;
+const HOUR_MS = 3_600_000;
+const MSG_SINCE = "the first unavailable line starts the clock at its own timestamp";
+const MSG_COUNT = "a repeat from the same pinned head counts up, and keeps the original since";
+const MSG_RESET = "a count from an older pinned head does not carry over";
+const MSG_CLEARED = "a proof that folds clears the count with the head it belonged to";
+const MSG_QUIET = "under a day it is still unavailable, with the clock on the line";
 const OK_CHECK = "if (!res.ok) why = `HTTP ${res.status}`;";
 const OK_CHECK_REMOVED = "if (false) why = `HTTP ${res.status}`;";
 const VERIFY_CALL = "proven = verifyConsistency(";
@@ -115,10 +123,10 @@ const scratch = mkdtempSync(join(tmpdir(), "witness-roads-"));
 test.after(() => rmSync(scratch, { recursive: true, force: true, maxRetries: 3 }));
 let n = 0;
 
-function run(consistency: unknown, script = WITNESS, lastSize = 1): Run {
+function run(consistency: unknown, script = WITNESS, lastSize = 1, withheld?: Record<string, unknown>): Run {
   const state = join(scratch, String(++n));
   mkdirSync(state);
-  writeFileSync(join(state, HEADS_FILE), JSON.stringify({ ledger: { tree_size: lastSize, root: OLD_ROOT } }));
+  writeFileSync(join(state, HEADS_FILE), JSON.stringify({ ledger: { tree_size: lastSize, root: OLD_ROOT, ...(withheld ? { withheld } : {}) } }));
   writeFileSync(join(state, PIN_FILE), JSON.stringify({ registry: REGISTRY, registry_public_key: registryX, first_seen: CREATED_AT }));
   const scenario = join(state, SCENARIO_FILE);
   writeFileSync(scenario, JSON.stringify({ checkpoint: CHECKPOINT, consistency }));
@@ -198,4 +206,62 @@ test("mutant: with verifyConsistency short-circuited, road 3 countersigns, so th
   const r = run(doesNotFold, mutant(VERIFY_CALL, VERIFY_SHORTED));
   assert.equal(r.lines[0].status, COUNTERSIGNED);
   assert.equal(r.status, 0);
+});
+
+// The quiet road (Ben, 2026-09-15: could a rewrite hide behind a 503?). A
+// rewritten chain has no proof to serve from the pinned head, so withholding
+// is its only move; the state clocks it and the line says so.
+
+test("unavailable, first time: the line carries since = now and attempts = 1, and the state keeps them", () => {
+  const r = run(workerError(503));
+  const line = refused(r, UNAVAILABLE);
+  assert.equal(line.attempts, 1, MSG_SINCE);
+  assert.equal(line.unavailable_since, line.at, MSG_SINCE);
+  assert.equal(r.heads.ledger.withheld.from, 1);
+  assert.equal(r.heads.ledger.withheld.attempts, 1);
+  assert.equal(r.heads.ledger.withheld.since, line.at);
+});
+
+test("unavailable again from the same pinned head, under a day: attempts count up, since is kept, still unavailable", () => {
+  const since = new Date(Date.now() - 2 * HOUR_MS).toISOString();
+  const r = run(socketThrows, WITNESS, 1, { from: 1, since, attempts: 3, last: "HTTP 503" });
+  const line = refused(r, UNAVAILABLE);
+  assert.equal(line.attempts, 4, MSG_COUNT);
+  assert.equal(line.unavailable_since, since, MSG_COUNT);
+  assert.equal(line.consistency, ROAD1, MSG_QUIET);
+  assert.equal(r.heads.ledger.withheld.attempts, 4);
+});
+
+test("unavailable for a day from the same pinned head: withheld, and the sentence names the hours, the attempts, the head and the last reason", () => {
+  const since = new Date(Date.now() - DAY_MS - 2 * HOUR_MS).toISOString();
+  const r = run(workerError(503), WITNESS, 1, { from: 1, since, attempts: 25, last: "HTTP 503" });
+  const line = refused(r, WITHHELD);
+  assert.equal(line.attempts, 26);
+  assert.equal(line.unavailable_since, since);
+  assert.match(line.consistency, /^unavailable for 26 h \(26 attempts, last HTTP 503\) — a proof from 1 the registry has not served; unproven, evidence, keep this line$/);
+  assert.match(r.stderr, /CONSISTENCY WITHHELD from 1 for 26 h \(26 attempts, last HTTP 503\)/);
+});
+
+test("a count clocked against an older pinned head restarts when the pinned head differs", () => {
+  const since = new Date(Date.now() - 3 * DAY_MS).toISOString();
+  const r = run(workerError(503), WITNESS, 1, { from: 0, since, attempts: 70, last: "HTTP 503" });
+  const line = refused(r, UNAVAILABLE);
+  assert.equal(line.attempts, 1, MSG_RESET);
+  assert.equal(line.unavailable_since, line.at, MSG_RESET);
+});
+
+test("a proof that folds after a run of unavailable: countersigned, and the new head carries no count", () => {
+  const since = new Date(Date.now() - DAY_MS - HOUR_MS).toISOString();
+  const r = run(folds, WITNESS, 1, { from: 1, since, attempts: 25, last: "HTTP 503" });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(r.lines[0].status, COUNTERSIGNED);
+  assert.equal(r.lines[0].attempts, undefined);
+  assert.equal(r.heads.ledger.tree_size, 2);
+  assert.equal(r.heads.ledger.withheld, undefined, MSG_CLEARED);
+});
+
+test("a proof that does not fold after a run of unavailable is still failure, possible rewrite: the clock never softens road 3", () => {
+  const since = new Date(Date.now() - 3 * DAY_MS).toISOString();
+  const line = refused(run(doesNotFold, WITNESS, 1, { from: 1, since, attempts: 70, last: "HTTP 503" }), FAILURE);
+  assert.equal(line.consistency, REWRITE);
 });
