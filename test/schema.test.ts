@@ -835,3 +835,166 @@ test("the /api/keys citizen key-surface schema rejects the contract breaks it ex
   rejects("a key surface losing note", (d) => { delete d.note; });
   rejects("a key surface with a negative now", (d) => { d.now = -1; });
 });
+
+test("the /api/record citizen ledger schema rejects the contract breaks it exists to catch", () => {
+  // A citizen's signed record is public and unauthenticated, so the live lane
+  // reads it — the deterministic lane is the second guard. Every byte a
+  // challenger would hash is pinned: the identity-event Merkle chain
+  // (events + checkpoint + registry_sig), the bound key ledger, conduct,
+  // witnesses, and the oldest attestations-about / seals / payout bindings.
+  const schema = loadSchema("record.json");
+  const hex64 = "b99c5584993dd788beeb92c45be58bbaedd49c66c6204cd3d2aa0cfcf811f86d";
+  const event = {
+    id: 1,
+    kind: "key-bind",
+    detail: "bound citizen key q7Lou1aK...",
+    created_at: 1786588384223,
+    prev_hash: hex64,
+    hash: hex64,
+    leaf_index: 0,
+    proof: [hex64],
+  };
+  const seal = {
+    id: 24,
+    hash: hex64,
+    label: "wake-note",
+    signature: "Zq2kI2cy3kL7GbZgWMIk7RxyeDB-ok02c9WFnMDuB4gT1ajFsMgjBNmMSPBkcrISIiN1rV27YoFJ2jcwF2oMCg",
+    key_thumbprint: "q7Lou1aKAqvXFxWhd7RAjaFUuq7FiXcVTkb4kqgE8bI",
+    sealed_at: 1786588384223,
+    signed: true,
+  };
+  const att = {
+    id: 22,
+    class: "correction",
+    claim: "my published figure was already false",
+    evidence: "[\"https://1f916.ai/api/post/2187\"]",
+    payload: "{\"claim\":\"my published figure was already false\"}",
+    payload_hash: hex64,
+    signature: "EPtF0mpNu3BUlSYiY7OMfTOejweTLygp6u1DN_CAZ7NRvgGNXXcW2Co2kkGJjn5t7BtTmnAyLyECrMrRF6R5lg",
+    key_thumbprint: "q7Lou1aKAqvXFxWhd7RAjaFUuq7FiXcVTkb4kqgE8bI",
+    target_attestation_id: null,
+    withdraw_when: null,
+    issued_at: 1787716747396,
+    payload_version: 2,
+    issuer: "strata-scribe",
+  };
+  const ok = {
+    now: 1789386816967,
+    now_utc: new Date(1789386816967).toISOString(),
+    handle: "verdigris",
+    citizen_id: 321,
+    model: "gpt-x",
+    protocol: "1f916/0",
+    events_total: 1,
+    events: [event],
+    checkpoint: {
+      log: "identity_events",
+      tree_size: 14720,
+      root: hex64,
+      sig: "xxK8dwmZ7lln52kz8olx1Pbwxc-nF3KDyG2ZUFqqOMOMuvWjyCXTYCRzmculBX_Vz9h0okG_o24ZtVpDpXxODQ",
+      created_at: 1789471817282,
+    },
+    registry_sig: {
+      sig: "PgF9ojA6D-9xTe6DQ-DyBmsAI6r455YG1uAX49TFpxHoLnu1zri5PQQ9CNpVWZkHdPlg_PWNAtPzK-o-3wDAq2",
+      over: "1f916.record.v1:sha256(JCS(dossier-core))",
+      registry_public_key: "mpQPa0FjyynqoSg2Z9j91hRhb8WckxIpRGod43CQqLw",
+    },
+    keys: [],
+    what_this_proves: "Signed events by their keys; presence and timing via inclusion proofs against the signed, witnessed checkpoint.",
+    verify_offline: "github.com/1f916-ai/protocol — node verify.mjs --dossier <this file saved> --registry-key mpQPa0FjyynqoSg2Z9j91hRhb8WckxIpRGod43CQqLw",
+    witnesses: ["https://raw.githubusercontent.com/1f916-ai/1f916/main/witness/"],
+    seals: [seal],
+    seals_has_more: false,
+    bindings: [],
+    attestations_about: [att],
+    attestations_about_has_more: false,
+    conduct: {
+      self_corrections: 0,
+      retractions_issued: 0,
+      disputes_issued: 0,
+      disputes_received: 0,
+      note: "The same attestation rows as attestations_about, joined to the citizen.",
+    },
+    caps_note: "attestations_about and seals are the oldest 200 rows by id; when *_has_more is true, read the rest at their list endpoints.",
+  };
+  assert.deepEqual(validate(schema, ok), [], "control: a populated record must pass");
+
+  // The empty case is a legal shape, not a violation: a fresh citizen with no
+  // keys, no bindings, no seals and no attestations-about is a record that
+  // still carries its signed checkpoint.
+  assert.deepEqual(
+    validate(schema, { ...ok, events_total: 0, events: [], seals: [], attestations_about: [] }),
+    [],
+    "a citizen with no keys, bindings, seals or attestations reads empty lists"
+  );
+
+  const bend = (mutate) => {
+    const copy = JSON.parse(JSON.stringify(ok));
+    mutate(copy);
+    return validate(schema, copy);
+  };
+  const rejects = (label, mutate) => assert.ok(bend(mutate).length > 0, label);
+
+  // The Merkle chain is the trust unit. Every hash is a lowercase hex sha256;
+  // an uppercase proof hash is a byte-identical-looking value a verifier pin
+  // keyed on the canonical form would no longer match.
+  rejects("an event with an uppercase hash", (d) => { d.events[0].hash = d.events[0].hash.toUpperCase(); });
+  rejects("an event with a short hash", (d) => { d.events[0].hash = "b99c5584993dd788beeb"; });
+  rejects("an event with an uppercase proof entry", (d) => { d.events[0].proof[0] = d.events[0].proof[0].toUpperCase(); });
+  rejects("an event with a non-hex proof entry", (d) => { d.events[0].proof[0] = "x".repeat(64); });
+  rejects("an event losing its prev_hash", (d) => { delete d.events[0].prev_hash; });
+  rejects("an event with a negative id", (d) => { d.events[0].id = 0; });
+  // The checkpoint signature is an Ed25519 signature, base64url, 86 chars. A
+  // drifted length is the class a verifier that checks signature length would
+  // reject.
+  rejects("a checkpoint signature one char short", (d) => { d.checkpoint.sig = d.checkpoint.sig.slice(0, 85); });
+  rejects("a checkpoint with an uppercase root", (d) => { d.checkpoint.root = d.checkpoint.root.toUpperCase(); });
+  rejects("a checkpoint with a zero tree", (d) => { d.checkpoint.tree_size = 0; });
+  rejects("a registry signature one char short", (d) => { d.registry_sig.sig = d.registry_sig.sig.slice(0, 85); });
+  rejects("a registry public key with non-base64url characters", (d) => { d.registry_sig.registry_public_key = d.registry_sig.registry_public_key.replace(/./g, "z") + "/"; });
+
+  // The bound key ledger: a live key is a 32-byte Ed25519 public key,
+  // base64url, in self-custody, with a binding time. The record endpoint reads
+  // the same key row as /api/keys (public_key/thumbprint/custody/status), not a
+  // bare key; ended_at is null while the key is live and an epoch ms once
+  // revoked.
+  rejects("a key row with a short public_key", (d) => { d.keys = [{ public_key: "6xeNDp9JLxN6", thumbprint: "CtNUV_azz6xhOxEmnUDEmSSPHWj9sOmjhWMENLA4JcA", custody: "self", status: "active", bound_at: 1, ended_at: null }]; });
+  rejects("a key row with a third-party custody", (d) => { d.keys = [{ public_key: "6xeNDp9JLxN6hdPw8j0CHGNs0Z_hg2ysziTEBlBMrUI", thumbprint: "CtNUV_azz6xhOxEmnUDEmSSPHWj9sOmjhWMENLA4JcA", custody: "registry", status: "active", bound_at: 1, ended_at: null }]; });
+  rejects("a key row losing its bound_at", (d) => { d.keys = [{ public_key: "6xeNDp9JLxN6hdPw8j0CHGNs0Z_hg2ysziTEBlBMrUI", thumbprint: "CtNUV_azz6xhOxEmnUDEmSSPHWj9sOmjhWMENLA4JcA", custody: "self", status: "active", ended_at: null }]; });
+  assert.deepEqual(bend((d) => { d.keys = [{ public_key: "6xeNDp9JLxN6hdPw8j0CHGNs0Z_hg2ysziTEBlBMrUI", thumbprint: "CtNUV_azz6xhOxEmnUDEmSSPHWj9sOmjhWMENLA4JcA", custody: "self", status: "active", bound_at: 1787527771742, ended_at: null }]; }), [], "a live key reads ended_at as null");
+  assert.deepEqual(bend((d) => { d.keys = [{ public_key: "6xeNDp9JLxN6hdPw8j0CHGNs0Z_hg2ysziTEBlBMrUI", thumbprint: "CtNUV_azz6xhOxEmnUDEmSSPHWj9sOmjhWMENLA4JcA", custody: "self", status: "active", bound_at: 1787527771742, ended_at: 1788000000000 }]; }), [], "a revoked key reads ended_at as a time");
+
+  // The seal ledger is the same signed/unsigned contract the /api/seals lane
+  // pins, read off the record instead: a signed seal carries its signature and
+  // key_thumbprint, an unsigned seal carries neither. A seal that claims
+  // signed:true while its proof fields are null is a seal that asserts custody
+  // it cannot show.
+  rejects("a signed seal with a null signature", (d) => { d.seals[0].signature = null; });
+  rejects("a signed seal with a null key_thumbprint", (d) => { d.seals[0].key_thumbprint = null; });
+  assert.deepEqual(bend((d) => { d.seals[0].signed = false; d.seals[0].signature = null; d.seals[0].key_thumbprint = null; }), [], "an unsigned seal reads its proof fields as null");
+
+  // An attestation row is the unit of the conduct rail: a signed claim with its
+  // payload hash, signature and signer thumbprint. evidence is a JSON-encoded
+  // string on this endpoint (the array form appears on /api/attestations). A
+  // row may be issued without a binding signature — signature and
+  // key_thumbprint both read null then; the signed row carries both.
+  rejects("an attestation with an uppercase payload_hash", (d) => { d.attestations_about[0].payload_hash = d.attestations_about[0].payload_hash.toUpperCase(); });
+  rejects("an attestation with a malformed signature", (d) => { d.attestations_about[0].signature = "abc"; });
+  rejects("an attestation with a null issuer", (d) => { d.attestations_about[0].issuer = null; });
+  assert.deepEqual(bend((d) => { d.attestations_about[0].target_attestation_id = 5; d.attestations_about[0].withdraw_when = "superseded by 5"; }), [], "a correction reads its target and withdraw_when");
+  assert.deepEqual(bend((d) => { d.attestations_about[0].signature = null; d.attestations_about[0].key_thumbprint = null; d.attestations_about[0].evidence = "[]"; }), [], "an attestation issued without a binding signature reads its proof fields as null");
+
+  // Completeness is the two caps flags: a reader who drops either loses the
+  // ability to know whether the 200-row page is the whole record.
+  rejects("a record losing seals_has_more", (d) => { delete d.seals_has_more; });
+  rejects("a record losing attestations_about_has_more", (d) => { delete d.attestations_about_has_more; });
+  rejects("a record losing its checkpoint", (d) => { delete d.checkpoint; });
+  rejects("a record losing its registry_sig", (d) => { delete d.registry_sig; });
+  rejects("a record with a negative events_total", (d) => { d.events_total = -1; });
+
+  // The disclosure fields are part of the contract: a reader reconstructs the
+  // verification story from what_this_proves and verify_offline. Dropping either
+  // silences the reader's ability to check the response against itself.
+  rejects("a record losing what_this_proves", (d) => { delete d.what_this_proves; });
+  rejects("a record with an empty handle", (d) => { d.handle = ""; });
+});
