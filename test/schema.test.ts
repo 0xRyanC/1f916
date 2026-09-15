@@ -711,3 +711,113 @@ test("the /api/seals citizen ledger schema rejects the contract breaks it exists
   rejects("a ledger losing signed_payload", (d) => { delete d.signed_payload; });
   rejects("a ledger losing latest_note", (d) => { delete d.latest_note; });
 });
+
+test("the /api/keys citizen key-surface schema rejects the contract breaks it exists to catch", () => {
+  // A citizen's bound citizen-key surface is public and unauthenticated, so the
+  // live lane reads it — the deterministic lane is the second guard. The trust
+  // load-bearing bits: custody_evidence is null EXACTLY when keys[] is empty (a
+  // bound citizen with no evidence block, or an empty citizen with a stale one,
+  // is the contract break this schema exists to catch), a key row is kty OKP /
+  // crv Ed25519 with a 43-char base64url key, and declines[].reason may be null
+  // (a citizen may decline without words).
+  const schema = loadSchema("keys.json");
+  const keyRow = {
+    kty: "OKP",
+    crv: "Ed25519",
+    x: "p6F1EDHEVAdhDWGIMzdfdp80QLUfZuEml7UCEtfuuX4",
+    public_key: "p6F1EDHEVAdhDWGIMzdfdp80QLUfZuEml7UCEtfuuX4",
+    thumbprint: "q7Lou1aKAqvXFxWhd7RAjaFUuq7FiXcVTkb4kqgE8bI",
+    custody: "self",
+    status: "active",
+    bound_at: 1786588359433,
+  };
+  const evidence = {
+    asserted_at: 1786588359433,
+    rechecked_by: [],
+    kinds: {
+      "key-bind": { changes_custody: false, settles: "n" },
+      "key-revoke": { changes_custody: false, settles: "n" },
+      "key-decline": { changes_custody: false, settles: "n" },
+      key_rotation: { changes_custody: false, settles: "n" },
+    },
+    means: "n",
+  };
+  const ok = {
+    now: 1789446493949,
+    now_utc: new Date(1789446493949).toISOString(),
+    handle: "attic-wren",
+    keys: [keyRow],
+    custody_evidence: evidence,
+    declined: null,
+    declines: [],
+    note: "n",
+  };
+  assert.deepEqual(validate(schema, ok), [], "control: a bound citizen with evidence must pass");
+
+  const bend = (mutate) => {
+    const copy = JSON.parse(JSON.stringify(ok));
+    mutate(copy);
+    return validate(schema, copy);
+  };
+  const rejects = (label, mutate) => assert.ok(bend(mutate).length > 0, label);
+
+  // The empty case is legal: a citizen who never bound a key reads keys [] and
+  // custody_evidence null — the whole disclosure block is absent, not zeroed.
+  assert.deepEqual(
+    validate(schema, { ...ok, keys: [], custody_evidence: null }),
+    [],
+    "a citizen with no bound key reads custody_evidence as null"
+  );
+
+  // The load-bearing direction: a bound citizen (keys non-empty) with a NULL
+  // custody_evidence is a surface that has a key but refuses to say what it
+  // proves. This is the mirror of the seals latest:null case and the class the
+  // if/then exists to catch.
+  rejects("a bound citizen with a null custody_evidence", (d) => { d.custody_evidence = null; });
+
+  // A key row must be OKP/Ed25519; a different kty or crv is a key the note's
+  // verification prose (check against x) cannot describe.
+  rejects("a key row with kty other than OKP", (d) => { d.keys[0].kty = "RSA"; });
+  rejects("a key row with crv other than Ed25519", (d) => { d.keys[0].crv = "P-256"; });
+  rejects("a key row losing its kty", (d) => { delete d.keys[0].kty; });
+  rejects("a key row losing its bound_at", (d) => { delete d.keys[0].bound_at; });
+  rejects("a key row with a negative bound_at", (d) => { d.keys[0].bound_at = -1; });
+
+  // The key material is 43 base64url chars (32 raw bytes). A thumbprint one
+  // char short, a non-base64url thumbprint, or an uppercase hash-style string
+  // is a fingerprint a verifier cannot reproduce.
+  rejects("a thumbprint one char short", (d) => { d.keys[0].thumbprint = "q7Lou1aKAqvXFxWhd7RAjaFUuq7FiXcVTkb4kqgE8"; });
+  rejects("a thumbprint with non-base64url characters", (d) => { d.keys[0].thumbprint = "q7Lou1aKAqvXFxWhd7RAjaFUuq7FiXcVTkb4kqgE8/=="; });
+  rejects("an x one char short", (d) => { d.keys[0].x = "p6F1EDHEVAdhDWGIMzdfdp80QLUfZuEml7UCEtfuuX"; });
+
+  // custody is the citizen's dated testimony; it is not a free string.
+  rejects("a key row with custody other than self", (d) => { d.keys[0].custody = "delegated"; });
+
+  // The evidence block itself is required when present: losing asserted_at or
+  // the four kinds silences the disclosure.
+  rejects("a custody_evidence losing asserted_at", (d) => { delete d.custody_evidence.asserted_at; });
+  rejects("a custody_evidence losing a key kind", (d) => { delete d.custody_evidence.kinds["key-revoke"]; });
+  rejects("a custody_evidence losing means", (d) => { delete d.custody_evidence.means; });
+
+  // declines[].reason may be null (a citizen may decline without words); the
+  // row must still carry at and event.
+  assert.deepEqual(
+    validate(schema, {
+      ...ok, keys: [], custody_evidence: null,
+      declines: [{ at: 1787892027631, event: 4694, reason: null }],
+      declined: { at: 1787892027631, event: 4694, reason: null, means: "n" },
+    }),
+    [],
+    "a decline without words is legal"
+  );
+  rejects("a declines row losing its event", (d) => { d.declines.push({ at: 1, reason: null }); });
+  rejects("a declines row with a negative event", (d) => { d.declines.push({ at: 1, event: -1, reason: null }); });
+  rejects("a declined object losing its means", (d) => { d.declined = { at: 1, event: 1, reason: null }; });
+  rejects("a declined object with a negative at", (d) => { d.declined = { at: -1, event: 1, reason: null, means: "n" }; });
+
+  // Top-level completeness: handle, keys, and note are part of the contract.
+  rejects("a key surface losing handle", (d) => { delete d.handle; });
+  rejects("a key surface losing keys", (d) => { delete d.keys; });
+  rejects("a key surface losing note", (d) => { delete d.note; });
+  rejects("a key surface with a negative now", (d) => { d.now = -1; });
+});
