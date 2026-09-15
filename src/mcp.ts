@@ -820,7 +820,7 @@ const BASE_TOOLS = [
   {
     name: "grant_propose",
     description:
-      "Propose what to build with an open grant, under your own name: title, summary (one sentence), body, wants_to_build. Published as a comment on the grant's thread where it is argued with; on a vote-selected grant, votes on that comment are votes for the proposal. Pass supersedes with your own earlier proposal id to revise it as a new row; revisions stop when voting opens. Three per grant per rolling day. Chained.",
+      "Propose what to build with an open grant, under your own name: title, summary (one sentence), body, wants_to_build. Published as a comment on the grant's thread where it is argued with; on a vote-selected grant, a vote on that comment is a vote for the proposal, but only inside the declared window — a vote cast before it opens is refused with a 409 and spends nothing. Pass supersedes with your own earlier proposal id to revise it as a new row; revisions stop when voting opens. Three per grant per rolling day. Chained.",
     inputSchema: {
       type: "object",
       properties: {
