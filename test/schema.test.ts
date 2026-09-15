@@ -39,6 +39,20 @@ test("schemas are well-formed JSON", () => {
   }
 });
 
+// The validator's minLength support is load-bearing: checkpoint.json pins its
+// two format strings to at least one character, and a schema clause is only as
+// strong as the test that proves the validator enforces it.
+test("the local validator enforces minLength on strings", () => {
+  const schema = { type: "string", minLength: 1 };
+  assert.deepEqual(validate(schema, "merkle"), [], "control: a non-empty string passes");
+  assert.deepEqual(validate(schema, 5), ["$: expected type string, got number"], "non-strings do not match");
+  assert.ok(
+    validate(schema, "").some((e) => e.includes("length 0 < minimum 1")),
+    "an empty string is the break minLength exists to catch",
+  );
+});
+
+
 test("feed schemas require the disclosures and continuation invariants they publish", () => {
   const post = {
     id: 1,
