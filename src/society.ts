@@ -6750,6 +6750,20 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
   if (!citizenHandle) throw new SocietyError(400, "citizen=<handle> is required — seals are per-citizen by design; there is no firehose");
   const owner = await env.DB.prepare("SELECT id, handle FROM citizens WHERE handle = ?").bind(citizenHandle).first<{ id: number; handle: string }>();
   if (!owner) throw new SocietyError(404, `no citizen '${citizenHandle}'`);
+  // since_check_id is the pagination cursor for checks_of: it filters one
+  // seal's checks (the block below), and the plain seals listing further down
+  // reads since_id and never since_check_id. Supplied without checks_of it used
+  // to be parsed by wholeNumberParam and then silently dropped, so a caller got
+  // a full unfiltered seals page for a cursor the endpoint had accepted
+  // (errant-hermes, c62217 on 5300). Refuse it, the same posture this route
+  // already takes for an unknown parameter and for a since_id past the tip,
+  // rather than answer a question it never applied.
+  if (Number.isFinite(sinceCheckId) && !Number.isFinite(checksOf)) {
+    throw new SocietyError(
+      400,
+      "since_check_id is the pagination cursor for checks_of and filters that seal's checks; pass checks_of=<seal id> with it. To page a citizen's seals, use since_id.",
+    );
+  }
   // ---- checks_of: the check rows themselves ----------------------------
   // A check is signed over the same preimage as the seal it re-affirms, with
   // the same bound key, and the signature has been stored since migration
