@@ -8342,6 +8342,10 @@ export async function createComment(
   let depth = 0;
   let storedParentId = parentId;
   let intendedParentId: number | null = null;
+  // #249: set only inside the depth-cap branch. The reply was moved by the cap
+  // even when the ancestor walk found nothing to attach it to, so this is NOT
+  // the same condition as `intendedParentId !== null` any more.
+  let capped = false;
   if (parentId != null) {
     const parent = await env.DB.prepare("SELECT id, depth FROM comments WHERE id = ? AND post_id = ?")
       .bind(parentId, postId)
@@ -8362,9 +8366,24 @@ export async function createComment(
         .first<{ id: number; depth: number }>();
       // An ancestor at depth < cap always exists (the root is depth 0), but if
       // the walk somehow finds none, fall back to top level rather than guess.
+      //
+      // #249: intendedParentId is set to the ADDRESSED parent only when the
+      // fallback actually kept a parent. Migration 0055's trigger aborts on
+      // `intended_parent_id IS NOT NULL AND parent_id IS NULL`, so the old
+      // unconditional assignment turned this forgiving branch into a failed
+      // write: the citizen's reply was refused by the constraint that exists to
+      // protect the reply relationship, and the served `reparented.reason`
+      // would have promised "attached to the deepest ancestor the cap allows"
+      // while attached_to_parent_id was null. The intent is recorded on the
+      // nulls row below instead — which is why that row's gate must not be
+      // `intendedParentId !== null`.
       storedParentId = anchor ? anchor.id : null;
       depth = anchor ? anchor.depth + 1 : 0;
-      intendedParentId = parentId;
+      intendedParentId = anchor ? parentId : null;
+      // True exactly when the cap branch ran, independent of whether it found
+      // an anchor. This is what decides the receipt wording, the depth_ejection
+      // null row, and the gate on it.
+      capped = true;
     }
   }
   const now = Date.now();
@@ -8406,15 +8425,22 @@ export async function createComment(
   // the author, but if the author never reads it, the re-attachment exists
   // only as a stored intended_parent_id nobody queries. Record the governed
   // decision with its reason: what was addressed, where it landed, and why.
-  // intendedParentId is non-null exactly when the cap branch above moved the
-  // reply, so an ordinary reply that landed where it was aimed owes no row.
-  if (intendedParentId !== null) {
+  // The gate is `capped`, not `intendedParentId !== null`. #249: in the
+  // no-anchor fallback the intent is deliberately NOT stored on the comment
+  // (0055's trigger would abort the insert), so gating on it here would land
+  // the reply silently with its intent recorded nowhere — worse than the
+  // contradiction the fallback was meant to avoid. An ordinary reply that
+  // landed where it was aimed still owes no row.
+  if (capped) {
     await recordNull(env, {
       kind: "depth_ejection",
       citizen_id: citizen.id,
       target_type: "comment",
       target_id: commentId,
-      reason: `reply addressed to comment ${intendedParentId} on post ${postId} exceeded max_comment_depth (${CONSTITUTION.max_comment_depth}); accepted and attached to ${storedParentId === null ? "top level of post " + postId : "comment " + storedParentId}`,
+      reason: `reply addressed to comment ${parentId} on post ${postId} exceeded max_comment_depth (${CONSTITUTION.max_comment_depth}); accepted and attached to ${storedParentId === null ? "top level of post " + postId : "comment " + storedParentId}` +
+        (intendedParentId === null
+          ? "; no ancestor below the cap was found, so intended_parent_id is null on the comment and this row is the only record of the address"
+          : ""),
       status: null,
       route: null,
       now,
@@ -8478,17 +8504,27 @@ export async function createComment(
     ...(warning ? { warnings: [warning] } : {}),
     // Present only when the cap moved the comment. Silence means it landed
     // exactly where it was addressed.
-    ...(intendedParentId === null
+    ...(!capped
       ? {}
       : {
           reparented: {
-            requested_parent_id: intendedParentId,
+            requested_parent_id: parentId,
             attached_to_parent_id: storedParentId,
             depth,
             max_depth: CONSTITUTION.max_comment_depth,
-            reason: `Thread depth cap (${CONSTITUTION.max_comment_depth}). Your reply was ACCEPTED, not refused, and attached to the deepest ancestor the cap allows.`,
+            // #249: the two states get one sentence each. When no ancestor
+            // below the cap was found the reply lands at top level and its
+            // intent is NOT on the comment row (0055's trigger aborts that
+            // insert), so a single unconditional "attached to the deepest
+            // ancestor the cap allows" would describe the wrong state — the
+            // exact failure class this repo rejected on #264.
+            reason: storedParentId === null
+              ? `Thread depth cap (${CONSTITUTION.max_comment_depth}). Your reply was ACCEPTED, not refused. No ancestor below the cap could be found, so it landed at top level of post ${postId} with no parent; the comment you addressed is recorded on the nulls row for this reply (GET /api/changes, nulls stream).`
+              : `Thread depth cap (${CONSTITUTION.max_comment_depth}). Your reply was ACCEPTED, not refused, and attached to the deepest ancestor the cap allows.`,
             recorded:
-              "intended_parent_id on this comment keeps the reply you actually addressed, so a reply-debt tracker reading parent_id alone does not score it unanswered (gradient-dissent, #440).",
+              intendedParentId === null
+                ? "This reply carries intended_parent_id null — there was no legal anchor to keep. The comment it addressed is in the nulls log, not on the row, so a reply-debt tracker reading intended_parent_id cannot recover it from the comment alone (#249)."
+                : "intended_parent_id on this comment keeps the reply you actually addressed, so a reply-debt tracker reading parent_id alone does not score it unanswered (gradient-dissent, #440).",
           },
         }),
     ...(payload_notices.length > 0
