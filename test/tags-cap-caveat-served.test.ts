@@ -29,6 +29,22 @@ import assert from "node:assert/strict";
 import { tagDirectory } from "../src/society.ts";
 import { SURFACE } from "../src/surface.ts";
 
+// The false-absence claim itself, as a pattern.
+//
+// It targets the AFFIRMATIVE assertion -- "an empty page means/proves/shows the
+// tag is unused" -- and not the vocabulary. The first version matched `empty`
+// anywhere within 60 characters of `unused|absent|withheld`, which refused the
+// correct sentence "an empty front page is not proof that it is absent": a
+// guard against improving the prose, which is the same false-positive class the
+// auditor had just found in the ordering assertion one line above. Written
+// this way it allows every correct phrasing tried and refuses the auditor's
+// break and two variants of it.
+//
+// It does not make the clause correct. Prose correctness is not reachable by a
+// regex, and that limit is why the served strings go through review as well.
+const EMPTY_MEANS_UNUSED =
+  /empty[^.;]{0,50}\b(means|proves|shows|confirms|tells you)\b[^.;]{0,50}(unused|absent|withheld|not in use)/i;
+
 function mockEnv(rows: number, dbTotal: number) {
   const tagRows = Array.from({ length: rows }, (_, i) => ({
     tag: `tag${String(i + 1).padStart(4, "0")}`,
@@ -79,9 +95,14 @@ test("the /api/tags note conditions the unused claim on has_more and names the c
   const remediation = note.split(/(?<=\.)\s+/).find((x) => /clipped from this page/.test(x));
   assert.ok(remediation, "the note must carry a sentence about a clipped spelling");
   assert.match(remediation!, /\/api\/new\?tag=/, "the remediation sentence itself must name the whole-board walk");
+  const frontAt = remediation!.indexOf("/api/front?tag=");
   assert.ok(
-    !/\/api\/front\?tag=<tag>\.\s*$/.test(remediation!),
-    "the remediation sentence must not end by sending a reader to the ranked window",
+    frontAt === -1 || remediation!.indexOf("/api/new?tag=") < frontAt,
+    "if the ranked window is named at all, the whole-board walk must come first",
+  );
+  assert.ok(
+    !EMPTY_MEANS_UNUSED.test(remediation!),
+    "the remediation must not say an empty page means the tag is unused",
   );
 });
 
@@ -104,8 +125,26 @@ test("the /api/tags surface summary names the cap and drops the unconditional wi
   const clause = summary.split(/(?<=[.;])\s+/).find((x) => /clipped from this page/.test(x));
   assert.ok(clause, "the summary must carry a clause about a clipped label");
   assert.match(clause!, /\/api\/new\?tag=/, "the clause itself must name the whole-board walk");
+  // ORDERING ONLY IF BOTH ARE PRESENT. The first version asserted
+  // indexOf(new) < indexOf(front) outright, and indexOf returns -1 when the
+  // string is absent, so no index is < -1: the guard REJECTED a clause that
+  // names only the whole-board walk, which is the strictest correct wording
+  // there is. A guard that reds on the best possible version of the sentence is
+  // a guard against improving it.
+  const front = clause!.indexOf("/api/front?tag=");
   assert.ok(
-    clause!.indexOf("/api/new?tag=") < clause!.indexOf("/api/front?tag="),
-    "the whole-board walk must come before the ranked window, not after it as an afterthought",
+    front === -1 || clause!.indexOf("/api/new?tag=") < front,
+    "if the ranked window is named at all, the whole-board walk must come first",
+  );
+  // AND ORDERING IS NOT CORRECTNESS. The auditor got the ordering assertion to
+  // pass on "check one by walking GET /api/new?tag=<tag>, or faster, GET
+  // /api/front?tag=<tag>, where an empty page means the label is unused" --
+  // correct order, and then the false-absence claim stated outright. Position
+  // is a proxy for primacy, never for truth. This refuses the claim itself.
+  // It does not make the clause correct; prose correctness is not reachable by
+  // a test, and that limit is the reason the served strings go through review.
+  assert.ok(
+    !EMPTY_MEANS_UNUSED.test(clause!),
+    "the clause must not say an empty page means the label is unused",
   );
 });
