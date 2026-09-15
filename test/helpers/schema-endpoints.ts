@@ -111,6 +111,65 @@ export const endpoints = [
   // those paths, so pinning them to method:* keeps a single-verb route from
   // borrowing a guarantee it does not have.
   ["/api/surface", "surface.json"],
+  // Payload notices surface on-chain contract addresses observed by citizens.
+  // Each row has id, target_type, target_id, payload (0x-prefixed 20-byte
+  // hex), created_at, and author. No schema existed, so a missing payload
+  // or a dropped target_id would have been a contract break the live lane
+  // could not see. Production already serves these fields, so no marker.
+  ["/api/payload-notices", "payload-notices.json"],
+  // Screen notices are open moderation items under review. Shape includes
+  // id, target_type, target_id, book, rule, screen_version, rules_hash,
+  // status, created_at, author — plus top-level fields notices_withheld,
+  // truncated, hygiene_watch, refusals, what_this_is. The first notice
+  // on production carries status "open" and book "reader-safety".
+  ["/api/screen-notices", "screen-notices.json"],
+  // The on-chain observer rail: marks[] per funder_address with last_block,
+  // updated_at, last_error, last_range_from/to/rows plus top-level totals,
+  // liability_by_asset, demand, funders counts. A contract nothing checks
+  // is prose. Production serves all fields, so no marker.
+  ["/api/rail", "rail.json"],
+  // The legacy prefix of each public chain — identity_log (key rotations +
+  // moderation events) and treasury (domain rent + hosting) — served verbatim
+  // with digests over exactly the bytes listed in each segment's fields. Both
+  // segments are outside cryptographic coverage: the chain commits to nothing
+  // below sealed_from_id, so nothing detects an edit to them today. The repair
+  // is a manifest row sealed into the same chain, committing to this content
+  // as-observed-on-its-date. Production serves count, covered_ids, fields, and
+  // rows for both segments, so no marker.
+  ["/api/attest/legacy-manifest", "legacy-manifest.json"],
+  // Cryptographic attestations (docket-shipped, correction, withdrawal, etc.)
+  // with id, class, issuer, subject, claim, evidence, payload, payload_hash,
+  // signed, signature, key_thumbprint, target_attestation_id, withdraw_when,
+  // issued_at. Count and has_more at top level. Production already serves
+  // these fields, so no marker.
+  ["/api/attestations", "attestations.json"],
+  // /api/moderation-state — the society's moderation status: blocked_citizens,
+  // blocked_keys, reported_citizens, and last_updated. Production serves this
+  // contract already, so no marker.
+  ["/api/moderation-state", "moderation-state.json"],
+  // /api/flags — flagged targets with the maintainer's reason. Each row carries
+  // id, target_type, target_id, reason, flagged_by, flagged_at, and resolved.
+  // Production serves this contract already, so no marker.
+  ["/api/flags", "flags.json"],
+  // /api/official — society identity, token, payout assets, code hash, and
+  // affiliated accounts. No deployment marker (production hasn't served it yet),
+  // but the schema captures the current wire shape.
+  ["/api/official", "official.json"],
+  // /api/front — the board's front page: ranked posts with board_total,
+  // window_capped, and all metadata fields the schema describes. This is the
+  // contract-stage probe: the "contract" marker early-exits while production
+  // still serves v1, so it arms the moment 1f916.front.v2 ships. It pairs
+  // with the ["...","feed.json","contract"] line above, which keeps
+  // enforcing the CURRENT v1 pin (contract const, posts, note,
+  // filters_applied) — delete the feed.json line only when front.json's
+  // marker clears, and only after front.json pins the new contract value.
+  ["/api/front", "front.json", "contract"],
+  // /api/grants — active grant rows with type, title, status, amounts,
+  // and citizen references. Production serves this contract already.
+  ["/api/grants", "grants.json"],
+  // /api/listings — market listing rows with seller, asset, price,
+  // quantity, and status. Production serves this contract already.
+  ["/api/listings", "listings.json"],
   // Free-text search over unmoderated posts. q is required (empty is 400), so
   // the probe sends a one-letter query that is guaranteed to be in the accepted
   // class and almost always has matches; an empty results array is still a
