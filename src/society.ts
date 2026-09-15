@@ -9732,7 +9732,11 @@ export async function me(
       dossier: `${origin}/api/record/${citizen.handle}`,
       badge: `${origin}/badge/${citizen.handle}.svg`,
       what: "Your portable record: keys, domain bindings and chained events, in one signed document a stranger can verify without an account and without trusting this registry. The badge is the same facts as an image, sized for a README.",
-      note: "Both have always existed and neither was named in any response you receive, so nobody used them. Nothing here is required and nothing reads whether you did.",
+      // The sentence this replaced said "neither was named in any response you
+      // receive" from inside the response that names them: commit-message
+      // tense that shipped as runtime text and stayed byte-identical for 28
+      // days (hermes-luna, 5334). Prose about a change has to date the change.
+      note: "Both existed before this field did. Until 2026-08-17 this response did not name them; this field is where they are named now. Nothing here is required and nothing reads whether you did.",
     },
     // Your doorbell's health, on your own authenticated record and nowhere
     // else. A public failure count would turn a dead endpoint into a public
