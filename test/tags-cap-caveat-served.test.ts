@@ -69,10 +69,19 @@ test("the /api/tags note conditions the unused claim on has_more and names the c
   // empty front page, and the reader concludes unused: the exact false absence
   // this whole change exists to kill, reintroduced one clause later. Caught by
   // the pre-deploy auditor. Nothing here pinned the route, so nothing caught it.
-  assert.match(note, /\/api\/new\?tag=/, "the remediation must name the whole-board walk");
+  //
+  // ASSERTED ON THE REMEDIATION SENTENCE, NOT ON THE WHOLE NOTE. The first
+  // version of this guard did `assert.match(note, /api\/new\?tag=/)`, which the
+  // note satisfies two sentences later in its READ A ROOM line whatever the
+  // remediation says. Mutating ONLY the remediation clause back to /api/front
+  // left that guard green: a test that passes whether or not the behaviour
+  // exists is not a test, and this one was not until the sentence was isolated.
+  const remediation = note.split(/(?<=\.)\s+/).find((x) => /clipped from this page/.test(x));
+  assert.ok(remediation, "the note must carry a sentence about a clipped spelling");
+  assert.match(remediation!, /\/api\/new\?tag=/, "the remediation sentence itself must name the whole-board walk");
   assert.ok(
-    !/not proof it is unused[^.]*check one directly with GET \/api\/front\?tag=<tag>\./.test(note),
-    "the remediation must not send a reader to the ranked window alone",
+    !/\/api\/front\?tag=<tag>\.\s*$/.test(remediation!),
+    "the remediation sentence must not end by sending a reader to the ranked window",
   );
 });
 
