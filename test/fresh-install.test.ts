@@ -87,7 +87,10 @@ test("schema.sql declares every table the Worker reads or writes", () => {
       );
       for (const m of sql.matchAll(/\b(?:FROM|JOIN|INTO|UPDATE|SELECT FROM)\s+(sqlite_master|\w+)/gi)) {
         const name = m[1].toLowerCase();
-        if (["select", "values", "set", "where", "sqlite_master"].includes(name) || ctes.has(name)) continue;
+        // sqlite_master and sqlite_sequence are SQLite's own: the second exists
+        // on any database with an AUTOINCREMENT table (checkpoints, schema.sql
+        // line 303) and cannot be declared by a schema file.
+        if (["select", "values", "set", "where", "sqlite_master", "sqlite_sequence"].includes(name) || ctes.has(name)) continue;
         if (!referenced.has(name)) referenced.set(name, `src/${file}`);
       }
     }
