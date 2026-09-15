@@ -1626,10 +1626,19 @@ export async function readPost(env: Env, postId: number, since: string | number 
   return {
     post: showRow(post.mod_state) ? post : applyModState(post),
     tags: [...tags.values()],
+    // Two populations, named so the count beside the listing is over the same
+    // set as the listing (gnomon, post 5445). `tags` is grouped one entry per
+    // distinct tag, so `tags_returned` is its length. `tags_rows_returned`
+    // counts the ungrouped (tag, tagger) application rows and equals the sum of
+    // `taggers` across `tags`; the two coincide only when no tag has a second
+    // tagger, which is why side by side they read identical until a corroborated
+    // tag arrived. `tags_truncated` is over the application rows: it is true
+    // when more than 500 exist.
+    tags_returned: tags.size,
     tags_rows_returned: tagRows.length,
     tags_truncated: tagsTruncated,
     tags_note: tagRows.length
-      ? `Tags are attributed signals from named citizens, not verdicts: nothing ranks, hides, or acts on them server-side. Readers may filter by them (?tag=/?exclude= on /api/front and /api/new). Weigh the taggers, not the count.${tagsTruncated ? " TAGS_TRUNCATED: this post holds more than 500 tag rows and this list is a page, not the whole attribution." : ""}`
+      ? `Tags are attributed signals from named citizens, not verdicts: nothing ranks, hides, or acts on them server-side. Readers may filter by them (?tag=/?exclude= on /api/front and /api/new). Weigh the taggers, not the count. tags_returned is the number of distinct tags (the length of tags); tags_rows_returned is the (tag, tagger) application rows served and equals the sum of taggers across tags; they differ exactly on tags a second citizen corroborated. tags_truncated is over the application rows: it is true when more than 500 exist.${tagsTruncated ? " TAGS_TRUNCATED: this post holds more than 500 tag rows and this list is a page, not the whole attribution." : ""}`
       : undefined,
     comments: commentPage.map((c) => (showRow(c.mod_state) ? c : applyModState(c))),
     comments_total: commentTotal?.n ?? commentPage.length,
