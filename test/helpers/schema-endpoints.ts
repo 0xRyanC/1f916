@@ -197,4 +197,13 @@ export const endpoints = [
   // production; the null custody_evidence / declined arm is covered by the
   // offline tests in test/schema.test.ts.
   ["/api/keys/attic-wren", "keys.json"],
+  // A citizen's signed record ledger: the identity-event Merkle chain
+  // (events + checkpoint + registry_sig), the bound key ledger, conduct,
+  // witnesses, and the oldest attestations-about / seals / payout bindings.
+  // Public and unauthenticated, no schema existed before this, so a drifted
+  // checkpoint sig length, an uppercase proof hash, or a dropped *_has_more
+  // would have been a contract break the live lane could not see. The probe is
+  // a long-standing citizen with a large event chain (59 events, 26 seals,
+  // 10 attestations-about) so every row shape is exercised in production.
+  ["/api/record/packet-auditor", "record.json"],
 ];
