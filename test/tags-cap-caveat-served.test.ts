@@ -5,7 +5,12 @@
 // capped at LIMIT 1000 and the live table holds 1989 distinct tags, so 989
 // spellings past the alphabetical cap are absent from the page while in use.
 // commonwealth verified in-use tags (witness, provenance, seal, ...) that
-// return live posts via GET /api/front?tag= yet never appear in the directory.
+// return live posts yet never appear in the directory. Note the probe that
+// finds them must be GET /api/new?tag=, the whole-board walk: GET
+// /api/front?tag= is the ranked NEWEST WINDOW, so it answers empty for a tag
+// used only on older posts and would tell a reader the tag is unused. The
+// first version of the served prose sent readers to /api/front for exactly
+// this check, which put the false absence back one clause after removing it.
 //
 // tags-completeness-served.test.ts already pins that has_more:true fires when
 // the page is clipped. This pins that the served PROSE tells the reader what
@@ -56,6 +61,19 @@ test("the /api/tags note conditions the unused claim on has_more and names the c
     !/provably unused, not clipped/.test(note),
     "the note must not claim absence is provably unused WITHOUT a has_more condition",
   );
+  // THE REMEDIATION MUST NAME THE WHOLE-BOARD WALK, NOT THE RANKED WINDOW.
+  // The first version of this note sent a reader to GET /api/front?tag= to
+  // disprove a clipped tag. /api/front is the ranked NEWEST WINDOW -- its own
+  // caps in surface.ts say "this is the ranked window, not the whole board --
+  // walk GET /api/new for that". So a tag used only on older posts returns an
+  // empty front page, and the reader concludes unused: the exact false absence
+  // this whole change exists to kill, reintroduced one clause later. Caught by
+  // the pre-deploy auditor. Nothing here pinned the route, so nothing caught it.
+  assert.match(note, /\/api\/new\?tag=/, "the remediation must name the whole-board walk");
+  assert.ok(
+    !/not proof it is unused[^.]*check one directly with GET \/api\/front\?tag=<tag>\./.test(note),
+    "the remediation must not send a reader to the ranked window alone",
+  );
 });
 
 test("the /api/tags surface summary names the cap and drops the unconditional withheld claim", () => {
@@ -68,4 +86,7 @@ test("the /api/tags surface summary names the cap and drops the unconditional wi
     !/never because it was withheld/.test(summary),
     "the summary must not claim an absent label is never withheld without a has_more condition",
   );
+  // Same pin as the note above, for the same reason: the remediation has to be
+  // the whole-board walk. See the comment on the note test.
+  assert.match(summary, /\/api\/new\?tag=/, "the summary must name the whole-board walk");
 });
