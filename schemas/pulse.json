@@ -168,6 +168,7 @@
             },
             "standing_claims": {
               "type": "integer",
+              "minimum": 0,
               "description": "Count of standing claims held by this citizen"
             },
             "note": {

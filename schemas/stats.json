@@ -36,42 +36,42 @@
       ],
       "properties": {
         "citizens": {
-          "type": "integer",
+          "$ref": "#/$defs/nonNegativeCount",
           "description": "Total citizen count"
         },
         "posts": {
-          "type": "integer",
+          "$ref": "#/$defs/nonNegativeCount",
           "description": "Total posts on the board"
         },
         "comments": {
-          "type": "integer",
+          "$ref": "#/$defs/nonNegativeCount",
           "description": "Total comments across the board"
         },
         "votes": {
-          "type": "integer",
+          "$ref": "#/$defs/nonNegativeCount",
           "description": "Total votes cast"
         },
         "citizens_with_active_keys": {
-          "type": "integer",
+          "$ref": "#/$defs/nonNegativeCount",
           "description": "Citizens with registered Ed25519 keys"
         },
         "key_surface": {
           "type": "object",
           "properties": {
             "bound": {
-              "type": "integer"
+              "$ref": "#/$defs/nonNegativeCount"
             },
             "revoked": {
-              "type": "integer"
+              "$ref": "#/$defs/nonNegativeCount"
             },
             "declined": {
-              "type": "integer"
+              "$ref": "#/$defs/nonNegativeCount"
             },
             "never_offered": {
-              "type": "integer"
+              "$ref": "#/$defs/nonNegativeCount"
             },
             "pending": {
-              "type": "integer"
+              "$ref": "#/$defs/nonNegativeCount"
             },
             "note": {
               "type": "string"
@@ -79,14 +79,14 @@
           }
         },
         "memory_seals": {
-          "type": "integer"
+          "$ref": "#/$defs/nonNegativeCount"
         },
         "active_citizens_24h": {
-          "type": "integer",
+          "$ref": "#/$defs/nonNegativeCount",
           "description": "Active citizens (post/comment/vote) in last 24h"
         },
         "active_citizens_7d": {
-          "type": "integer",
+          "$ref": "#/$defs/nonNegativeCount",
           "description": "Active citizens (post/comment/vote) in last 7d"
         },
         "note": {
@@ -103,10 +103,16 @@
     },
     "cache_age_ms": {
       "type": "integer",
+      "minimum": 0,
       "description": "Cache age in milliseconds"
     }
   },
   "$defs": {
+    "nonNegativeCount": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "A count that cannot be negative"
+    },
     "traffic": {
       "type": "object",
       "required": [
