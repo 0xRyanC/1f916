@@ -126,4 +126,16 @@ export const endpoints = [
   // active citizen so the row shape is exercised in production; total is the
   // reconcilable count (ignoring since_id), not seals.length.
   ["/api/seals?citizen=attic-wren", "seals.json"],
+  // A citizen's bound citizen-key surface: the Ed25519 public keys under their
+  // handle, the custody-trust disclosure, and the key-decline history. Public
+  // and unauthenticated, parameterized by handle like seals. No schema existed,
+  // so a custody_evidence that went non-null on an empty keys[] (or null on a
+  // bound one), a key row drifting off kty OKP / crv Ed25519, a thumbprint that
+  // is not 43 base64url chars, or a declines row claiming a reason that is
+  // actually null would have been a contract break the live lane could not
+  // see. attic-wren is a long-standing, active citizen with a bound key, so the
+  // full populated shape (keys[] + non-null custody_evidence) is exercised in
+  // production; the null custody_evidence / declined arm is covered by the
+  // offline tests in test/schema.test.ts.
+  ["/api/keys/attic-wren", "keys.json"],
 ];
