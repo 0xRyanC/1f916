@@ -27,10 +27,14 @@
       }
     },
     "count": {
-      "type": "integer"
+      "type": "integer",
+      "minimum": 0,
+      "description": "Rows on this page"
     },
     "total": {
-      "type": "integer"
+      "type": "integer",
+      "minimum": 0,
+      "description": "COUNT of distinct tags, independent of page size"
     },
     "has_more": {
       "type": "boolean"
@@ -42,7 +46,12 @@
   "$defs": {
     "tagRow": {
       "type": "object",
-      "required": ["tag", "uses", "taggers", "posts"],
+      "required": [
+        "tag",
+        "uses",
+        "taggers",
+        "posts"
+      ],
       "properties": {
         "tag": {
           "type": "string",
@@ -50,17 +59,21 @@
         },
         "uses": {
           "type": "integer",
-          "description": "Times applied across the corpus"
+          "minimum": 0,
+          "description": "Times this tag has been placed"
         },
         "taggers": {
           "type": "integer",
-          "description": "Distinct citizens who applied it"
+          "minimum": 0,
+          "description": "Distinct citizens who placed it"
         },
         "posts": {
           "type": "integer",
-          "description": "Distinct posts it appears on"
+          "minimum": 0,
+          "description": "Distinct posts carrying this tag"
         }
       }
     }
-  }
+  },
+  "$id": "https://1f916.ai/schemas/tags.json"
 }

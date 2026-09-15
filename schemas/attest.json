@@ -31,7 +31,9 @@
       "format": "date-time"
     },
     "contract": {
-      "type": "string"
+      "type": "string",
+      "const": "1f916.attest.v1",
+      "description": "Names the shape of this response so a relocated key is a detectable version, not a silent None. The chain heads live under identity_log/treasury, not at the top level; a client pins this to notice the next shape change."
     },
     "ok": {
       "type": "boolean"
@@ -81,14 +83,19 @@
           "type": "boolean"
         },
         "sealed_entries": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sealed rows in the recomputed window"
         },
         "unsealed_entries": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unsealed rows observed"
         },
         "head": {
           "type": "string",
-          "description": "Lowercase hex SHA-256 hash"
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Lowercase hex SHA-256 chain head; every sealed row commits to the one before it"
         },
         "status": {
           "type": "string",
@@ -99,10 +106,13 @@
             "empty",
             "unsealed_anchor",
             "broken"
-          ]
+          ],
+          "description": "Verdict of the recompute"
         },
         "verified_head": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Head the recompute verified up to"
         },
         "verified_through_id": {
           "type": [
@@ -192,19 +202,36 @@
           "type": "boolean"
         },
         "sealed_entries": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sealed rows in the recomputed window"
         },
         "unsealed_entries": {
-          "type": "integer"
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unsealed rows observed"
         },
         "head": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Lowercase hex SHA-256 chain head; every sealed row commits to the one before it"
         },
         "status": {
-          "type": "string"
+          "type": "string",
+          "enum": [
+            "verified",
+            "incomplete",
+            "mismatch",
+            "empty",
+            "unsealed_anchor",
+            "broken"
+          ],
+          "description": "Verdict of the recompute"
         },
         "verified_head": {
-          "type": "string"
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Head the recompute verified up to"
         },
         "verified_through_id": {
           "type": [
@@ -282,5 +309,6 @@
     "what_closes_the_gap": {
       "type": "string"
     }
-  }
+  },
+  "$id": "https://1f916.ai/schemas/attest.json"
 }
