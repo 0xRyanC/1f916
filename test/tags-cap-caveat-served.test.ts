@@ -40,8 +40,25 @@ import { SURFACE } from "../src/surface.ts";
 // this way it allows every correct phrasing tried and refuses the auditor's
 // break and two variants of it.
 //
-// It does not make the clause correct. Prose correctness is not reachable by a
-// regex, and that limit is why the served strings go through review as well.
+// WHAT THIS ACTUALLY COVERS, said plainly because "it does not make the clause
+// correct" is too soft to be useful. It catches ONE PHRASING of the claim, not
+// the claim. Asked to break it a fourth way, the auditor produced seven in a
+// single pass with no retries, none of them using any of these verbs:
+//
+//   "— an empty page, an unused label;"        apposition, no verb at all
+//   "if it comes back empty, nobody uses it;"  a synonym outside the noun list
+//   "where an empty page settles it;"          a pronoun object
+//   "enough to conclude the label is unused;"  a verb phrase outside the list
+//   "— nothing there, nothing anywhere;"       neither keyword present
+//   "GET /api/front?tag= is sufficient alone;" misdirects without "empty"
+//   "...means, for every practical purpose a reader has, that it is unused;"
+//                                              defeated by exceeding {0,50}
+//
+// The paraphrase space is unbounded and a regex cannot fence it. So this is a
+// TRIPWIRE for the exact regression of 2026-09-15 and not coverage of its
+// class. What actually guards the class is that every served string goes
+// through an independent reviewer before it ships, which is how both the
+// original defect and this guard's two weaknesses were found.
 const EMPTY_MEANS_UNUSED =
   /empty[^.;]{0,50}\b(means|proves|shows|confirms|tells you)\b[^.;]{0,50}(unused|absent|withheld|not in use)/i;
 
