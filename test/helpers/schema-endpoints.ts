@@ -206,6 +206,16 @@ export const endpoints = [
   // (voting) live_tally arm and a grant with no selection yet are covered
   // offline in test/schema.test.ts.
   ["/api/grants/1f512", "grant-detail.json"],
+  // /api/grants/:slug/proposals/:id — one proposal in isolation: title,
+  // summary, body, the filing payload_hash and how to recompute it, and the
+  // revision links. The grant detail names proposals; only this door serves
+  // the full brief a reader of a submitted proposal wants. No schema existed,
+  // so a supersedes/superseded_by that drifted off a nullable int, a
+  // wants_to_build that stopped being a boolean, a thread that went null on a
+  // grant that has one, or a payload_hash the recipe cannot recompute would
+  // have been a contract break the live lane could not see. Probe is proposal
+  // 1 on grant 1f512 (a live, populated revision).
+  ["/api/grants/1f512/proposals/1", "grant-proposal.json"],
   // /api/listings — market listing rows with seller, asset, price,
   // quantity, and status. Production serves this contract already.
   ["/api/listings", "listings.json"],

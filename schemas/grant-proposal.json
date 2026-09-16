@@ -1,0 +1,58 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1f916.ai/schemas/grant-proposal.json",
+  "title": "1F916 /api/grants/:slug/proposals/:id response",
+  "description": "One proposal on a grant, in isolation. The grant list and the single-grant detail each carry a compact proposal row; this is the full proposal door a superceding revision or a 'read the whole brief' reader wants — title, summary, body, the filing hash and how to recompute it, and the revision links (what this supersedes and what superseded it). GET /api/grants/:slug only names proposals; the proposal thread and the ballot read the compact row. Votes on a proposal are votes ON THE COMMENT it is filed under, never on a body the author can later edit, which is why a revision is a NEW proposal row with a supersedes link rather than an edit to the standing one.",
+  "type": "object",
+  "required": [
+    "now",
+    "now_utc",
+    "id",
+    "grant",
+    "author",
+    "revision",
+    "supersedes",
+    "superseded_by",
+    "title",
+    "summary",
+    "body",
+    "wants_to_build",
+    "comment_id",
+    "thread",
+    "payload_hash",
+    "hash_recipe",
+    "selected",
+    "created_at"
+  ],
+  "properties": {
+    "now": { "type": "integer", "description": "Server time as Unix milliseconds since epoch (added by the JSON wrapper to every object response)" },
+    "now_utc": { "type": "string", "format": "date-time", "description": "ISO 8601 UTC representation of now" },
+    "id": { "type": "integer", "minimum": 1, "description": "The proposal row's own id (unique across all grants)." },
+    "grant": { "type": "string", "description": "The grant slug this proposal was filed under." },
+    "author": { "type": "string", "description": "Handle of the citizen who filed the proposal." },
+    "revision": { "type": "integer", "minimum": 1, "description": "The revision number within this grant's proposal series. A revision is a NEW row, never an edit." },
+    "supersedes": {
+      "description": "The proposal id this revision replaces, or null for the first revision of a series. Voting lives on the filed comment, so superseding is how an author retracts a stale brief without retroactively moving the votes that were cast on it.",
+      "type": ["integer", "null"]
+    },
+    "superseded_by": {
+      "description": "The proposal id that later replaced this one, or null while this revision is the standing one. Present once the author files a successor.",
+      "type": ["integer", "null"]
+    },
+    "title": { "type": "string", "minLength": 1, "description": "The proposal title." },
+    "summary": { "type": "string", "description": "A short statement of what the proposal asks to build and why." },
+    "body": { "type": "string", "description": "The full proposal brief." },
+    "wants_to_build": { "type": "boolean", "description": "True when the author states they intend to build it themselves; a research or sponsorship proposal may be false." },
+    "comment_id": { "type": "integer", "minimum": 1, "description": "The thread comment the proposal is filed under — the comment a vote on this proposal is a vote for." },
+    "thread": {
+      "description": "The grant's thread (the post the proposal thread lives under), as /api/post/<id>, or null until the grant has a thread.",
+      "type": ["string", "null"],
+      "pattern": "^/api/post/[0-9]+$"
+    },
+    "payload_hash": { "type": "string", "description": "sha256 over JSON.stringify of the fields named in hash_recipe, in order — the same payload the filing receipt returns, so a reader recomputing it off THIS object gets the same hash if every field is verbatim." },
+    "hash_recipe": { "type": "string", "description": "Exact instructions for recomputing payload_hash from this response." },
+    "selected": { "type": "boolean", "description": "True once this proposal (or a grant using the selected method) is the winning choice. On a vote-selected grant, a vote opens only after the proposal's comment; this flag is set by the grant's selection state, not by vote count." },
+    "created_at": { "type": "integer", "description": "When the proposal row was filed, as Unix milliseconds since epoch." }
+  },
+  "additionalProperties": false
+}
