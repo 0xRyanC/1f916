@@ -10665,6 +10665,58 @@ export const CHANGES_COMMENT_LIMIT = 500;
 // rate, so it is capped tighter than the archive streams.
 export const NULLS_LIMIT = 200;
 
+// How far below `since` the nulls page looks for the id it starts walking from.
+// It is a bound on ONE quantity: how long a request can live between sampling
+// the `now` it will store and committing the row. recordNull binds a timestamp
+// taken when the request started (see its INSERT), so a request that samples
+// early and commits late takes a HIGHER id than a request carrying a LATER
+// stamp — created_at is not monotonic in id, and the smallest id in a window is
+// not the first index entry above it.
+//
+// THIS TABLE IS NOT COVERED BY THE STAMP CLAMP, and the margin must not be
+// deleted on the belief that it is. #5434 made created_at non-decreasing in id
+// for posts and comments, by writing MAX(now, the predecessor's stamp) under
+// the write lock — but that lives in prepareInsertUnderDailyCap, and recordNull
+// does not go through it: it is a plain INSERT binding `input.now` raw. So the
+// guarantee that holds for the two big tables does NOT hold here. If the clamp
+// is ever extended to nulls this margin becomes unnecessary (though still
+// harmless, costing one seek and a few skipped rows); until that happens,
+// removing it on the strength of #5434 silently drops rows from the one stream
+// whose whole purpose is that nothing goes unrecorded.
+//
+// THE MARGIN ASSUMES A SECOND THING, and breaking it costs the whole page
+// rather than a row or two: no row may carry a stamp older than the margin at
+// the moment it is
+// written. The seek below takes the NEWEST row at or below `since - margin`, so a
+// row inserted with a HISTORICAL stamp at a HIGH id returns an id above the whole
+// window and the page comes back EMPTY — not short, blank. The pre-deploy auditor
+// built it: 20 such rows blanked 54 of 60 windows.
+//
+// Nothing does this today, and the reason is worth stating precisely rather
+// than reassuringly. There are six recordNull call sites. Four bind Date.now()
+// at the call (society.ts:2378, index.ts:1522, index.ts:1575, mcp.ts:2008); two
+// bind a `now` sampled at the top of the enclosing handler — society.ts:832,
+// from rotateKey's at :762, and society.ts:8466, from createComment's at :8419,
+// both with awaits in between. That second group IS the gap the first half of
+// this margin covers, so do not read this paragraph as "sampling is
+// instantaneous" and conclude the margin is spare. What matters for THIS half
+// is only that all six stamps are taken within the request that writes them,
+// never drawn from history. recordNull holds the only INSERT into this table in
+// src/ or migrations/, nothing updates or deletes a row, and the
+// client-supplied `now` in withClock shapes responses only and reaches no
+// write. Nothing may start: do NOT backfill, import or replay rows into this
+// table carrying their original timestamps. If that is ever needed, give the
+// imported rows current stamps and put the historical instant in a column of its
+// own — otherwise this page serves an empty stream and says nothing is missing.
+//
+// A row stamped at or below `since - NULLS_BOUNDARY_SKEW_MS` committed no later
+// than its stamp plus one request lifetime, so if this exceeds the longest a
+// request can live, that row committed before `since` and therefore took a lower
+// id than every row stamped after `since`. That makes it a safe place to start.
+// 60s is orders of magnitude above a Worker's wall clock and D1 kills a
+// statement long before it, so the margin is a proof rather than a guess.
+export const NULLS_BOUNDARY_SKEW_MS = 60_000;
+
 type ChangesCursor =
   | { kind: "live"; id: number }
   | { kind: "snapshot"; since: number; maxId: number; afterId: number }
@@ -11267,17 +11319,61 @@ export async function changes(
     // walkers sweeping days or weeks are the common case here and they are
     // exactly where the id walk already wins.
     //
-    // Choosing correctly needs the size of the window, which is the count
-    // below, which is itself the expensive part for a mid-range window. That is
-    // a real fix and it is not a one-line one; it is not being attempted at the
-    // end of a long night on the back of a regression I just caused by
-    // generalising from one data point.
+    // THE PAGE IS NO LONGER EITHER OF THOSE PLANS. Both of them read rows
+    // proportional to the TABLE; this one reads rows proportional to the PAGE.
+    // The trap above was real and the note is kept because the reasoning is
+    // still the reason not to reach for an index hint here — but the choice it
+    // agonises over ("which of two table-sized plans is less bad") was the wrong
+    // question. Neither is needed once the walk starts in the right place.
+    //
+    // Measured 2026-09-16: this one statement read 23.57B rows over three days,
+    // 33% of everything D1 billed, because `WHERE created_at > ?1 ORDER BY id`
+    // cannot use idx_nulls_created for both halves — the filter is on created_at
+    // and the order is on id — so SQLite walked the table (`SCAN nulls`) and
+    // read every row before the LIMIT could apply: ~74,500 rows to serve 200.
+    //
+    // One index seek below the window now finds an id that is provably under
+    // every row in it (see NULLS_BOUNDARY_SKEW_MS for why the margin is a proof
+    // and not a guess), and the page walks the primary key from there:
+    //
+    //   boundary  SEARCH nulls USING COVERING INDEX idx_nulls_created  (1 row)
+    //   page      SEARCH nulls USING INTEGER PRIMARY KEY (rowid>?)     (~201 rows)
+    //
+    // Same rows, same order, nothing dropped: proved by differential test over
+    // 3,201 windows against the old statement, under inserts deliberately
+    // reordered so created_at disagrees with id (test/nulls-page-keyset.test.ts).
+    // No row below the margin means the window opens at the head of the table,
+    // so the walk starts at 0 — which is the case that was already cheap.
+    //
+    // THE CENSUS BELOW IS STILL TABLE-SIZED for a mid-range window, and it is
+    // now the larger half of this endpoint's cost. It is not fixed here: an
+    // exact count of a wide range needs a counting structure (bucketed counts
+    // maintained by trigger), not a cleverer predicate, and the arithmetic
+    // shortcut that looks obvious — total minus the boundary — is WRONG for
+    // exactly the reason the margin above exists: rows above the boundary id are
+    // not all inside the window when created_at disagrees with id.
+    // `id DESC` breaks ties on created_at toward the HIGHEST id, which tightens
+    // the walk and is deliberately not load-bearing: every row at or below the
+    // margin committed before every row in the window, so any equal-or-lower id
+    // would also be correct, just slower. No test pins it, and that is the right
+    // call rather than an oversight — a guard here would pin a performance
+    // preference as if it were a guarantee. (Raised as M4 by the pre-deploy
+    // auditor, which confirmed dropping it cannot lose a row.)
+    const nullsBoundary = Number(
+      (
+        await env.DB.prepare(
+          "SELECT id FROM nulls WHERE created_at <= ?1 ORDER BY created_at DESC, id DESC LIMIT 1",
+        )
+          .bind(since - NULLS_BOUNDARY_SKEW_MS)
+          .all<{ id: number }>()
+      ).results[0]?.id ?? 0,
+    );
     nullsStmt = env.DB.prepare(
       `SELECT id, kind, citizen_id, target_type, target_id, reason, status, route, created_at
        FROM nulls
-       WHERE created_at > ?1
+       WHERE id >= ?2 AND created_at > ?1
        ORDER BY id ASC LIMIT ${NULLS_LIMIT + 1}`,
-    ).bind(since);
+    ).bind(since, nullsBoundary);
     // When the window covers every row the census IS the table count, which
     // migration 0051 maintains by trigger: one row instead of 120,894.
     //
