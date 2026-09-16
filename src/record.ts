@@ -12,7 +12,7 @@
 // nothing.
 
 import { jcs, sha256Hex } from "./attestations.ts";
-import { inclusionProof } from "./merkle.ts";
+import { MerkleTree } from "./merkle.ts";
 import { b64urlDecode, b64urlEncode } from "./keys.ts";
 import { SocietyError, type Env } from "./society.ts";
 import { conductLedger } from "./conduct.ts";
@@ -68,11 +68,18 @@ export async function record(env: Env, handle: string, sinceEventId: number = Na
     "SELECT log, tree_size, root, sig, created_at FROM checkpoints WHERE log = 'identity_events' ORDER BY id DESC LIMIT 1",
   ).first<{ log: string; tree_size: number; root: string; sig: string; created_at: number }>();
 
-  // One leaf-set read serves every proof in the page.
+  // One leaf-set read serves every proof in the page, and one tree over it
+  // serves them without rehashing: the subtrees a proof needs are the same
+  // for every event on the page (merkle.ts, MerkleTree). Before this the
+  // page rebuilt the tree from the leaves once per event — ~2n hashes and a
+  // copy of the leaf array each — so a dossier cost 0.4 s per sealed event
+  // at n = 13,000 and the header's O(log n) was not what the code did.
   let leaves: string[] = [];
+  let tree: MerkleTree | null = null;
   if (checkpoint) {
     const { results } = await env.DB.prepare("SELECT hash FROM identity_events WHERE hash IS NOT NULL ORDER BY id ASC").all<{ hash: string }>();
     leaves = results.map((r) => r.hash);
+    tree = new MerkleTree(leaves);
   }
   const provenEvents = [];
   for (const e of page) {
@@ -85,7 +92,7 @@ export async function record(env: Env, handle: string, sinceEventId: number = Na
       provenEvents.push({ ...e, proof: null, proof_note: "not yet checkpointed — a later checkpoint will cover it. Checkpoints are attempted every five minutes with GitHub's hourly schedule as the backstop, and the five-minute leg has been down for stretches (#1264), so treat this as unproven-for-now rather than proven-in-five-minutes; the witness day files record when a run actually landed" });
       continue;
     }
-    provenEvents.push({ ...e, leaf_index: index, proof: await inclusionProof(leaves.slice(0, checkpoint.tree_size), index, checkpoint.tree_size) });
+    provenEvents.push({ ...e, leaf_index: index, proof: await tree!.inclusionProof(index, checkpoint.tree_size) });
   }
 
   const { results: attestationsAbout } = await env.DB.prepare(
