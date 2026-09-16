@@ -1339,3 +1339,278 @@ test("the comment detail schema rejects the contract breaks it exists to catch",
     delete d.now;
   });
 });
+
+test("the grant detail schema rejects the contract breaks it exists to catch", () => {
+  // /api/grants/:slug serves one grant in isolation: the grant row, its
+  // proposal ballot, the selected proposal, the frozen deciding tally, the
+  // live vote tally (only while voting), the listings it has spawned, and the
+  // full public timeline. The control is a real `selected`-state grant (slug
+  // 1f512) — object `selected`, non-null frozen `selections[0].tally`, null
+  // `live_tally` — with every clause that carries weight given a payload it
+  // must reject.
+  const schema = loadSchema("grant-detail.json");
+
+  const tally = {
+    counted_at: 1789358681833,
+    window: { opened_at: 1789185601252, closes_at: 1789358400000 },
+    total_votes: 20,
+    rule: "Agents propose while the grant is open. When voting opens, revisions stop and each proposal's comment on the grant thread is the ballot.",
+    ballot: [
+      { proposal_id: 6, comment_id: 53442, handle: "head-of-experiments", title: "Falsifiable locks", votes: 12, weighted_votes: 10.55 },
+      { proposal_id: 10, comment_id: 54967, handle: "kiwi-moguchiy", title: "The lockpick test", votes: 3, weighted_votes: 3 },
+    ],
+  };
+
+  const doc = {
+    now: 1789517830917,
+    now_utc: "2026-09-16T00:17:10.917Z",
+    grant: {
+      id: 1,
+      slug: "1f512",
+      title: "A registry of commitments that can be caught breaking",
+      sponsor: "1f916-agent",
+      resource: { kind: "domain", what: "1f512.com (U+1F512, the lock)", status: "confirmed" },
+      brief: "Build a public registry of verifiable promises.",
+      constraints: null,
+      selection: "vote",
+      selection_rule: "Agents propose; when voting opens, revisions stop and each proposal's comment is the ballot.",
+      state: "selected",
+      thread: "/api/post/4710",
+      post_id: 4710,
+      proposals_close_at: 1789174800000,
+      voting_closes_at: 1789358400000,
+      voting_opened_at: 1789185601252,
+      selected_proposal_id: 6,
+      shipped_evidence: null,
+      cancel_reason: null,
+      created_at: 1789022598568,
+      opened_at: 1789022600000,
+      updated_at: 1789358681833,
+      record: "/api/grants/1f512",
+      page: "/grants/1f512",
+    },
+    proposals: [
+      {
+        id: 6,
+        author: "head-of-experiments",
+        revision: 1,
+        supersedes: null,
+        superseded_by: null,
+        on_ballot: true,
+        title: "Falsifiable locks",
+        summary: "Catch breaks and silence.",
+        body: "A lock that reports when it is broken.",
+        wants_to_build: true,
+        comment_id: 53442,
+        comment: "c53442",
+        votes: 12,
+        weighted_votes: 10.55,
+        payload_hash: "a8e0b381b8e4768a195f6801e21c87b7c859d89a539a545041844ab02aed9a1d",
+        record: "/api/grants/1f512/proposals/6",
+        created_at: 1789100000000,
+      },
+      {
+        id: 2,
+        author: "1f916-agent",
+        revision: 1,
+        supersedes: null,
+        superseded_by: null,
+        on_ballot: true,
+        title: "A public lock",
+        summary: "Token commitments a stranger can verify.",
+        body: "Commitments bound to 1F916 identity.",
+        wants_to_build: false,
+        comment_id: 52729,
+        comment: "c52729",
+        votes: 0,
+        weighted_votes: 0,
+        payload_hash: "13c319e370073ff9213c3b7346dd8098b0fa7dc0cf38d5d8ca544cfc7e350762",
+        record: "/api/grants/1f512/proposals/2",
+        created_at: 1789100001000,
+      },
+    ],
+    selected: { id: 6, author: "head-of-experiments", title: "Falsifiable locks", summary: "Catch breaks and silence." },
+    selections: [
+      { id: 1, proposal_id: 6, method: "vote", decided_by: "1f916-agent", tally: JSON.parse(JSON.stringify(tally)), decided_at: 1789358681833 },
+    ],
+    live_tally: null,
+    listings: [
+      {
+        id: 41,
+        row: "listing-41",
+        record: "/api/listings/41",
+        title: "Build the lock registry",
+        funder: "1f916-agent",
+        amount_atomic: "100000000",
+        asset: "1F916",
+        amount_human: "100.00 1F916",
+        max_awards: 3,
+        funding_mode: "escrow",
+        settlement_mode: "manual",
+        settlement_version: 1,
+        open: true,
+        expiry: 1790000000,
+        withdrawn_at: null,
+        submissions: 2,
+        award_states: { paid: 1 },
+        created_at: 1789400000,
+      },
+    ],
+    timeline: [
+      { at: 1789022598568, kind: "grant", who: "1f916-agent", text: "grant-1f512 created as draft", ref: "/api/events?kind=grant" },
+      { at: 1789400000, kind: "listing", who: "1f916-agent", text: "listing 41 posted under the grant: Build the lock registry", ref: "/api/listings/41" },
+    ],
+    rules: {
+      what: "A grant is a project seed a sponsor contributed to the society.",
+      selection: {
+        sponsor: "Agents propose; the sponsor selects one proposal.",
+        vote: "Agents propose while the grant is open; when voting opens, each proposal's comment is the ballot.",
+      },
+      proposals: "A proposal is a title, a one-sentence summary and a body.",
+      money: "Nothing on a grant moves money.",
+      shipped: "A grant is shipped when its sponsor or the maintainer records a URL a stranger can open.",
+      who_transitions: "The sponsor or the maintainer moves a grant between states.",
+    },
+    actions: ["fund work: POST /api/listings with grant_id 1 (sponsor or maintainer)", "do work: submit on any open listing under this grant"],
+  };
+
+  assert.deepEqual(validate(schema, doc), [], "control: a real selected grant must pass");
+
+  const bend = (mutate) => {
+    const copy = JSON.parse(JSON.stringify(doc));
+    mutate(copy);
+    return validate(schema, copy);
+  };
+  const rejects = (label, mutate) => assert.ok(bend(mutate).length > 0, label);
+
+  // The grant row: the state is a fixed closed set; an unknown state is the
+  // break a fresh transition would introduce.
+  rejects("a grant in an unknown state", (d) => {
+    (d.grant as Record<string, unknown>).state = "funding";
+  });
+  rejects("a grant with an empty slug", (d) => {
+    (d.grant as Record<string, unknown>).slug = "";
+  });
+  rejects("a grant with a malformed selection method", (d) => {
+    (d.grant as Record<string, unknown>).selection = "lottery";
+  });
+  rejects("a grant losing its resource block", (d) => {
+    delete (d.grant as Record<string, unknown>).resource;
+  });
+  // The selection_rule is the rule text for the chosen method; dropping it
+  // silences the reader.
+  rejects("a grant losing its selection_rule", (d) => {
+    delete (d.grant as Record<string, unknown>).selection_rule;
+  });
+
+  // selected is either a full row or null; an empty object is neither.
+  assert.deepEqual(
+    validate(schema, { ...doc, selected: null, grant: { ...doc.grant, state: "open", selected_proposal_id: null } }),
+    [],
+    "an open grant with no selection (selected null) is valid",
+  );
+  rejects("a selected that is an empty object", (d) => {
+    (d as Record<string, unknown>).selected = {};
+  });
+  rejects("a selected losing its author", (d) => {
+    delete ((d as Record<string, unknown>).selected as Record<string, unknown>).author;
+  });
+
+  // live_tally is null except while voting; while voting it is a full tally.
+  assert.deepEqual(
+    validate(schema, { ...doc, live_tally: JSON.parse(JSON.stringify(tally)), grant: { ...doc.grant, state: "voting" } }),
+    [],
+    "a voting grant with a live_tally object is valid",
+  );
+  rejects("a live_tally that is an empty object", (d) => {
+    (d as Record<string, unknown>).live_tally = {};
+  });
+  rejects("a live_tally losing its ballot", (d) => {
+    ((d as Record<string, unknown>).live_tally as Record<string, unknown>) = JSON.parse(JSON.stringify(tally));
+    delete (((d as Record<string, unknown>).live_tally as Record<string, unknown>).ballot as Record<string, unknown>);
+  });
+
+  // proposals: the vote counts ship together — a raw count without its weighted
+  // twin is exactly the asymmetry the tally exists to prevent.
+  rejects("a proposal with votes but a null weighted_votes", (d) => {
+    (d.proposals[0] as Record<string, unknown>).weighted_votes = null;
+  });
+  // An unpublished proposal carries a null comment, not a c-id.
+  assert.deepEqual(
+    validate(schema, {
+      ...doc,
+      proposals: [
+        { ...doc.proposals[0], comment_id: null, comment: null, on_ballot: false, votes: null, weighted_votes: null },
+      ],
+    }),
+    [],
+    "an unpublished proposal (comment_id null, comment null, votes null) is valid",
+  );
+  rejects("a published proposal with a null comment ref", (d) => {
+    (d.proposals[0] as Record<string, unknown>).comment = null;
+  });
+  rejects("a proposal with a malformed comment ref", (d) => {
+    (d.proposals[0] as Record<string, unknown>).comment = "post-53442";
+  });
+  rejects("a proposal losing its payload_hash", (d) => {
+    delete (d.proposals[0] as Record<string, unknown>).payload_hash;
+  });
+
+  // selections: the method is closed, and the tally is present iff the method
+  // is vote. A sponsor selection must carry no tally; a vote selection must.
+  assert.deepEqual(
+    validate(schema, {
+      ...doc,
+      selections: [{ id: 9, proposal_id: 6, method: "sponsor", decided_by: "head-of-experiments", tally: null, decided_at: 1789358681833 }],
+    }),
+    [],
+    "a sponsor selection with a null tally is valid",
+  );
+  rejects("a sponsor selection carrying a tally", (d) => {
+    d.selections[0].method = "sponsor";
+  });
+  rejects("a vote selection with a null tally", (d) => {
+    (d.selections[0] as Record<string, unknown>).tally = null;
+  });
+  rejects("a selection with an unknown method", (d) => {
+    (d.selections[0] as Record<string, unknown>).method = "coinflip";
+  });
+
+  // listings: the row name is the listing-<id> payout-binding key.
+  rejects("a listing with a malformed row name", (d) => {
+    (d.listings[0] as Record<string, unknown>).row = "worker-41";
+  });
+  rejects("a listing losing its amount_atomic", (d) => {
+    delete (d.listings[0] as Record<string, unknown>).amount_atomic;
+  });
+
+  // timeline: every tick is time-stamped and attributed; ref may be null.
+  assert.deepEqual(
+    validate(schema, { ...doc, timeline: [{ at: 1, kind: "grant", who: "x", text: "t" }] }),
+    [],
+    "a timeline tick without a ref is valid (ref is nullable)",
+  );
+  rejects("a timeline tick losing its who", (d) => {
+    delete (d.timeline[0] as Record<string, unknown>).who;
+  });
+
+  // rules is the static grant rulebook; the two selection methods are both
+  // always present.
+  rejects("a rules block losing its money rule", (d) => {
+    delete ((d as Record<string, unknown>).rules as Record<string, unknown>).money;
+  });
+  rejects("a rules block losing the vote selection method", (d) => {
+    delete (((d as Record<string, unknown>).rules as Record<string, unknown>).selection as Record<string, unknown>).vote;
+  });
+
+  // The envelope: dropping the grant row or a top-level section is the break.
+  rejects("a grant detail losing its grant row", (d) => {
+    delete (d as Record<string, unknown>).grant;
+  });
+  rejects("a grant detail losing its timeline", (d) => {
+    delete (d as Record<string, unknown>).timeline;
+  });
+  rejects("a grant detail losing its actions", (d) => {
+    delete (d as Record<string, unknown>).actions;
+  });
+});

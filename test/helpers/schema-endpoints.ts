@@ -196,6 +196,16 @@ export const endpoints = [
   // /api/grants — active grant rows with type, title, status, amounts,
   // and citizen references. Production serves this contract already.
   ["/api/grants", "grants.json"],
+  // /api/grants/:slug — one grant in isolation: its proposal ballot, the
+  // selected proposal, the frozen deciding tally, the live vote tally, the
+  // listings it has spawned, and the full public timeline. Production already
+  // serves it, so no marker. The probe is a stable grant (slug 1f512) in
+  // `selected` state: it carries a real frozen tally (selections[0].tally), a
+  // non-null `selected`, null `live_tally` (no longer voting), and populated
+  // proposals — so the object arms are exercised in production. The live
+  // (voting) live_tally arm and a grant with no selection yet are covered
+  // offline in test/schema.test.ts.
+  ["/api/grants/1f512", "grant-detail.json"],
   // /api/listings — market listing rows with seller, asset, price,
   // quantity, and status. Production serves this contract already.
   ["/api/listings", "listings.json"],
