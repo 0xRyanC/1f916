@@ -998,3 +998,139 @@ test("the /api/record citizen ledger schema rejects the contract breaks it exist
   rejects("a record losing what_this_proves", (d) => { delete d.what_this_proves; });
   rejects("a record with an empty handle", (d) => { d.handle = ""; });
 });
+
+test("the attestation detail schema rejects the contract breaks it exists to catch", () => {
+  // /api/attestations/:id wraps one attestation row plus the disputes and
+  // retractions appended beside it, the append-only invariant in words, the
+  // identity-event row that committed this row's payload_hash (or null until it
+  // exists), and the JCS payload repeated at the top level. Like the changes
+  // and citizen fixtures above, the control is a real shape and every clause
+  // that carries weight gets a payload it must reject.
+  const schema = loadSchema("attestation.json");
+
+  // A signed row, straight off the wire: signature and key_thumbprint present
+  // and well-shaped; target_attestation_id and withdraw_when null (always
+  // present, never omitted); chain_anchor non-null.
+  const doc = {
+    now: 1787345614622,
+    now_utc: "2026-08-21T15:33:34.622Z",
+    attestation: {
+      id: 1,
+      class: "docket-shipped",
+      issuer: "cloudymcclouder",
+      subject: "PR #260 (record schema)",
+      claim: "the record schema covers GET /api/record end to end",
+      evidence: ["/api/record"],
+      payload: "{\"claim\":\"the record schema covers GET /api/record end to end\",\"class\":\"docket-shipped\",\"issuer\":\"cloudymcclouder\",\"subject\":\"PR #260 (record schema)\"}",
+      payload_hash: "a8e0b381b8e4768a195f6801e21c87b7c859d89a539a545041844ab02aed9a1d",
+      signed: true,
+      signature: "RjtYCKu8omXkAPFZVf-it3MS-fuzfeRV7Hl2iCVkQey5wn-V4WKvySgkuGRGJxoz3zQcas7ZWxZuNV0fh_fnCA",
+      key_thumbprint: "KucQCZ-mJ1ZMbJsBVKZ7xNgK5PUZZ8XAZk-xzT3QPPk",
+      target_attestation_id: null,
+      withdraw_when: null,
+      issued_at: 1789328776800,
+    },
+    beside: [
+      {
+        id: 2,
+        class: "retract",
+        issuer: "cloudymcclouder",
+        subject: "PR #260 (record schema)",
+        claim: "this row is superseded by the revised payload",
+        evidence: [],
+        payload: "{\"class\":\"retract\",\"claim\":\"this row is superseded by the revised payload\",\"issuer\":\"cloudymcclouder\",\"subject\":\"PR #260 (record schema)\"}",
+        payload_hash: "13c319e370073ff9213c3b7346dd8098b0fa7dc0cf38d5d8ca544cfc7e350762",
+        signed: false,
+        target_attestation_id: 1,
+        withdraw_when: null,
+        issued_at: 1789328900000,
+      },
+    ],
+    beside_note: "disputes and retractions APPEND here; nothing above was edited to make room for them",
+    chain_anchor: { identity_event: 104, proof: "/api/proof?log=identity_events&event=104" },
+    payload: "{\"claim\":\"the record schema covers GET /api/record end to end\",\"class\":\"docket-shipped\",\"issuer\":\"cloudymcclouder\",\"subject\":\"PR #260 (record schema)\"}",
+  };
+
+  assert.deepEqual(validate(schema, doc), [], "control: a real attestation detail must pass");
+
+  const bend = (mutate) => {
+    const copy = JSON.parse(JSON.stringify(doc));
+    mutate(copy);
+    return validate(schema, copy);
+  };
+  const rejects = (label, mutate) => assert.ok(bend(mutate).length > 0, label);
+
+  // The signed→signature coupling is the row's load-bearing edge. A signed
+  // row must carry both the signature and its key thumbprint; an unsigned row
+  // must omit them entirely (spread-omitted by shapeAttestation), not carry
+  // them as null.
+  rejects("a signed row losing its signature", (d) => {
+    delete (d.attestation as Record<string, unknown>).signature;
+  });
+  rejects("a signed row losing its key thumbprint", (d) => {
+    delete (d.attestation as Record<string, unknown>).key_thumbprint;
+  });
+  rejects("an unsigned row must not carry a signature", (d) => {
+    (d.attestation as Record<string, unknown>).signed = false;
+    (d.attestation as Record<string, unknown>).signature = doc.attestation.signature;
+  });
+  rejects("an unsigned row must not carry a key thumbprint", (d) => {
+    (d.attestation as Record<string, unknown>).signed = false;
+    (d.attestation as Record<string, unknown>).key_thumbprint = doc.attestation.key_thumbprint;
+  });
+  rejects("a malformed signature is refused", (d) => {
+    (d.attestation as Record<string, unknown>).signature = "not-a-base64url-signature";
+  });
+  rejects("a malformed key thumbprint is refused", (d) => {
+    (d.attestation as Record<string, unknown>).key_thumbprint = "tooshort";
+  });
+
+  // The always-present, never-omitted columns: null is the honest answer for
+  // target_attestation_id and withdraw_when on a row that is not aimed at
+  // another row and has no withdrawal condition.
+  assert.deepEqual(
+    validate(schema, { ...doc, attestation: { ...doc.attestation, target_attestation_id: null, withdraw_when: null } }),
+    [],
+    "null target_attestation_id and withdraw_when are valid",
+  );
+  rejects("a target_attestation_id that is negative", (d) => {
+    (d.attestation as Record<string, unknown>).target_attestation_id = -1;
+  });
+  rejects("a row losing its target_attestation_id key entirely", (d) => {
+    delete (d.attestation as Record<string, unknown>).target_attestation_id;
+  });
+
+  // The append-only rail and its invariant are verbatim on the wire.
+  rejects("a mutated beside_note breaks the append-only invariant", (d) => {
+    d.beside_note = "everything was rewritten in place";
+  });
+  rejects("a beside row that is not an attestation row is refused", (d) => {
+    (d.beside as unknown[])[0] = { id: 2 };
+  });
+
+  // The chain anchor is either absent (null, until the anchor event exists) or
+  // the identity-event row plus its RFC 6962 proof route.
+  assert.deepEqual(
+    validate(schema, { ...doc, chain_anchor: null }),
+    [],
+    "a null chain_anchor is valid until the anchor event exists",
+  );
+  rejects("a chain_anchor losing its proof route", (d) => {
+    delete (d.chain_anchor as Record<string, unknown>).proof;
+  });
+  rejects("a chain_anchor proof that is not an identity_events proof route", (d) => {
+    (d.chain_anchor as Record<string, unknown>).proof = "/api/proof?log=ledger&event=104";
+  });
+
+  // The payload hash is a lowercase sha256 hex string; the top-level payload is
+  // the JCS bytes the signature covers.
+  rejects("a malformed payload_hash is refused", (d) => {
+    (d.attestation as Record<string, unknown>).payload_hash = "XYZ";
+  });
+  rejects("an empty top-level payload is refused", (d) => {
+    d.payload = "";
+  });
+  rejects("a detail losing its attestation row", (d) => {
+    delete d.attestation;
+  });
+});
