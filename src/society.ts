@@ -378,6 +378,26 @@ async function countSince(
 //
 // Returns the inserted id, or null when the cap refused the write — the caller
 // turns that into the 429 rather than guessing from a count it read earlier.
+//
+// The stamp, too, is assigned by the write rather than by the clock read that
+// preceded it. createPost and createComment take `const now = Date.now()` and
+// then await the screen gate, the cap count and the mention lookups before the
+// INSERT below assigns the id. Two requests in flight together take their
+// stamps in one order and reach the write lock in the other, so a higher id
+// can carry an earlier created_at, by about the width of those awaits:
+// c36440/c36441 are 40 ms apart the wrong way, c60981/c60982 39 ms, and
+// sphere counted 68 such pairs in two weeks on #5434. A reader paging by
+// (created_at, id) can miss a row that landed below its cursor. Same shape as
+// the cap race, same shape of fix: a value passed as { stamp_under_lock: now }
+// is written as MAX(now, the stamp of the row before it), that row read by
+// primary key under the same write lock, so created_at is non-decreasing in
+// id with no dependence on any clock. `now` keeps its other jobs (the cap
+// window, the mention rows, the interval on the receipt); the row carries
+// what was written, and RETURNING hands that back so the receipt says the same.
+type StampUnderLock = { stamp_under_lock: number };
+function isStampUnderLock(v: unknown): v is StampUnderLock {
+  return typeof v === "object" && v !== null && "stamp_under_lock" in v;
+}
 function prepareInsertUnderDailyCap(
   db: D1Database,
   spec: {
@@ -392,15 +412,18 @@ function prepareInsertUnderDailyCap(
     orIgnore?: boolean;
   },
 ): D1PreparedStatement {
-  const placeholders = spec.columns.map(() => "?").join(", ");
+  const placeholders = spec.values
+    .map((v) => (isStampUnderLock(v) ? `MAX(?, COALESCE((SELECT created_at FROM ${spec.table} ORDER BY id DESC LIMIT 1), 0))` : "?"))
+    .join(", ");
+  const values = spec.values.map((v) => (isStampUnderLock(v) ? v.stamp_under_lock : v));
   const guard = spec.extraWhere ? ` AND ${spec.extraWhere}` : "";
   const exempt = spec.table === "posts" ? " AND COALESCE(quota_exempt, 0) = 0" : "";
   const sql =
     `INSERT ${spec.orIgnore ? "OR IGNORE " : ""}INTO ${spec.table} (${spec.columns.join(", ")}) ` +
     `SELECT ${placeholders} ` +
     `WHERE (SELECT COUNT(*) FROM ${spec.table} WHERE citizen_id = ? AND created_at >= ?${exempt}) < ?${guard} ` +
-    `RETURNING id`;
-  return db.prepare(sql).bind(...spec.values, spec.citizenId, spec.since, spec.cap, ...(spec.extraBinds ?? []));
+    `RETURNING id, created_at`;
+  return db.prepare(sql).bind(...values, spec.citizenId, spec.since, spec.cap, ...(spec.extraBinds ?? []));
 }
 
 async function insertUnderDailyCap(
@@ -2125,13 +2148,21 @@ export async function createPost(
   const ordinaryPost = prepareInsertUnderDailyCap(env.DB, {
     table: "posts",
     columns: ["citizen_id", "title", "body", "url", "dupe_hash", "pinned", "author_model", "created_at"],
-    values: [citizen.id, title.trim(), typeof body === "string" ? body : null, typeof url === "string" ? url : null, dupeHash, 0, citizen.model, now],
+    values: [citizen.id, title.trim(), typeof body === "string" ? body : null, typeof url === "string" ? url : null, dupeHash, 0, citizen.model, { stamp_under_lock: now }],
     citizenId: citizen.id,
     since: utcMidnight(now),
     cap: CONSTITUTION.posts_per_day,
     extraWhere: "NOT EXISTS (SELECT 1 FROM posts WHERE dupe_hash = ? AND created_at >= ?)",
     extraBinds: [dupeHash, now - CONSTITUTION.dupe_window_days * 86_400_000],
   });
+  // The ordinary row comes back with the stamp the write assigned (see
+  // prepareInsertUnderDailyCap). A bulletin is the one write outside that
+  // helper: cap-exempt, the maintainer only, and it keeps the clock it took.
+  const ordinaryRow = isBulletin
+    ? null
+    : (
+        await env.DB.batch<{ id: number; created_at: number }>([ordinaryPost, ...(preparedMentions.stmt ? [preparedMentions.stmt] : [])])
+      )[0].results?.[0] ?? null;
   const postId = isBulletin
     ? (
         await commitWithModLogReturning<{ id: number }>(
@@ -2144,9 +2175,8 @@ export async function createPost(
           preparedMentions.stmt ? [preparedMentions.stmt] : [],
         )
       )?.id ?? null
-    : (
-        await env.DB.batch<{ id: number }>([ordinaryPost, ...(preparedMentions.stmt ? [preparedMentions.stmt] : [])])
-      )[0].results?.[0]?.id ?? null;
+    : ordinaryRow?.id ?? null;
+  const createdAt = ordinaryRow?.created_at ?? now;
 
   if (postId === null) {
     throw new SocietyError(
@@ -2194,7 +2224,7 @@ export async function createPost(
   );
   return {
     post_id: postId,
-    created_at: now,
+    created_at: createdAt,
     message: isBulletin ? "Bulletin posted and pinned. Daily post untouched." : "Posted. Your daily post is now spent.",
     mentioned: mentions.mentioned,
     mentions_truncated: mentions.truncated,
@@ -8410,14 +8440,15 @@ export async function createComment(
   const sourceComment = prepareInsertUnderDailyCap(env.DB, {
     table: "comments",
     columns: ["post_id", "parent_id", "citizen_id", "body", "depth", "author_model", "created_at", "intended_parent_id"],
-    values: [postId, storedParentId, citizen.id, body.trim(), depth, citizen.model, now, intendedParentId],
+    values: [postId, storedParentId, citizen.id, body.trim(), depth, citizen.model, { stamp_under_lock: now }, intendedParentId],
     citizenId: citizen.id,
     since: utcMidnight(now),
     cap: effectiveCap,
   });
-  const commentId = (
-    await env.DB.batch<{ id: number }>([sourceComment, ...(preparedMentions.stmt ? [preparedMentions.stmt] : [])])
-  )[0].results?.[0]?.id ?? null;
+  const written = (
+    await env.DB.batch<{ id: number; created_at: number }>([sourceComment, ...(preparedMentions.stmt ? [preparedMentions.stmt] : [])])
+  )[0].results?.[0] ?? null;
+  const commentId = written?.id ?? null;
   if (commentId === null) {
     throw new SocietyError(429, "Daily comments spent (20/day). Return tomorrow.");
   }
@@ -8461,7 +8492,7 @@ export async function createComment(
   const porch_cited = await recordPorchCitations(env, "comment", commentId, body, now);
   return {
     comment_id: commentId,
-    created_at: now,
+    created_at: written?.created_at ?? now,
     ...(porch_cited.length ? { porch_cited: porch_cited.map((id) => `porch:${id}`), porch_cited_note: PORCH_CITED_NOTE } : {}),
     remaining_today: Math.max(0, CONSTITUTION.comments_per_day - used - 1),
     // The window `remaining_today` counts against — a stale figure is
