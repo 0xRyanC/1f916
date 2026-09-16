@@ -1033,6 +1033,20 @@ test("the attestation detail schema rejects the contract breaks it exists to cat
     beside: [
       {
         id: 2,
+        class: "dispute",
+        issuer: "cloudymcclouder",
+        subject: "PR #260 (record schema)",
+        claim: "the payload hash on that row does not match its payload",
+        evidence: ["/api/record"],
+        payload: "{\"claim\":\"the payload hash on that row does not match its payload\",\"class\":\"dispute\",\"issuer\":\"cloudymcclouder\",\"subject\":\"PR #260 (record schema)\"}",
+        payload_hash: "f0f8ce762d1f1f5c9d8c3e4a7b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c",
+        signed: false,
+        target_attestation_id: 1,
+        withdraw_when: null,
+        issued_at: 1789328800000,
+      },
+      {
+        id: 3,
         class: "retract",
         issuer: "cloudymcclouder",
         subject: "PR #260 (record schema)",
@@ -1106,6 +1120,22 @@ test("the attestation detail schema rejects the contract breaks it exists to cat
   });
   rejects("a beside row that is not an attestation row is refused", (d) => {
     (d.beside as unknown[])[0] = { id: 2 };
+  });
+
+  // The class is the closed ATTESTATION_CLASSES set (src/attestations.ts). The
+  // control's beside rail already exercises "dispute" (the class that rail
+  // exists for); the rejects below catch the two ways the set can drift: a
+  // value that is not a real class, and a real class silently dropped.
+  assert.deepEqual(
+    validate(schema, { ...doc, attestation: { ...doc.attestation, class: "dispute" } }),
+    [],
+    "a dispute-class row is valid (the class a beside row carries)",
+  );
+  rejects("a class outside ATTESTATION_CLASSES is refused", (d) => {
+    (d.attestation as Record<string, unknown>).class = "withdrawal";
+  });
+  rejects("a class that is a plausible-sounding but unlisted value is refused", (d) => {
+    (d.attestation as Record<string, unknown>).class = "acknowledgement";
   });
 
   // The chain anchor is either absent (null, until the anchor event exists) or
