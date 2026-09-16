@@ -36,30 +36,36 @@ function stubEnv(
 
 type AssetRpcRequest = { id: number; params?: [{ data: string }, "latest"] };
 
-function assetBatchResponse(payload: AssetRpcRequest[], now: number): Response {
-  const zero = "0x" + word(0n);
-  // A positive Chainlink answer and a 1:1 pool sqrt price keep the fixture
-  // complete while every balance/claim remains zero (and avoids the depth walk).
+// The result a healthy provider returns for one eth_call, keyed on its selector.
+// Shared by the array-batch stub and the single-object stub so the two shapes
+// stay consistent — the single-object path is exercised by batchCallComplete's
+// fallback, which re-issues holes as lone objects, and must return the same
+// multi-word ABI data the batch does or a caller parsing word 1 would throw.
+function resultForData(data: string, now: number): string {
   const roundData =
     "0x" + [0n, 2_000n * 100_000_000n, 0n, BigInt(Math.floor(now / 1000)), 0n].map(word).join("");
   const slot0 = "0x" + [1n << 96n, 0n, 0n, 3_000n].map(word).join("");
   const collectFees = "0x" + word(0n) + word(0n);
+  if (data === SELECTORS.latestRoundData) return roundData;
+  if (data.startsWith(SELECTORS.getSlot0)) return slot0;
+  // BNB Chain's NVDAB/USDT pool. sqrtPriceX96 = 2^96 is a 1:1 price, which keeps
+  // that holding priced and the error list empty; this test is about caching.
+  if (data.startsWith(SELECTORS.slot0V3)) return "0x" + [1n << 96n, 0n, 0n, 0n, 0n, 0n, 0n].map(word).join("");
+  if (data.startsWith(SELECTORS.collectFees)) return collectFees;
+  return "0x" + word(0n);
+}
+
+function assetBatchResponse(payload: AssetRpcRequest[], now: number): Response {
+  const roundData =
+    "0x" + [0n, 2_000n * 100_000_000n, 0n, BigInt(Math.floor(now / 1000)), 0n].map(word).join("");
+  const slot0 = "0x" + [1n << 96n, 0n, 0n, 3_000n].map(word).join("");
+  const collectFees = "0x" + word(0n) + word(0n);
+  const zero = "0x" + word(0n);
   return Response.json(
     payload.map(({ id, params }) => {
       const data = params?.[0].data;
       const result = data
-        ? data === SELECTORS.latestRoundData
-          ? roundData
-          : data.startsWith(SELECTORS.getSlot0)
-            ? slot0
-            : data.startsWith(SELECTORS.slot0V3)
-              ? // BNB Chain's NVDAB/USDT pool. sqrtPriceX96 = 2^96 is a 1:1
-                // price, which keeps that holding priced and the error list
-                // empty; this test is about caching, not about marks.
-                "0x" + [1n << 96n, 0n, 0n, 0n, 0n, 0n, 0n].map(word).join("")
-              : data.startsWith(SELECTORS.collectFees)
-                ? collectFees
-              : zero
+        ? resultForData(data, now)
         : id === 2
           ? roundData
           : id === 3
@@ -110,8 +116,15 @@ test("treasury asset reads cache, coalesce, and disclose their age", async () =>
       }
       return assetBatchResponse(payload as AssetRpcRequest[], now);
     }
-    // The separate onchain_cents read is not the asset batch under test.
-    return Response.json({ jsonrpc: "2.0", id: 1, result: "0x" + word(0n) });
+    // A single-object eth_call. Two callers use this shape: the separate
+    // onchain_cents read (not the batch under test) and batchCallComplete's
+    // single-object fallback, which re-issues a batch hole as a lone object when
+    // a provider refuses the array envelope. Model the same provider state the
+    // array branch does, so a simulated outage stays an outage rather than being
+    // quietly healed through the single-object path.
+    if (degradedOutage) return Response.json({}); // unavailable to singles too: no result
+    const data = payload.params?.[0]?.data as string | undefined;
+    return Response.json({ jsonrpc: "2.0", id: payload.id ?? 1, result: data ? resultForData(data, now) : "0x" + word(0n) });
   }) as typeof fetch;
 
   try {

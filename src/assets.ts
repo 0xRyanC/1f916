@@ -485,6 +485,39 @@ export async function batchCall(rpcUrls: string[], calls: RpcCall[], timeoutMs =
   return new Array(calls.length).fill(null);
 }
 
+// One eth_call sent as a lone JSON-RPC object, not a one-element array.
+//
+// Some Base public providers throttle or refuse the batch-array envelope from
+// this Worker's egress while answering the identical eth_call sent as a single
+// object — reproduced on /treasury, where the array's USDC balanceOf reports
+// "did not answer" in the same instant the single-object onchain_cents read of
+// that same balanceOf succeeds. batchCall and its array retries can never reach
+// that shape, so a hole the providers would fill as an object stays null. This
+// is the shape readOnchainUsdcCents proves answers, used as the last resort.
+async function singleCall(rpcUrls: string[], call: RpcCall, timeoutMs = 3000): Promise<string | null> {
+  const params = [call.from ? { from: call.from, to: call.to, data: call.data } : { to: call.to, data: call.data }, "latest"];
+  for (const rpc of rpcUrls) {
+    const ctrl = new AbortController();
+    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    try {
+      const res = await fetch(rpc, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "eth_call", params }),
+        signal: ctrl.signal,
+      });
+      if (!res.ok) continue;
+      const body = (await res.json()) as { result?: string };
+      if (typeof body.result === "string" && body.result !== "0x") return body.result;
+    } catch {
+      // try the next RPC
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  return null;
+}
+
 /**
  * batchCall, but it insists.
  *
@@ -524,6 +557,26 @@ export async function batchCallComplete(
         if (res[k] !== null) out[target] = res[k];
       });
     }
+  }
+  // Last resort for holes the array passes above could not fill: re-issue each
+  // remaining call as a lone JSON-RPC object, the shape some Base providers
+  // answer when they refuse the array envelope from this Worker's egress (see
+  // singleCall). Fired together so the extra round trips cost one budget window,
+  // spread across providers so no endpoint is asked for every hole at once, and
+  // it can only fill a null — a hole stays null if the object shape fails too.
+  const stillMissing: number[] = [];
+  out.forEach((v, i) => {
+    if (v === null) stillMissing.push(i);
+  });
+  if (stillMissing.length > 0) {
+    await Promise.all(
+      stillMissing.map(async (i, k) => {
+        const shift = (passes + k) % Math.max(1, rpcUrls.length);
+        const rotated = rpcUrls.slice(shift).concat(rpcUrls.slice(0, shift));
+        const r = await singleCall(rotated, calls[i]);
+        if (r !== null) out[i] = r;
+      }),
+    );
   }
   return out;
 }
