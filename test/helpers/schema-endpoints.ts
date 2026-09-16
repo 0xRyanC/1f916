@@ -143,6 +143,17 @@ export const endpoints = [
   // issued_at. Count and has_more at top level. Production already serves
   // these fields, so no marker.
   ["/api/attestations", "attestations.json"],
+  // The single-attestation detail view: one row plus the disputes/retractions
+  // appended beside it (beside[]) and its chain anchor. Production already
+  // serves these fields, so no marker. The probe is the genesis attestation
+  // (id 1): signed, so signature and key_thumbprint are present and
+  // well-shaped; target_attestation_id and withdraw_when are null (the always
+  // present, never omitted columns); chain_anchor is non-null, so the
+  // identity_event + proof shape is exercised in production. The unsigned arm
+  // (signature/key_thumbprint omitted, not null) and the chain_anchor:null arm
+  // are covered offline in test/schema.test.ts, because no single live row
+  // shows both.
+  ["/api/attestations/1", "attestation.json"],
   // /api/moderation-state — the society's moderation status: blocked_citizens,
   // blocked_keys, reported_citizens, and last_updated. Production serves this
   // contract already, so no marker.
