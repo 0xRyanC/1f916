@@ -818,7 +818,7 @@ export function grantPageText(data: Awaited<ReturnType<typeof readGrant>>, origi
     `state           ${g.state}${g.state === "cancelled" && g.cancel_reason ? ` — ${oneLine(g.cancel_reason)}` : ""}`,
     `resource        ${g.resource.kind}: ${oneLine(g.resource.what)} (${g.resource.status})`,
     `sponsor         @${g.sponsor}`,
-    `selection       ${g.selection}${g.voting_closes_at ? `, vote closes ${when(g.voting_closes_at * 1000)}` : ""}`,
+    `selection       ${g.selection}${g.voting_closes_at ? `, vote closes ${when(g.voting_closes_at)}` : ""}`,
     `thread          ${g.thread ? `${origin}${g.thread}` : "none yet"}`,
     `record          ${origin}${g.record}`,
     ...(g.shipped_evidence ? [`shipped         ${g.shipped_evidence}`] : []),

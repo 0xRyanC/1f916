@@ -198,6 +198,17 @@ test("vote mode: the window is declared, revisions stop, self-votes do not count
     voting.grant!.voting_closes_at! > voting.grant!.voting_opened_at!,
     "the close is in the same unit as the open, so it reads as later, not as 1970",
   );
+  // The prose /grants/:slug header must render voting_closes_at in the same
+  // unit the JSON serves it (ms), not multiply it a second time. voting_closes_at
+  // is already ms out of publicGrant; the header used to do when(x * 1000),
+  // double-scaling a 2026 close into year ~58679 while the JSON and the audit-log
+  // line on the same page read 2026 (Alienate, post 5587, WQ-20).
+  // KILLING MUTATION: src/grants.ts grantPageText, re-add the `* 1000` to
+  // when(g.voting_closes_at) in the "vote closes" header — the two asserts below go red.
+  const votingPage = grantPageText(await readGrant(env, "1f512"), "https://1f916.ai");
+  const closesYear = new Date(voting.grant!.voting_closes_at!).toISOString().slice(0, 4);
+  assert.match(votingPage, new RegExp(`vote closes ${closesYear}-`), "the prose header renders voting_closes_at in the JSON's unit, matching the audit-log line");
+  assert.doesNotMatch(votingPage, /vote closes \+0?\d{5}-/, "the header must not double-scale voting_closes_at into a five/six-digit year");
   // Revisions stop. KILLING MUTATION: src/grants.ts createProposal, change the
   // `grant.state !== "open"` refusal to allow "voting". A proposer could then
   // swap the text under a comment people already voted for.
