@@ -935,6 +935,35 @@ BEGIN
   UPDATE table_counts SET n = n - 1 WHERE name = 'nulls';
 END;
 
+-- The windowed census behind nulls_total, for every window 0051's counter does
+-- NOT cover. See migrations/0056_nulls_buckets.sql for the measurements and for
+-- the two cheaper designs that were built and proved wrong. Keyed on created_at,
+-- the same column the predicate filters, so no argument about id order is
+-- involved: a window's count is the sum of the buckets it covers plus one
+-- partial, and every term is exact.
+CREATE TABLE IF NOT EXISTS nulls_buckets (
+  span   TEXT    NOT NULL CHECK (span IN ('day', 'hour')),
+  bucket INTEGER NOT NULL,
+  n      INTEGER NOT NULL,
+  PRIMARY KEY (span, bucket)
+);
+INSERT OR REPLACE INTO nulls_buckets (span, bucket, n)
+  SELECT 'day', created_at / 86400000, COUNT(*) FROM nulls GROUP BY created_at / 86400000;
+INSERT OR REPLACE INTO nulls_buckets (span, bucket, n)
+  SELECT 'hour', created_at / 3600000, COUNT(*) FROM nulls GROUP BY created_at / 3600000;
+CREATE TRIGGER IF NOT EXISTS nulls_buckets_insert AFTER INSERT ON nulls
+BEGIN
+  INSERT INTO nulls_buckets (span, bucket, n) VALUES ('day', NEW.created_at / 86400000, 1)
+    ON CONFLICT (span, bucket) DO UPDATE SET n = n + 1;
+  INSERT INTO nulls_buckets (span, bucket, n) VALUES ('hour', NEW.created_at / 3600000, 1)
+    ON CONFLICT (span, bucket) DO UPDATE SET n = n + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS nulls_buckets_delete AFTER DELETE ON nulls
+BEGIN
+  UPDATE nulls_buckets SET n = n - 1 WHERE span = 'day'  AND bucket = OLD.created_at / 86400000;
+  UPDATE nulls_buckets SET n = n - 1 WHERE span = 'hour' AND bucket = OLD.created_at / 3600000;
+END;
+
 -- Opt-in liveness (migration 0048). A row exists only for a citizen that
 -- declared a check-in interval at POST /api/me/cadence; its record then shows
 -- the interval and a coarse last-check bucket. last_check_at is written by an

@@ -8179,7 +8179,8 @@ export function officialFacts(env: Env) {
 
 // The triggers this codebase declares across its numbered migrations — 0028
 // (doorbell endpoint proof), 0051 (nulls counters), 0055 (the
-// intended_parent_id-invariant pair) — and mirrors in schema.sql. Named as an
+// intended_parent_id-invariant pair), 0056 (the nulls census buckets) — and
+// mirrors in schema.sql. Named as an
 // embedded constant because there is NO build step (package.json runs only
 // test/typecheck/test:live/test:all, and the deploy is `wrangler deploy`)
 // through which the Worker could compute the set at bundle time; it must exist
@@ -8195,6 +8196,14 @@ export const SCHEMA_TRIGGER_WITNESS_EXPECTED = [
   "nulls_count_delete",
   "comments_intended_parent_needs_parent_insert",
   "comments_intended_parent_needs_parent_update",
+  // 0056. APPENDED rather than inserted in sorted position: the comparison sorts
+  // both sides, but this array is declaration-ordered and a guard forbids
+  // reordering it in place. Until 0056 is applied against the live D1 — there is
+  // no migration runner here — the served witness will report these two as
+  // missing in production, which is the true state and the reason the witness
+  // exists.
+  "nulls_buckets_insert",
+  "nulls_buckets_delete",
 ];
 
 // Served witness for numbered migrations that ADD triggers.
@@ -10754,6 +10763,84 @@ export const NULLS_LIMIT = 200;
 // statement long before it, so the margin is a proof rather than a guess.
 export const NULLS_BOUNDARY_SKEW_MS = 60_000;
 
+const NULLS_BUCKET_DAY_MS = 86_400_000;
+const NULLS_BUCKET_HOUR_MS = 3_600_000;
+
+/**
+ * How many nulls rows sit after `since`, counted from maintained buckets rather
+ * than by reading the table.
+ *
+ * `SELECT COUNT(*) FROM nulls WHERE created_at > ?1` read 71,743 rows per call
+ * against production 2026-09-16, on the busiest endpoint on the board, and the
+ * table grows 11,000+ rows a day. The window is the sum of three DISJOINT terms:
+ *
+ *   days    every whole day after the one `since` falls in
+ *   hours   every whole hour after `since`'s hour, still inside `since`'s day
+ *   partial the rows inside `since`'s own hour that are actually after `since`
+ *
+ * Only the last touches the nulls table, and it is bounded by one hour of
+ * writes: 177 rows measured. Day + hour rather than hours alone because a
+ * year-long window would otherwise sum 8,760 bucket rows — unbounded in the one
+ * thing here that always grows, which is the very class this replaces.
+ *
+ * The buckets key on created_at, the same column the predicate filters, so this
+ * needs no argument about id order. Two designs that DID were measured and are
+ * wrong; migrations/0056_nulls_buckets.sql records both and why.
+ *
+ * SELF-VERIFYING AGAINST ONE FAILURE, because a silently-small census is worse
+ * than a slow one. On a database where 0056 has not run, every bucket sum is 0
+ * and this would serve a number far below the truth while looking healthy. So
+ * the day total is checked against 0051's maintained counter first, and a
+ * disagreement refuses this fast path and counts for real. Slow is a fine
+ * failure mode here; wrong is not — the same rule the missing-counter fallback
+ * at the call site follows.
+ *
+ * THAT CHECK GUARDS A MISSING OR UNSEEDED 0056 AND NOTHING ELSE. It is not a
+ * general integrity proof and must not be relied on as one.
+ *
+ * NEGATIVE STAMPS WOULD DIVERGE, and cannot occur. The bucket a row lands in is
+ * computed twice — by SQL in the trigger, by JS here — and on an INTEGER column
+ * SQLite's integer division truncates toward zero (-5 / 86400000 = 0) while
+ * Math.floor rounds toward negative infinity (-1), so the two disagree below
+ * zero. created_at is server-stamped, and `since` cannot be negative here: it is
+ * read by wholeNumberParam (src/index.ts, the HTTP door) or wholeNumber
+ * (src/mcp.ts, the MCP door) and then normalized at the top of changes(), where
+ * a non-finite or negative value is either set to 0 or refused 400.
+ */
+export async function countNullsAfter(env: Env, since: number): Promise<number> {
+  const sinceDay = Math.floor(since / NULLS_BUCKET_DAY_MS);
+  const sinceHour = Math.floor(since / NULLS_BUCKET_HOUR_MS);
+  const hourEnd = (sinceHour + 1) * NULLS_BUCKET_HOUR_MS;
+  // The first hour bucket of the day AFTER `since`'s day: the exclusive ceiling
+  // for the hour term, so an hour is never counted by both hours and days.
+  const nextDayFirstHour = ((sinceDay + 1) * NULLS_BUCKET_DAY_MS) / NULLS_BUCKET_HOUR_MS;
+
+  const one = async (sql: string, binds: unknown[]) =>
+    Number(
+      (await env.DB.prepare(sql).bind(...binds).all<{ n: number }>()).results[0]?.n ?? 0,
+    );
+
+  const [bucketTotal, counterRow] = await Promise.all([
+    one("SELECT COALESCE(SUM(n), 0) AS n FROM nulls_buckets WHERE span = 'day'", []),
+    one("SELECT COALESCE(n, 0) AS n FROM table_counts WHERE name = 'nulls'", []),
+  ]);
+  // Disagreement means the buckets cannot be trusted to answer anything, so do
+  // not use them for part of the answer either.
+  if (bucketTotal !== counterRow || counterRow === 0) {
+    return one("SELECT COUNT(*) AS n FROM nulls WHERE created_at > ?1", [since]);
+  }
+
+  const [days, hours, partial] = await Promise.all([
+    one("SELECT COALESCE(SUM(n), 0) AS n FROM nulls_buckets WHERE span = 'day' AND bucket > ?1", [sinceDay]),
+    one(
+      "SELECT COALESCE(SUM(n), 0) AS n FROM nulls_buckets WHERE span = 'hour' AND bucket > ?1 AND bucket < ?2",
+      [sinceHour, nextDayFirstHour],
+    ),
+    one("SELECT COUNT(*) AS n FROM nulls WHERE created_at > ?1 AND created_at < ?2", [since, hourEnd]),
+  ]);
+  return days + hours + partial;
+}
+
 type ChangesCursor =
   | { kind: "live"; id: number }
   | { kind: "snapshot"; since: number; maxId: number; afterId: number }
@@ -11422,12 +11509,12 @@ export async function changes(
     const maintained = coversEveryRow
       ? (await env.DB.prepare("SELECT n FROM table_counts WHERE name = 'nulls'").all<{ n: number }>()).results[0] ?? null
       : null;
-    nullsTotal = maintained
-      ? Number(maintained.n)
-      : Number(
-          (await env.DB.prepare("SELECT COUNT(*) AS n FROM nulls WHERE created_at > ?1").bind(since).all<{ n: number }>())
-            .results[0]?.n ?? 0,
-        );
+    // The windowed case — every `since` the counter above does NOT cover — is
+    // counted from buckets instead of by reading the table: 71,743 rows per call
+    // becomes ~208. countNullsAfter falls back to a real count if the buckets
+    // and the counter disagree, so a database without migration 0056 is slow
+    // here rather than quietly wrong.
+    nullsTotal = maintained ? Number(maintained.n) : await countNullsAfter(env, since);
   }
   const { results: nulls } = await nullsStmt.all<{
     id: number; kind: string; citizen_id: number | null; target_type: string | null; target_id: number | null;
