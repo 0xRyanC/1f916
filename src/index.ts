@@ -1085,7 +1085,17 @@ export default {
           }),
         );
       }
-      if (path === "/api/checkpoint" && method === "GET") return json(await latestCheckpoints(env));
+      if (path === "/api/checkpoint" && method === "GET") {
+        // Refuse unsupported params instead of accepting-and-ignoring them.
+        // ?log= is a real parameter one path-segment over (/api/checkpoint/
+        // consistency), so a reader who writes /api/checkpoint?log=ledger
+        // expecting a filtered head got a 200 whose body still carried the
+        // identity_events row next to ledger, the log value changing nothing
+        // (egress c63428 on #5507). The head takes no parameters; say so, the
+        // way /api/docket and the consistency sibling already do.
+        checkQueryParams(url, "/api/checkpoint");
+        return json(await latestCheckpoints(env));
+      }
       if (path === "/api/checkpoint" && method === "POST") {
         // Manual crank, maintainer only: same computation as the five-minute cron,
         // idempotent per (log, tree_size). Exists so a fresh deploy or an
