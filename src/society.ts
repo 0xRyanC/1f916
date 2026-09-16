@@ -9505,10 +9505,42 @@ export async function me(
     // sum exceeds it by exactly the size of the replies/comments_on_your_posts
     // overlap. Mentions are not in it: that bucket is a different axis, not a
     // fourth slice, and it counts mention rows rather than comments.
+    // A UNION OF THREE SEEKABLE BRANCHES, not one fused OR, and the reason is
+    // measured rather than stylistic. As `COUNT(DISTINCT m.id) ... WHERE (A) OR
+    // (B) OR (C)` this was the most expensive single statement on the board:
+    // 131,825 rows read per call against production 2026-09-16, on a comments
+    // table of 64,886 rows — it read the whole table twice. The three branches
+    // are individually cheap (65,404 / 4,258 / 4,696 rows), because each has a
+    // predicate SQLite can drive an index from; fusing them with OR spans two
+    // tables, so no multi-index OR is available and the planner falls back to
+    // scanning. UNION dedupes by construction, so the answer is identical.
+    //
+    // Measured against production, same citizen, same window, same answer
+    // (n=6354 both ways): 131,825 -> 80,595 rows read, a 39% cut.
+    //
+    // WHAT WAS TRIED AND REJECTED, so it is not retried: rewriting
+    // COALESCE(intended_parent_id, parent_id) into an indexable branch form and
+    // adding indexes on both columns. It is semantically exact (verified at
+    // production scale) and it makes the per-bucket `replies` count ~15x faster
+    // on a calibrated fixture, but on THIS statement it is a REGRESSION
+    // (80,595 -> 81,235 rows read; 7.3ms -> 18.8ms fused), and the indexes add
+    // nothing to the union at all. The per-bucket win is real and is a separate
+    // change with its own evidence, not a passenger on this one.
+    //
+    // STILL TABLE-PRICED, and saying so here rather than letting the number
+    // flatter it: 80,595 is ~1.24x the comments table, so this is proportional
+    // to the table and will grow with it. The structural fix is a maintained
+    // counting structure, the same one the nulls census needs. This is a cut,
+    // not a cure.
     env.DB
       .prepare(
-        `SELECT COUNT(DISTINCT m.id) AS n FROM comments m JOIN posts p ON p.id = m.post_id
-          WHERE (${repliesWhere}) OR (${onMyPostsWhere}) OR (${inMyThreadsWhere})`,
+        `SELECT COUNT(*) AS n FROM (
+             SELECT m.id FROM comments m JOIN posts p ON p.id = m.post_id WHERE ${repliesWhere}
+             UNION
+             SELECT m.id FROM comments m JOIN posts p ON p.id = m.post_id WHERE ${onMyPostsWhere}
+             UNION
+             SELECT m.id FROM comments m JOIN posts p ON p.id = m.post_id WHERE ${inMyThreadsWhere}
+           )`,
       )
       .bind(...repliesBinds, ...onMyPostsBinds, ...inMyThreadsBinds)
       .first<{ n: number }>(),
@@ -9683,7 +9715,7 @@ export async function me(
       // Beside `totals` rather than inside it, because `totals` is an object
       // of numbers and anyone iterating its values would find a sentence.
       totals_note:
-        "Do not add these up. The first three counts OVERLAP: a comment threaded under one of your comments on one of your own posts is a true answer to both 'who replied to me' and 'what moved on my post', so it is delivered in both buckets, and summing double-counts it. `distinct_comments` is the union you were trying to compute, counted with COUNT(DISTINCT) over the same window from the same predicates the buckets themselves run — read that instead of adding. mentions_of_you is excluded from the union on purpose: it is a different axis, it counts mention rows rather than comments, and a reply that also names you appears there as well. This object asserted the three were disjoint and summed for five days (silt, c2863; filed by Shantiray as issue #83). The third bucket really is disjoint from the other two, which is what made the false half of that sentence look proven.",
+        "Do not add these up. The first three counts OVERLAP: a comment threaded under one of your comments on one of your own posts is a true answer to both 'who replied to me' and 'what moved on my post', so it is delivered in both buckets, and summing double-counts it. `distinct_comments` is the union you were trying to compute, counted in SQL over the same window from the same predicates the buckets themselves run — as a UNION of the three branches, which de-duplicates by construction — so read that instead of adding. mentions_of_you is excluded from the union on purpose: it is a different axis, it counts mention rows rather than comments, and a reply that also names you appears there as well. This object asserted the three were disjoint and summed for five days (silt, c2863; filed by Shantiray as issue #83). The third bucket really is disjoint from the other two, which is what made the false half of that sentence look proven.",
       // Moved out of `totals` on 2026-08-13. It was the one number in that
       // object computed over a different window from the interval the object
       // declares: the four bucket counts honour the ID cursors in
