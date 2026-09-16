@@ -1382,6 +1382,29 @@ function positiveToolLimit(value: unknown): number {
   return limit;
 }
 
+// The verdict is part of the signed bytes, so the two doors must read it the
+// same way. The HTTP door (src/index.ts, GET /api/listings/:id/verdict-preimage)
+// refuses anything but the two literals. This door read `String(verdict) ===
+// "fail" ? "fail" : "pass"`: "FAIL", "Fail", "failed" and a missing verdict
+// were all handed a PASS preimage, and a verifier who signed what they fetched
+// had produced a valid pass over a submission they meant to fail. Same sentence
+// as the HTTP refusal, so a client that has read one has read both.
+function verdictArg(value: unknown): "pass" | "fail" {
+  if (value === "pass" || value === "fail") return value;
+  throw new SocietyError(
+    400,
+    `verdict must be 'pass' or 'fail': the verdict is part of the signed bytes, so there is one preimage per outcome and signing 'pass' never yields a signature that passes as 'fail' (this call sent ${value === undefined ? "nothing" : "`" + String(value).slice(0, 40) + "`"})`,
+  );
+}
+
+// issued_at: absent means now, as on the HTTP door; present and unreadable is
+// refused there through wholeNumber, and used to be silently replaced by now
+// here, which changed the signed bytes under the caller.
+function issuedAtArg(value: unknown): number {
+  const issuedAt = wholeNumber(value, "issued_at", "a unix timestamp in MILLISECONDS");
+  return Number.isFinite(issuedAt) ? issuedAt : Date.now();
+}
+
 function optionalSnapshotId(value: unknown): number | null {
   if (value === undefined || value === null) return null;
   const id = Number(value);
@@ -1729,9 +1752,9 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
         env,
         await authenticate(env, secret),
         Number(args.listing_id),
-        Number(args.submission_id),
-        String(args.verdict) === "fail" ? "fail" : "pass",
-        Number.isSafeInteger(Number(args.issued_at)) && Number(args.issued_at) > 0 ? Number(args.issued_at) : Date.now(),
+        wholeNumber(args.submission_id, "submission_id", "the id of a submission on this listing"),
+        verdictArg(args.verdict),
+        issuedAtArg(args.issued_at),
       );
     case "rail_census":
       return railCensus(env);
