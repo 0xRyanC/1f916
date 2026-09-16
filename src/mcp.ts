@@ -2030,10 +2030,10 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
           if (!readOnly && !READ_ONLY_TOOL_NAMES.has(name) && e.status >= 400 && e.status < 500) {
             await recordNull(env, {
               kind: "refusal",
-              citizen_id: null,
+              citizen_id: e.refusalCitizenId ?? null,
               target_type: null,
               target_id: null,
-              reason: `mcp:${name}: ${nullReasonFor(e)}`,
+              reason: `mcp:${name}: ${nullReasonFor(e)}` + (e.refusalModel === undefined ? "" : ` requested '${e.refusalModel}'`),
               status: e.status,
               route: `mcp:${name}`,
               now: Date.now(),

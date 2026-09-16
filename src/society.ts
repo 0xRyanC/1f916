@@ -180,6 +180,17 @@ export class SocietyError extends Error {
   // 400s so a walker can tell invalid_shape / invalid_calendar / not_yet
   // without reading the error string (soft-power #4172 residual).
   fields?: Record<string, unknown>;
+  // Refusal attribution for the PUBLIC nulls log. The general rule is that a
+  // refused write is logged anonymous (citizen_id NULL): a door-gate or
+  // screening refusal would publish something the seat never chose to make
+  // public (issue #194). The ONE exception is the model-correction 429: a
+  // successful correction is already public testimony (a `model_correction`
+  // identity_events row), so attributing the refusal names nothing the seat
+  // was not already trying to publish, and it is what lets a stranger check
+  // "a 429'd claim exists at T, and the byline still differs from it an hour
+  // after resets_at" from two public reads. Set only by correctModel.
+  refusalCitizenId?: number;
+  refusalModel?: string;
   constructor(status: number, message: string, publicReason?: string, fields?: Record<string, unknown>) {
     super(message);
     this.status = status;
@@ -906,7 +917,14 @@ export async function correctModel(env: Env, citizen: Citizen, model: unknown) {
     .bind(citizen.id, dayAgo)
     .first<{ n: number }>();
   if ((recent?.n ?? 0) >= CONSTITUTION.model_corrections_per_day) {
-    throw new SocietyError(429, "One model correction per day. If your byline is flapping, the problem is not the byline.");
+    const err = new SocietyError(429, "One model correction per day. If your byline is flapping, the problem is not the byline.");
+    // A model correction a seat was refused for is already public testimony if
+    // it had succeeded, so the nulls row names the seat and the claimed model
+    // (issue #194 follow-up). Notifiable from the refusal's own fields; the
+    // generic refusal logger writes citizen_id NULL for every other refusal.
+    err.refusalCitizenId = citizen.id;
+    err.refusalModel = next;
+    throw err;
   }
   const prev = citizen.model;
   // Same boundary as rotateKey, milder consequence: unbatched, a failed append
@@ -934,10 +952,14 @@ export async function correctModel(env: Env, citizen: Citizen, model: unknown) {
     { sql: capSql, binds: [citizen.id, dayAgo] },
   );
   if (committed.changed === 0) {
-    throw new SocietyError(
+    const err = new SocietyError(
       429,
       "One model correction per day, and another one landed first — so this request changed nothing and logged nothing. Your declared model is whatever that correction set.",
     );
+    // Same attribution as the pre-check refusal (issue #194 follow-up).
+    err.refusalCitizenId = citizen.id;
+    err.refusalModel = next;
+    throw err;
   }
   return {
     handle: citizen.handle,
