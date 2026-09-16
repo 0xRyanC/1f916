@@ -18,7 +18,10 @@
 // KILLING MUTATIONS, each watched red before this shipped:
 //   1. add `https://1f3d9.com` anywhere in frontDoor()   -> "unlisted host"
 //   2. add `peer_worlds: [...]` back to officialFacts()  -> "peer_worlds key"
-//   3. add a host to ECOSYSTEM without touching this file -> stays GREEN on
+//   3. `https://github.com@1f3eb.com/` (userinfo)        -> 1f3eb.com
+//   4. bare `1f3eb.com` with no scheme                    -> 1f3eb.com
+//   5. `https://github.com/onetapstudiogames/1f3d9`      -> github.com/onetapstudiogames
+//   6. add a host to ECOSYSTEM without touching this file -> stays GREEN on
 //      purpose: ecosystem.ts has its own gate; this test pins the door.
 
 import test from "node:test";
@@ -33,12 +36,39 @@ const env = { TREASURY_ADDRESS: "0xa7F7985eB19b8c44F12A0654Df1eF89d1dd527C9" } a
 // Ours, plus the platforms the record already points at for its own accounts.
 const ALLOWED = new Set([
   "1f916.ai", "www.1f916.ai", "1f916.org",
-  "github.com", "raw.githubusercontent.com",
+  // Code hosts are pinned by OWNER, never as a bare host: a link into someone
+  // else's GitHub is a link to their site.
+  "github.com/1f916-ai", "raw.githubusercontent.com/1f916-ai",
   "discord.gg", "x.com", "www.reddit.com",
 ]);
 
+// Every way the door could point a reader somewhere, after the first audit
+// round (2026-09-16) showed three that a plain https-regex missed:
+//   - userinfo: https://github.com@evil.example/ names evil.example, not github
+//   - scheme-less: "1f3eb.com" or "//1f3eb.com/window" is a link to a reader
+//   - a GitHub path: https://github.com/someone/their-town is their site with
+//     an allowed host in front of it, which is exactly the shape the removed
+//     directory used for its `source` fields
+// So a "host" here is the registrable name after any scheme and userinfo, and
+// for the code hosts it is host/owner, so ownership is what gets pinned.
+const CODE_HOSTS = new Set(["github.com", "raw.githubusercontent.com"]);
+const TLDS = "com|net|org|io|ai|dev|app|xyz|party|fly|vercel|github|co|me|sh|gg|to|cc|info|site|online|tech|network|cloud|page|pages|link|world|city|town|market|store|space|zone|club|fun|live|one|pro|art|cash|money|finance|exchange|trade|wtf|lol";
 function hostsIn(text: string): string[] {
-  return [...new Set([...text.matchAll(/https?:\/\/([a-z0-9.-]+)/gi)].map((m) => m[1].toLowerCase().replace(/\.$/, "")))].sort();
+  const out = new Set<string>();
+  const add = (host: string, path: string) => {
+    host = host.toLowerCase().replace(/\.$/, "");
+    if (CODE_HOSTS.has(host)) {
+      const owner = (path.match(/^\/([^\/\s)]+)/) || [])[1];
+      out.add(owner ? `${host}/${owner.toLowerCase()}` : host);
+    } else {
+      out.add(host);
+    }
+  };
+  // With a scheme, allowing userinfo before the host.
+  for (const m of text.matchAll(/[a-z][a-z0-9+.-]*:\/\/(?:[^\/\s@]*@)?([a-z0-9._-]+)(?::\d+)?(\/[^\s)]*)?/gi)) add(m[1], m[2] || "");
+  // Without a scheme: a dotted name ending in a known TLD, optionally //-prefixed or www.
+  for (const m of text.matchAll(new RegExp(`(?:^|[\\s(\\[<"'\`/])(?:\\/\\/)?((?:[a-z0-9-]+\\.)+(?:${TLDS}))(?::\\d+)?(\\/[^\\s)]*)?`, "gi"))) add(m[1], m[2] || "");
+  return [...out].sort();
 }
 
 function moduleHosts(): Set<string> {
