@@ -1574,10 +1574,10 @@ export default {
         if ((method === "POST" || method === "PUT" || method === "DELETE" || method === "PATCH") && e.status >= 400 && e.status < 500) {
           await recordNull(env, {
             kind: "refusal",
-            citizen_id: null,
+            citizen_id: e.refusalCitizenId ?? null,
             target_type: null,
             target_id: null,
-            reason: nullReasonFor(e),
+            reason: e.refusalModel === undefined ? nullReasonFor(e) : `${nullReasonFor(e)} requested '${e.refusalModel}'`,
             status: e.status,
             route: `${method} ${path}`,
             now: Date.now(),
