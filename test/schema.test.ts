@@ -226,6 +226,70 @@ test("a listing-anchored binding satisfies the payout contracts through the anch
   assert.deepEqual(validate(listSchema, withListing), [], "a listing-anchored preview row is a valid list row");
 });
 
+test("the payout-binding recipe must publish its value source and stay order-true", () => {
+  const detailSchema = loadSchema("payout-binding.json");
+  const detailFixture = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "payout-binding-detail.json"), "utf8"));
+  // The regression this PR fixes: the recipe was pinned as a whole-object const
+  // keyed on the old short encoding string, so the moment the rail added
+  // values_from / values_from_note the live response stopped validating. The
+  // recipe must now name where its values come from.
+  const noSource = structuredClone(detailFixture);
+  delete noSource.payload_hash_recipe.values_from;
+  assert.ok(
+    validate(detailSchema, noSource).some((error) => /values_from/.test(error)),
+    "a payload_hash_recipe that omits its value source is refused",
+  );
+  // The receipt recipe carries the same clause.
+  const noReceiptSource = structuredClone(detailFixture);
+  delete noReceiptSource.receipt.payload_hash_recipe.values_from;
+  assert.ok(
+    validate(detailSchema, noReceiptSource).some((error) => /values_from/.test(error)),
+    "a receipt payload_hash_recipe that omits its value source is refused",
+  );
+  // The field list is the load-bearing part of the recipe: reordering it
+  // changes the hash, so a drift in order must be caught, not tolerated.
+  const reordered = structuredClone(detailFixture);
+  const fields = reordered.payload_hash_recipe.fields;
+  [fields[0], fields[1]] = [fields[1], fields[0]];
+  assert.ok(
+    validate(detailSchema, reordered).some((error) => /fields/.test(error)),
+    "a payload_hash_recipe whose fields are reordered is refused",
+  );
+  // A wrong algorithm is refused too — sha256 is the rail's hash.
+  const wrongAlgo = structuredClone(detailFixture);
+  wrongAlgo.payload_hash_recipe.algorithm = "sha1";
+  assert.ok(validate(detailSchema, wrongAlgo).some((error) => /algorithm/.test(error)));
+});
+
+test("the payout asset agreement must keep disagrees from being payable", () => {
+  const detailSchema = loadSchema("payout-binding.json");
+  const detailFixture = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "payout-binding-detail.json"), "utf8"));
+  // The money-safety clause: a binding whose listing asset disagrees with the
+  // binding's own asset may not be marked payable.
+  const disagreeing = structuredClone(detailFixture);
+  disagreeing.asset_agreement = {
+    state: "disagrees",
+    binding: detailFixture.asset_agreement.binding,
+    listing: { chain_id: 8453, token: "0xdeadbeef00000000000000000000000000000000", symbol: "TEST", decimals: 18 },
+    payable: true,
+    note: "the listing names a different asset",
+  };
+  assert.ok(
+    validate(detailSchema, disagreeing).some((error) => /payable/.test(error)),
+    "a disagreeing asset_agreement that claims to be payable is refused",
+  );
+  // And the same agreement with payable=false is the honest shape.
+  disagreeing.asset_agreement.payable = false;
+  assert.deepEqual(validate(detailSchema, disagreeing), [], "a disagreeing asset_agreement is honest when not payable");
+  // no_listing_asset is the docket shape: it has no listing to compare.
+  const noListing = structuredClone(detailFixture);
+  noListing.asset_agreement.listing = { chain_id: 8453, token: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", symbol: null, decimals: null };
+  assert.ok(
+    validate(detailSchema, noListing).some((error) => /listing/.test(error)),
+    "a no_listing_asset agreement carrying a listing is refused",
+  );
+});
+
 test("local payout list and detail fixtures satisfy complete public contracts", () => {
   const listSchema = loadSchema("payouts.json");
   const listFixture = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "payouts-list.json"), "utf8"));
