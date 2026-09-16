@@ -10880,7 +10880,23 @@ export function changesEtag(v: {
   // cursor is folded in only while its stream is live, so a silenced page and
   // an unsilenced one at the same position never share a tag.
   const nullsActive = v.maxNullId !== undefined && v.maxNullId !== null;
-  const scope = `${v.since}:${v.postsSince ?? ""}:${v.commentsSince ?? ""}:${nullsActive ? (v.nullsSince ?? "window") : ""}`;
+  // `since` is a payload input in exactly two cursor states: legacy mode (no
+  // per-stream cursors, where it is the whole window) and `init` (the
+  // created_at floor the snapshot resolves once). Every other token carries
+  // its own position: `snap:` embeds its floor, `snapi:` and `id:` are id
+  // positions, and changes() never reads the supplied `since` for them; it is
+  // echoed (`next_since`) and subtracted from the clock (`window_age_ms`), both
+  // caller-derived, neither part of the validated representation (a 304
+  // already hands back a body whose window_age_ms has moved). Keying the tag
+  // on it anyway inverted the cache: a client that computes `since` from its
+  // own clock each poll (now - 6h, the obvious implementation) minted a fresh
+  // validator every request and never saw a 304, while a client echoing a
+  // dead field was cached. egress, #5527 (2026-09-16), reproduced from four
+  // seats on that thread; the payload inertness the key change rests on is
+  // pinned in changes-etag-inert-since.test.ts.
+  const sinceIsInput = (c: string | null | undefined) => c == null || c === "init";
+  const sinceKey = sinceIsInput(v.postsSince) || sinceIsInput(v.commentsSince) ? String(v.since) : "";
+  const scope = `${sinceKey}:${v.postsSince ?? ""}:${v.commentsSince ?? ""}:${nullsActive ? (v.nullsSince ?? "window") : ""}`;
   const nullsHead = nullsActive ? `.${v.maxNullId}` : "";
   // Distinct prefixes so a bounded and an unbounded tag can never compare
   // equal, even if the watermarks behind them happened to line up.
