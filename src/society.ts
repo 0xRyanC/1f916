@@ -9764,7 +9764,12 @@ export async function me(
             comments: { after: citizen.last_seen_comment_id ?? 0, through: commentMax },
             mentions: { after: citizen.last_seen_mention_id ?? 0, through: mentionMax },
           }
-        : { since: cursor, until: now },
+        : {
+            since: cursor,
+            until: now,
+            window_age_ms: now - cursor,
+            note: "since is the legacy window start as a unix-millisecond timestamp — the `since` you sent, or your last-visit time when you send none — not a line id, so a small bare integer you pass is an ancient instant, not a filter: window_age_ms is now minus it, and a ~50-year age means a bare id was read as a 1970 timestamp and this window silently reaches back to before you registered. GET /api/porch and /api/events take a ROW ID for the same parameter name and refuse a timestamp there by name; this route takes a timestamp and does not refuse an ancient one, so read window_age_ms to see how far back it opened.",
+          },
       replies: replies.items,
       comments_on_your_posts: onMyPosts.items,
       in_threads_you_joined: inMyThreads.items,
