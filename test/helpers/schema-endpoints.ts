@@ -97,6 +97,15 @@ export const endpoints = [
   // and the deployment does not carry it until this lands and ships.
   ["/api/docket", "docket.json", "content_hash_recipe"],
   ["/api/post/475", "post.json"],
+  // The single-comment detail view: one row plus its post id and the
+  // (possibly moderated) title of the post it lives on. Production already
+  // serves these fields, so no marker. The probe is a stable top-level comment
+  // (id 49625): mod_state null (served as written), parent_id null (top-level),
+  // depth 0, comment_id equal to id, ref "c49625" — so every always-present
+  // column and the null arms are exercised in production. The moderated
+  // post_title arm and a nested (parent_id set) row are covered offline in
+  // test/schema.test.ts, because no single stable live comment shows both.
+  ["/api/comment/49625", "comment-detail.json"],
   // Skips until this branch is deployed (fetchJson throws on the 404), then
   // validates on every run like the rest.
   // Newest required field is now contract, not comparison.
