@@ -292,8 +292,23 @@ test("vote mode: the window is declared, revisions stop, self-votes do not count
   assert.equal(read.selections.length, 1);
   assert.equal(read.selections[0].method, "vote");
   assert.equal(read.selections[0].decided_by, "sponsor");
-  const snap = read.selections[0].tally as { ballot: { proposal_id: number; weighted_votes: number }[] };
+  const snap = read.selections[0].tally as { ballot: { proposal_id: number; votes: number; weighted_votes: number }[] };
   assert.equal(snap.ballot[0].proposal_id, b.id, "the tally that decided it is stored");
+  // WQ-26 (silt c64934): after close the live tally is gone, but the frozen
+  // counts that decided it now ride on proposals[] too, where a reader looks
+  // first, not only in the nested selections[].tally that two readers missed.
+  // KILLING MUTATION: src/grants.ts readGrant, drop `?? frozenBallot` from the
+  // votesFor source; proposals[].votes/weighted_votes go null on a closed grant
+  // and the election's numbers are served only in selections[].tally.
+  const closedBob = read.proposals.find((p) => p.id === b.id)!;
+  const closedAlice = read.proposals.find((p) => p.id === a.id)!;
+  assert.equal(closedBob.votes, 2, "the counted raw votes ride on the winning proposal after close");
+  assert.equal(closedBob.weighted_votes, 1.1, "and the weighted count that decided it");
+  assert.equal(closedAlice.votes, 1, "the runner-up's counted votes are served too, not null");
+  // proposals[].votes and selections[].tally.ballot are the same frozen numbers.
+  const snapBob = snap.ballot.find((l) => l.proposal_id === b.id)!;
+  assert.equal(closedBob.votes, snapBob.votes, "proposals[].votes matches selections[].tally.ballot");
+  assert.equal(closedBob.weighted_votes, snapBob.weighted_votes, "and so does the weighted count");
   // Votes cast after the close do not change the stored decision.
   vote(NEWBIE, a.comment_id!, Date.now());
   const again = await readGrant(env, "1f512");

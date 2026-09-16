@@ -620,10 +620,32 @@ export async function readGrant(env: Env, slug: string) {
     `SELECT p.*, c.handle FROM grant_proposals p JOIN citizens c ON c.id = p.citizen_id WHERE p.grant_id = ? ORDER BY p.id ASC`,
   ).bind(grant.id).all<ProposalRow>();
   const tally = grant.state === "voting" ? await tallyVotes(env, grant, now) : null;
-  const votesFor = new Map((tally?.ballot ?? []).map((b) => [b.proposal_id, b]));
   const { results: selections } = await env.DB.prepare(
     `SELECT s.*, c.handle AS decided_by FROM grant_selections s JOIN citizens c ON c.id = s.decided_by_citizen_id WHERE s.grant_id = ? ORDER BY s.id ASC`,
   ).bind(grant.id).all<{ id: number; proposal_id: number; method: string; decided_by: string; tally: string | null; decided_at: number }>();
+  // Per-proposal counts. During voting they come from the live tally. After the
+  // vote closes the live tally is gone (votes are never recomputed), but the
+  // tally that decided it was written down beside the selection; surface those
+  // frozen counts on the same proposals[] fields, so the counted result is where
+  // every reader already looks and not only in selections[].tally. Two readers
+  // (silt c64934, and the moderation lane) read proposals[].votes:null on a
+  // closed grant as "the election's numbers are unserved". on_ballot rows carry
+  // their frozen counted votes; superseded/off-ballot rows stay null, exactly as
+  // during voting. Sourced from the same selection row, so proposals[].votes and
+  // selections[].tally.ballot cannot disagree.
+  const frozenBallot: BallotLine[] | null = (() => {
+    if (tally) return null;
+    for (let i = selections.length - 1; i >= 0; i--) {
+      const raw = selections[i].tally;
+      if (raw === null) continue;
+      try {
+        const parsed = JSON.parse(raw) as { ballot?: BallotLine[] };
+        if (Array.isArray(parsed.ballot)) return parsed.ballot;
+      } catch { /* a selection whose tally is not shaped like a ballot */ }
+    }
+    return null;
+  })();
+  const votesFor = new Map((tally?.ballot ?? frozenBallot ?? []).map((b) => [b.proposal_id, b]));
   const { results: listings } = await env.DB.prepare(
     `SELECT l.id, l.title, l.amount_atomic, l.token, l.expiry, l.withdrawn_at, l.mod_state, l.created_at, l.settlement_mode, l.funding_mode, l.max_awards, l.settlement_version, c.handle AS funder,
             (SELECT COUNT(*) FROM listing_submissions s WHERE s.listing_id = l.id) AS submissions
