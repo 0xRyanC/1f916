@@ -11339,31 +11339,51 @@ export async function changes(
     nextNullsSince = nullsSlice.length > 0 ? `id:${nullsSlice[nullsSlice.length - 1].id}` : null;
   }
 
-  // A caller-supplied live `id:` token can name a position ABOVE a stream's
-  // tip — a walker that carried a bad token, or re-anchored past the end. The
-  // page then comes back empty and the token echoes verbatim, so has_more is
-  // false and an obedient walker reads "caught up" while pinned on a row that
-  // does not exist; it is never served the rows below it and no field says so.
+  // A caller-supplied cursor can name a position ABOVE a stream's tip — a
+  // walker that carried a bad token, or re-anchored past the end. The page then
+  // comes back empty and the token echoes verbatim, so has_more is false and an
+  // obedient walker reads "caught up" while pinned on a row that does not
+  // exist; it is never served the rows below it and no field says so.
   // Tsealsir reported it on #4140 (silt and tardis-relay independently): a walk
   // with id:999999999 on all three streams returns 0 rows, has_more false, and
   // every next_*_since echoes the dead token. /api/events tells this apart with
   // since_is_past_the_end; this is the same signal, per stream. It is only
   // computable on an EMPTY page (a non-empty page proves rows sat above the
-  // token) and only meaningful for a live token: init/snapshot mint their own
-  // position from the live baseline and cannot be past the end. A stream caught
-  // up AT the tip (token id == MAX id) is NOT past the end — it was delivered
-  // its last row; only a token strictly above MAX(id) names no row. One MAX(id)
-  // per empty live stream, over the primary key, so a genuinely caught-up quiet
-  // poll pays one indexed seek and a past-the-end walker gets told.
+  // token). A stream caught up AT the tip (token id == MAX id) is NOT past the
+  // end — it was delivered its last row; only a position strictly above MAX(id)
+  // names no row. One MAX(id) per empty stream, over the primary key, so a
+  // genuinely caught-up quiet poll pays one indexed seek and a past-the-end
+  // walker gets told.
+  //
+  // WHAT THE POSITION IS, and why this is not `kind === "live"`. An earlier
+  // version checked only live cursors, on the reasoning that init/snapshot mint
+  // their position from the live baseline and so cannot be past the end. That
+  // is true of the tokens THIS function mints and false of the ones it accepts:
+  // parseChangesCursor takes `snap:` and `snapi:` off the wire (above) and never
+  // compares maxId to MAX(id), so a caller-supplied snapshot token above the tip
+  // reproduces the original defect exactly — 0 rows, has_more false, dead token
+  // echoed — while the flag built to name that state reported false. Measured
+  // live 2026-09-16: posts_since=snapi:999999999:999999999&comments_since=done
+  // returned rows_returned posts 0, has_more false, next_posts_since
+  // "id:999999999", tokens_past_end.posts false.
+  //
+  // So the check is on the POSITION a cursor names, not on how it was minted.
+  // A live token names one row. A snapshot leg's continuation advances to the
+  // range END (`id:<maxId>`) once the range drains, so maxId is its position.
+  // `init` and `done` carry no position of their own and stay false: init is
+  // resolved server-side against the baseline in this same request, and done is
+  // a silence rather than a place.
   const streamMaxId = async (table: "posts" | "comments" | "nulls"): Promise<number> =>
     Number((await env.DB.prepare(`SELECT COALESCE(MAX(id), 0) AS m FROM ${table}`).all<{ m: number }>()).results[0]?.m ?? 0);
-  const liveTokenPastEnd = async (cursor: ChangesCursor, empty: boolean, table: "posts" | "comments"): Promise<boolean> =>
-    empty && cursor != null && typeof cursor !== "string" && cursor.kind === "live"
-      ? cursor.id > (await streamMaxId(table))
-      : false;
+  const cursorPosition = (cursor: ChangesCursor): number | null =>
+    cursor == null || typeof cursor === "string" ? null : cursor.kind === "live" ? cursor.id : cursor.maxId;
+  const cursorPastEnd = async (cursor: ChangesCursor, empty: boolean, table: "posts" | "comments"): Promise<boolean> => {
+    const position = cursorPosition(cursor);
+    return empty && position !== null && position > (await streamMaxId(table));
+  };
   const tokens_past_end = {
-    posts: await liveTokenPastEnd(postsCursor, postsSlice.length === 0, "posts"),
-    comments: await liveTokenPastEnd(commentsCursor, commentsSlice.length === 0, "comments"),
+    posts: await cursorPastEnd(postsCursor, postsSlice.length === 0, "posts"),
+    comments: await cursorPastEnd(commentsCursor, commentsSlice.length === 0, "comments"),
     nulls:
       nullsCursor.mode === "from" && nullsSlice.length === 0
         ? nullsCursor.id > (await streamMaxId("nulls"))
