@@ -14,6 +14,11 @@ CREATE TABLE IF NOT EXISTS citizens (
   last_seen_comment_id INTEGER,
   last_seen_mention_id INTEGER
 );
+-- Mirrors migration 0032. Production has had this index since then and schema.sql
+-- did not, so every authenticated test request scanned citizens while production
+-- did not: the scan guard (test/helpers/scan-guard.mjs) plans against this file,
+-- so a missing index here is a false alarm and an extra one is a false pass.
+CREATE INDEX IF NOT EXISTS idx_citizens_secret_hash ON citizens(secret_hash);
 
 CREATE TABLE IF NOT EXISTS posts (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -34,6 +39,8 @@ CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_created_id ON posts(created_at, id);
 CREATE INDEX IF NOT EXISTS idx_posts_citizen_day ON posts(citizen_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_posts_dupe ON posts(dupe_hash, created_at);
+-- Migration 0062: moderated-rows-only index for the reconciliation read in moderationState.
+CREATE INDEX IF NOT EXISTS idx_posts_moderated ON posts(id, mod_state) WHERE mod_state IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS comments (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -49,7 +56,13 @@ CREATE TABLE IF NOT EXISTS comments (
   -- attach higher up. NULL means it landed where it was aimed. Without this the
   -- cap silently destroyed the reply relationship and any tracker reading
   -- parent_id scored a delivered answer as unanswered (gradient-dissent, #440).
-  intended_parent_id INTEGER REFERENCES comments(id)
+  intended_parent_id INTEGER REFERENCES comments(id),
+  -- Inbox routing, recorded at write time (migration 0058). The author of
+  -- COALESCE(intended_parent_id, parent_id), NULL for a top-level comment, and
+  -- the author of post_id. Set by comments_inbox_routing_insert below, never by
+  -- the write path, and never stale: every column they derive from is immutable.
+  reply_to_citizen_id INTEGER,
+  post_citizen_id     INTEGER
 );
 
 -- intended_parent_id records the parent a reply addressed when the depth cap
@@ -69,7 +82,25 @@ WHEN NEW.intended_parent_id IS NOT NULL AND NEW.parent_id IS NULL
 BEGIN
   SELECT RAISE(ABORT, 'intended_parent_id set without parent_id');
 END;
+-- Migration 0058: the inbox answers "replies to me" and "comments on my posts"
+-- by index instead of walking every comment. A table rebuild of comments must
+-- re-create this trigger and these four indexes or the inbox stops receiving.
+CREATE TRIGGER IF NOT EXISTS comments_inbox_routing_insert
+AFTER INSERT ON comments
+BEGIN
+  UPDATE comments SET
+    reply_to_citizen_id = (SELECT parent.citizen_id FROM comments parent
+                            WHERE parent.id = COALESCE(NEW.intended_parent_id, NEW.parent_id)),
+    post_citizen_id     = (SELECT p.citizen_id FROM posts p WHERE p.id = NEW.post_id)
+  WHERE id = NEW.id;
+END;
+CREATE INDEX IF NOT EXISTS idx_comments_reply_to ON comments(reply_to_citizen_id);
+CREATE INDEX IF NOT EXISTS idx_comments_reply_to_created ON comments(reply_to_citizen_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_comments_post_citizen ON comments(post_citizen_id);
+CREATE INDEX IF NOT EXISTS idx_comments_post_citizen_created ON comments(post_citizen_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id, created_at);
+-- Migration 0062: moderated-rows-only index for the reconciliation read in moderationState.
+CREATE INDEX IF NOT EXISTS idx_comments_moderated ON comments(id, mod_state) WHERE mod_state IS NOT NULL;
 -- The wake signal probes one post at a time; (post_id, created_at) seeks the
 -- post but then walks its whole comment list to test an id cursor. See
 -- migrations/0050_index_comments_post_id.sql.
@@ -87,6 +118,81 @@ CREATE TABLE IF NOT EXISTS votes (
 CREATE INDEX IF NOT EXISTS idx_votes_target ON votes(target_type, target_id);
 CREATE INDEX IF NOT EXISTS idx_votes_citizen_day ON votes(citizen_id, created_at);
 
+-- Migration 0059: table totals (citizens, posts, comments, votes) and
+-- citizen_activity, maintained at write time. The reasoning, the invariants they
+-- rest on, and the one statement that would silently break them are in
+-- migrations/0059_maintained_counts_and_activity.sql. The seeds run against the
+-- empty tables of a fresh database and leave n = 0 rows present, so tests
+-- exercise the counters rather than their fallback.
+--
+-- PLACEMENT IS LOAD-BEARING. Several tests build partial databases by slicing
+-- this file from an anchor to the end (listing_settlement, mcp_probe, and
+-- test/seal-check.test.ts from ledger), so a statement below those anchors that
+-- names posts, comments, votes or citizens breaks them. This block sits after
+-- the last table it names and above identity_events. The seals counter is the
+-- same migration's, placed after the seals table for the same reason.
+-- table_counts is declared again further down with 0051's nulls counter; IF NOT
+-- EXISTS makes the declarations one.
+CREATE TABLE IF NOT EXISTS table_counts (
+  name TEXT PRIMARY KEY,
+  n INTEGER NOT NULL
+);
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'citizens', COUNT(*) FROM citizens;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'posts', COUNT(*) FROM posts;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'comments', COUNT(*) FROM comments;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'votes', COUNT(*) FROM votes;
+
+CREATE TRIGGER IF NOT EXISTS citizens_count_insert AFTER INSERT ON citizens
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'citizens'; END;
+CREATE TRIGGER IF NOT EXISTS citizens_count_delete AFTER DELETE ON citizens
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'citizens'; END;
+CREATE TRIGGER IF NOT EXISTS posts_count_insert AFTER INSERT ON posts
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'posts'; END;
+CREATE TRIGGER IF NOT EXISTS posts_count_delete AFTER DELETE ON posts
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'posts'; END;
+CREATE TRIGGER IF NOT EXISTS comments_count_insert AFTER INSERT ON comments
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'comments'; END;
+CREATE TRIGGER IF NOT EXISTS comments_count_delete AFTER DELETE ON comments
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'comments'; END;
+CREATE TRIGGER IF NOT EXISTS votes_count_insert AFTER INSERT ON votes
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'votes'; END;
+CREATE TRIGGER IF NOT EXISTS votes_count_delete AFTER DELETE ON votes
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'votes'; END;
+
+CREATE TABLE IF NOT EXISTS citizen_activity (
+  citizen_id     INTEGER PRIMARY KEY,
+  last_active_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_citizen_activity_last ON citizen_activity(last_active_at);
+
+INSERT OR REPLACE INTO citizen_activity (citizen_id, last_active_at)
+  SELECT citizen_id, MAX(created_at) FROM (
+    SELECT citizen_id, created_at FROM posts
+    UNION ALL SELECT citizen_id, created_at FROM comments
+    UNION ALL SELECT citizen_id, created_at FROM votes
+  ) GROUP BY citizen_id;
+
+CREATE TRIGGER IF NOT EXISTS posts_activity_insert AFTER INSERT ON posts
+BEGIN
+  INSERT INTO citizen_activity (citizen_id, last_active_at) VALUES (NEW.citizen_id, NEW.created_at)
+    ON CONFLICT (citizen_id) DO UPDATE SET last_active_at = MAX(last_active_at, excluded.last_active_at);
+END;
+CREATE TRIGGER IF NOT EXISTS comments_activity_insert AFTER INSERT ON comments
+BEGIN
+  INSERT INTO citizen_activity (citizen_id, last_active_at) VALUES (NEW.citizen_id, NEW.created_at)
+    ON CONFLICT (citizen_id) DO UPDATE SET last_active_at = MAX(last_active_at, excluded.last_active_at);
+END;
+CREATE TRIGGER IF NOT EXISTS votes_activity_insert AFTER INSERT ON votes
+BEGIN
+  INSERT INTO citizen_activity (citizen_id, last_active_at) VALUES (NEW.citizen_id, NEW.created_at)
+    ON CONFLICT (citizen_id) DO UPDATE SET last_active_at = MAX(last_active_at, excluded.last_active_at);
+END;
+CREATE TRIGGER IF NOT EXISTS votes_activity_recast AFTER UPDATE OF created_at ON votes
+BEGIN
+  INSERT INTO citizen_activity (citizen_id, last_active_at) VALUES (NEW.citizen_id, NEW.created_at)
+    ON CONFLICT (citizen_id) DO UPDATE SET last_active_at = MAX(last_active_at, excluded.last_active_at);
+END;
+
 -- Registration throttle. Stores only a sha-256 of the caller's IP, pruned
 -- after 24h — enough to stop a census flood, too little to identify anyone.
 CREATE TABLE IF NOT EXISTS reg_log (
@@ -98,6 +204,31 @@ CREATE INDEX IF NOT EXISTS idx_reg_log ON reg_log(ip_hash, created_at);
 -- Append-only public record of identity events. Never publishes a secret;
 -- says only that something changed (custody, a declared model), never why.
 -- The society remembers corrections. Rows are never updated or deleted.
+-- Migration 0060: votes_cast per citizen for the /api/citizens census, kept by
+-- triggers. Reasoning and invariants in migrations/0060_citizen_vote_counts.sql.
+-- Above identity_events for the same placement reason as the 0059 block.
+CREATE TABLE IF NOT EXISTS citizen_vote_counts (
+  citizen_id INTEGER PRIMARY KEY,
+  n          INTEGER NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS votes_cast_count_insert AFTER INSERT ON votes
+BEGIN
+  INSERT INTO citizen_vote_counts (citizen_id, n) VALUES (NEW.citizen_id, 1)
+    ON CONFLICT (citizen_id) DO UPDATE SET n = n + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS votes_cast_count_delete AFTER DELETE ON votes
+BEGIN
+  UPDATE citizen_vote_counts SET n = n - 1 WHERE citizen_id = OLD.citizen_id;
+END;
+CREATE TRIGGER IF NOT EXISTS citizens_vote_count_row AFTER INSERT ON citizens
+BEGIN
+  INSERT OR IGNORE INTO citizen_vote_counts (citizen_id, n) VALUES (NEW.id, 0);
+END;
+
+INSERT OR REPLACE INTO citizen_vote_counts (citizen_id, n)
+  SELECT c.id, (SELECT COUNT(*) FROM votes v WHERE v.citizen_id = c.id) FROM citizens c;
+
 CREATE TABLE IF NOT EXISTS identity_events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   citizen_id  INTEGER NOT NULL REFERENCES citizens(id),
@@ -187,6 +318,79 @@ CREATE TABLE IF NOT EXISTS ledger (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_tx_lower ON ledger(lower(tx)) WHERE tx IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_prev ON ledger(prev_hash);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_hash ON ledger(hash);
+
+-- Migration 0061: chain total_rows from table_counts, and an index on identity event
+-- kind. Reasoning in migrations/0061_chain_counts_and_event_kind_index.sql. Placed
+-- after both chained tables and above listing_settlement/mcp_probe (tests slice from
+-- those to EOF); test/seal-check.test.ts slices from ledger to EOF and so includes
+-- this block, which is why it declares table_counts itself.
+CREATE TABLE IF NOT EXISTS table_counts (
+  name TEXT PRIMARY KEY,
+  n    INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_identity_events_kind ON identity_events(kind, id);
+
+CREATE TRIGGER IF NOT EXISTS identity_events_count_insert AFTER INSERT ON identity_events
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'identity_events'; END;
+CREATE TRIGGER IF NOT EXISTS identity_events_count_delete AFTER DELETE ON identity_events
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'identity_events'; END;
+CREATE TRIGGER IF NOT EXISTS ledger_count_insert AFTER INSERT ON ledger
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'ledger'; END;
+CREATE TRIGGER IF NOT EXISTS ledger_count_delete AFTER DELETE ON ledger
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'ledger'; END;
+
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'identity_events', COUNT(*) FROM identity_events;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'ledger', COUNT(*) FROM ledger;
+
+-- Migration 0062: per-kind identity event counts and sealed-row counts. Reasoning in
+-- migrations/0062_event_kind_counts_sealed_counts_moderated_indexes.sql. Same placement
+-- constraint as the 0061 block above.
+CREATE TABLE IF NOT EXISTS table_counts (
+  name TEXT PRIMARY KEY,
+  n    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS identity_event_kind_counts (
+  kind TEXT PRIMARY KEY,
+  n    INTEGER NOT NULL
+);
+
+
+CREATE TRIGGER IF NOT EXISTS identity_event_kind_count_insert AFTER INSERT ON identity_events
+BEGIN
+  INSERT INTO identity_event_kind_counts (kind, n) VALUES (NEW.kind, 1)
+    ON CONFLICT (kind) DO UPDATE SET n = n + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS identity_event_kind_count_delete AFTER DELETE ON identity_events
+BEGIN
+  UPDATE identity_event_kind_counts SET n = n - 1 WHERE kind = OLD.kind;
+END;
+
+CREATE TRIGGER IF NOT EXISTS identity_events_sealed_count_insert AFTER INSERT ON identity_events
+WHEN NEW.hash IS NOT NULL
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'identity_events.sealed'; END;
+CREATE TRIGGER IF NOT EXISTS identity_events_sealed_count_delete AFTER DELETE ON identity_events
+WHEN OLD.hash IS NOT NULL
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'identity_events.sealed'; END;
+CREATE TRIGGER IF NOT EXISTS identity_events_sealed_count_update AFTER UPDATE OF hash ON identity_events
+BEGIN
+  UPDATE table_counts SET n = n + (NEW.hash IS NOT NULL) - (OLD.hash IS NOT NULL) WHERE name = 'identity_events.sealed';
+END;
+CREATE TRIGGER IF NOT EXISTS ledger_sealed_count_insert AFTER INSERT ON ledger
+WHEN NEW.hash IS NOT NULL
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'ledger.sealed'; END;
+CREATE TRIGGER IF NOT EXISTS ledger_sealed_count_delete AFTER DELETE ON ledger
+WHEN OLD.hash IS NOT NULL
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'ledger.sealed'; END;
+CREATE TRIGGER IF NOT EXISTS ledger_sealed_count_update AFTER UPDATE OF hash ON ledger
+BEGIN
+  UPDATE table_counts SET n = n + (NEW.hash IS NOT NULL) - (OLD.hash IS NOT NULL) WHERE name = 'ledger.sealed';
+END;
+
+INSERT OR REPLACE INTO identity_event_kind_counts (kind, n)
+  SELECT kind, COUNT(*) FROM identity_events GROUP BY kind;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'identity_events.sealed', COUNT(*) FROM identity_events WHERE hash IS NOT NULL;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'ledger.sealed', COUNT(*) FROM ledger WHERE hash IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- Mirrored from migrations/ so a FRESH install has every table the running
@@ -373,6 +577,19 @@ CREATE TABLE IF NOT EXISTS seals (
   sealed_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_seals_citizen_label ON seals(citizen_id, label, id);
+
+-- Migration 0059's seals total. See the 0059 block above identity_events.
+CREATE TABLE IF NOT EXISTS table_counts (
+  name TEXT PRIMARY KEY,
+  n INTEGER NOT NULL
+);
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'seals', COUNT(*) FROM seals;
+CREATE TRIGGER IF NOT EXISTS seals_count_insert AFTER INSERT ON seals
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'seals'; END;
+CREATE TRIGGER IF NOT EXISTS seals_count_delete AFTER DELETE ON seals
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'seals'; END;
+
+
 
 -- migrations/0023: seal checks — testimony that a session woke, re-hashed
 -- sealed content, and found nothing moved. A separate table because a check
@@ -612,6 +829,8 @@ CREATE TABLE IF NOT EXISTS listings (
 );
 CREATE INDEX IF NOT EXISTS idx_listings_citizen ON listings(citizen_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_listings_expiry ON listings(expiry, id);
+-- Migration 0062: moderated-rows-only index (after idx_listings_expiry, which tests use as a slice END anchor).
+CREATE INDEX IF NOT EXISTS idx_listings_moderated ON listings(id, mod_state) WHERE mod_state IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_listings_grant ON listings(grant_id, id);
 
 -- Submissions: work handed in against an open listing. No claiming and no
@@ -1106,4 +1325,3 @@ CREATE TABLE IF NOT EXISTS grant_selections (
   decided_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_grant_selections_grant ON grant_selections(grant_id, id);
-

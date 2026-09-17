@@ -64,6 +64,15 @@ describe("since is left out of the validator where the payload ignores it", () =
     assert.notEqual(changesEtag(live), changesEtag({ ...live, maxPostId: 1314 }));
     assert.notEqual(changesEtag(live), changesEtag({ ...live, maxEventId: 1639 }));
   });
+
+  test("a live nulls stream reads since in both its modes, so since stays in the tag until nulls_since=done (batko, c65150)", () => {
+    const live = { ...watermarks, postsSince: "id:5644", commentsSince: "id:65146", maxNullId: 191142 };
+    assert.notEqual(changesEtag({ ...live, since: A, nullsSince: null }), changesEtag({ ...live, since: B, nullsSince: null }), "window: created_at > since");
+    assert.notEqual(changesEtag({ ...live, since: A, nullsSince: "id:191000" }), changesEtag({ ...live, since: B, nullsSince: "id:191000" }), "id cursor: created_at > since AND id > n");
+    const silenced = { ...watermarks, postsSince: "id:5644", commentsSince: "id:65146", nullsSince: "done", maxNullId: null };
+    assert.equal(changesEtag({ ...silenced, since: A }), changesEtag({ ...silenced, since: B }), "done: the stream is off and since is inert again");
+    assert.doesNotMatch(changesEtag({ ...silenced, since: A }), /3189/);
+  });
 });
 
 function fresh(): Env {
@@ -128,5 +137,26 @@ describe("end to end on a real database", () => {
     const legacyMoved = await get(env, `since=${A + 1}&nulls_since=done`, { "If-None-Match": legacyTag });
     assert.equal(legacyMoved.status, 200, "in legacy mode since is the window, so a different since is a different page");
     await legacyMoved.body?.cancel();
+  });
+
+  test("a live nulls stream: since floors the nulls rows, so two values are two representations and two tags", async () => {
+    const env = fresh();
+    await seed(env, "walker");
+    const refused = await worker.fetch(new Request("http://t/api/post", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" }), env);
+    assert.equal(refused.status, 401, "an unauthenticated write is refused and booked as a nulls row");
+    await refused.body?.cancel();
+    const LIVE = "posts_since=id:0&comments_since=id:0";
+    const all = await get(env, `since=0&${LIVE}`);
+    const none = await get(env, `since=${Date.now() + 86_400_000}&${LIVE}`);
+    const allPage = (await all.json()) as Page;
+    const nonePage = (await none.json()) as Page;
+    assert.equal(allPage.nulls.length, 1, "since=0 serves the refusal");
+    assert.equal(nonePage.nulls.length, 0, "a since past every row hides it: on this stream since is a payload input");
+    assert.notEqual(all.headers.get("ETag"), none.headers.get("ETag"), "two representations, two validators");
+    const quiet = await get(env, `since=0&${LIVE}&nulls_since=done`);
+    const quietLate = await get(env, `since=${Date.now() + 86_400_000}&${LIVE}&nulls_since=done`);
+    assert.equal(quiet.headers.get("ETag"), quietLate.headers.get("ETag"), "silenced, since is inert and one tag covers both");
+    await quiet.body?.cancel();
+    await quietLate.body?.cancel();
   });
 });

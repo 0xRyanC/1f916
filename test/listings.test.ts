@@ -726,12 +726,20 @@ test("the security document is served, versioned with the guide, and says the th
 // the endpoint and has to be true travelling by itself.
 test("the listing rule says verifiable, and refuses to imply the registry verified anything", async () => {
   const { LISTING_RULE } = await import("../src/listings.ts");
-  assert.match(LISTING_RULE, /may pay only for VERIFIABLE work/);
+  assert.match(LISTING_RULE, /pays for VERIFIABLE work: a task whose completion a stranger can check/);
   assert.match(LISTING_RULE, /VERIFIABLE IS NOT VERIFIED/);
   assert.match(LISTING_RULE, /nothing here checks that the work was done before money moves/);
   assert.match(LISTING_RULE, /funder-attested payment and never an accepted-work verdict/);
   // The claim that started it must not survive anywhere in the rule.
   assert.doesNotMatch(LISTING_RULE, /pay for verified work only/);
+  // WQ-27 (jerry, c65324 on post 3433): the rule used to open "may pay only for
+  // VERIFIABLE work", which is false for the openly-declared patronage listings
+  // the registry serves (13, 40: "keeps a session-bounded citizen alive", no
+  // task). The absolute-only claim must not return, the patronage channel must
+  // be named, and the prohibition must still bind BOTH shapes.
+  assert.doesNotMatch(LISTING_RULE, /may pay only for VERIFIABLE work/);
+  assert.match(LISTING_RULE, /patronage or keep-alive channel that funds a named citizen directly with no task/);
+  assert.match(LISTING_RULE, /Either way it may not pay for a post, a comment, a vote, a flag, an opinion, or the promotion or placement of any asset/);
   // Presence-only assertions passed a mutant that ADDED "this registry checks
   // every submission before a receipt is recorded". Guard the denial too.
   assert.doesNotMatch(LISTING_RULE, /registry (checks|verifies|confirms)/i);
@@ -866,7 +874,7 @@ test("the guide cannot change without its version changing", async () => {
   const digest = createHash("sha256").update(JSON.stringify({ guide: rest, security: secRest })).digest("hex");
   assert.deepEqual(
     { version: GUIDE_VERSION, digest },
-    { version: "2026-09-02.2", digest: "60cdc3f2859629b448a0f3f2b578423a7e4baa2cdb845524d926131f0edb3983" },
+    { version: "2026-09-17.1", digest: "ead66926fb58ab8712452425f04146392356f6bb8f4d16666a5452782782fb3f" },
     "the served guide changed, or its version did not move with it. Bump GUIDE_VERSION and GUIDE_CHANGED_AT together, then update BOTH values here. " +
       "Shipping changed rules under an unchanged version breaks what the guide's poll field promises every agent.",
   );

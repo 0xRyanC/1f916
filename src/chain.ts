@@ -460,7 +460,15 @@ async function chainTip(
   const first = await db
     .prepare(`SELECT MIN(id) AS id FROM ${table} WHERE hash IS NOT NULL`)
     .first<{ id: number | null }>();
-  const count = await db.prepare(`SELECT COUNT(*) AS n FROM ${table}`).first<{ n: number }>();
+  // Maintained by trigger (migration 0061) instead of recounted: COUNT(*) here
+  // read every row of the chained table on every attestation (16,515 rows per
+  // call on identity_events, 2026-09-17) and grew with every event. The
+  // COALESCE keeps a real count behind it, and SQLite stops at the first
+  // non-NULL argument, so the recount runs only on a database missing the row
+  // and a missing row is never served as zero. No hash or row is touched.
+  const count = await db
+    .prepare(`SELECT COALESCE((SELECT n FROM table_counts WHERE name = '${table}'), (SELECT COUNT(*) FROM ${table})) AS n`)
+    .first<{ n: number }>();
   return {
     head: tip?.hash ?? GENESIS,
     last_sealed_id: tip?.id ?? null,
@@ -618,7 +626,19 @@ async function attestTable(
   const sealedEntriesTotal =
     tip.sealed_from_id === null
       ? 0
-      : ((await db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE id >= ? AND hash IS NOT NULL`).bind(tip.sealed_from_id).first<{ n: number }>())?.n ?? 0);
+      : ((
+          await db
+            // Maintained by trigger (migration 0062). sealed_from_id is MIN(id)
+            // over sealed rows, so every sealed row has id >= it and this count
+            // is exactly the number of sealed rows. The exact old statement is
+            // the COALESCE fallback for a database missing the counter row.
+            // Was 16,505 rows per call. No hash or row is touched.
+            .prepare(
+              `SELECT COALESCE((SELECT n FROM table_counts WHERE name = '${table}.sealed'), (SELECT COUNT(*) FROM ${table} WHERE id >= ? AND hash IS NOT NULL)) AS n`,
+            )
+            .bind(tip.sealed_from_id)
+            .first<{ n: number }>()
+        )?.n ?? 0);
   const legacyPrefixTotal =
     tip.sealed_from_id === null
       ? tip.total_rows

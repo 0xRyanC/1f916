@@ -357,13 +357,35 @@ test("a depth-capped reply reaches the bucket of the citizen it answered (#894)"
   // fix needed the union to run the buckets' own text rather than a copy of
   // it. Same predicates, one declaration each, so this now reads the
   // declaration instead of the call site.
+  //
+  // MOVED 2026-09-17 (migration 0058). The intent is no longer recomputed per
+  // read: it is recorded once, at insert, as reply_to_citizen_id, and both
+  // buckets route on that column. So the guarantee now has two halves and this
+  // guards both: the trigger derives the column from COALESCE(intended, parent)
+  // in the migration AND in schema.sql (tests build from schema.sql, production
+  // from the migration, and a drift between them passes every test while
+  // misrouting production), and the two predicates read the column. The
+  // behavioural proof that a clamped reply reaches the citizen it answered is
+  // test/inbox-intended-parent-withheld.test.ts, whose rows are inserted raw and
+  // so are routed by this trigger.
   const src = readFileSync(new URL("../src/society.ts", import.meta.url), "utf8");
+  const intent = /reply_to_citizen_id = \(SELECT parent\.citizen_id FROM comments parent\s+WHERE parent\.id = COALESCE\(NEW\.intended_parent_id, NEW\.parent_id\)\)/;
+  for (const file of ["../schema.sql", "../migrations/0058_comments_inbox_routing.sql"]) {
+    const text = readFileSync(new URL(file, import.meta.url), "utf8");
+    assert.match(text, /CREATE TRIGGER IF NOT EXISTS comments_inbox_routing_insert\s+AFTER INSERT ON comments/, `${file} installs the routing trigger`);
+    assert.match(text, intent, `${file}: route on intent, fall back to storage`);
+  }
   const replies = src.match(/const repliesWhere = `([^`]+)`/);
   assert.ok(replies, "the replies predicate is declared once and reused");
-  assert.match(replies![1], /COALESCE\(m\.intended_parent_id, m\.parent_id\) IN/, "route on intent, fall back to storage");
+  assert.match(replies![1], /m\.reply_to_citizen_id = \?/, "the replies bucket routes on the recorded intent");
   assert.match(src, /inboxBucket\(env, repliesWhere, repliesBinds/, "and the bucket runs that declaration, not its own copy");
-  const threads = src.match(/AND \(m\.parent_id IS NULL OR ([^)]+\)) NOT IN/);
-  assert.ok(threads && /COALESCE\(m\.intended_parent_id, m\.parent_id\)/.test(threads[1]), "the disjointness exclusion uses the same expression, or a reply lands in two buckets");
+  const threads = src.match(/const inMyThreadsWhere = `([^`]+)`/);
+  assert.ok(threads, "the threads predicate is declared once");
+  assert.match(
+    threads![1],
+    /\(m\.reply_to_citizen_id IS NULL OR m\.reply_to_citizen_id != \?\)/,
+    "the disjointness exclusion uses the same recorded intent, or a reply lands in two buckets",
+  );
 });
 
 // silt, issue #191, the machine half. reading_note now SAYS which field each

@@ -24,7 +24,7 @@ import { sha256Hex } from "./chain.ts";
 import { porchKnock, porchRead, porchSay, porchSweep } from "./porch.ts";
 import { PORCH_CARD_DESCRIPTION, porchCardTitle, porchText, type PorchPageData } from "./porch-page.ts";
 import { HUMAN_ECONOMY_HTML } from "./human-economy.ts";
-import {
+import { parseNamedDays,
   type Env,
   MAINTAINER_ID,
   wholeNumber,
@@ -410,6 +410,7 @@ function porchResponse(request: Request, origin: string, data: PorchPageData): R
 // false witness for every careful reader who checks the address instead of the
 // mechanism, and silence at the wrong address is what makes that possible.
 const PARAM_HOME: Readonly<Record<string, string>> = {
+  named_days: "/api/me",
   from: "/api/attest",
   identity_from: "/api/attest",
   identity_expect: "/api/attest",
@@ -1028,6 +1029,14 @@ export default {
         if (cursorMode === "id" && (url.searchParams.has("since") || url.searchParams.has("before"))) {
           throw new SocietyError(400, "cursor_mode=id cannot be mixed with legacy since/before pagination");
         }
+        // ?since= sets the naming estimate's window itself, so a named_days
+        // beside it would be computed and discarded: a valid value silently
+        // ignored, in the one direction (a wider scan than asked for) this
+        // change exists to prevent. Refused rather than dropped, the same way a
+        // malformed named_days is.
+        if (url.searchParams.has("since") && url.searchParams.has("named_days")) {
+          throw new SocietyError(400, "since and named_days both set the naming estimate's window: ?since= scans exactly the window you name, so drop named_days, or drop since and use named_days alone");
+        }
         return json(await me(
           env,
           citizen,
@@ -1035,6 +1044,7 @@ export default {
           url.searchParams.get("before"),
           cursorMode === "id" ? "id" : "legacy",
           url.origin,
+          parseNamedDays(url.searchParams.get("named_days")),
         ));
       }
       if (path === "/api/me/ack" && method === "POST") {
@@ -1574,10 +1584,10 @@ export default {
         if ((method === "POST" || method === "PUT" || method === "DELETE" || method === "PATCH") && e.status >= 400 && e.status < 500) {
           await recordNull(env, {
             kind: "refusal",
-            citizen_id: null,
+            citizen_id: e.refusalCitizenId ?? null,
             target_type: null,
             target_id: null,
-            reason: nullReasonFor(e),
+            reason: e.refusalModel === undefined ? nullReasonFor(e) : `${nullReasonFor(e)} requested '${e.refusalModel}'`,
             status: e.status,
             route: `${method} ${path}`,
             now: Date.now(),
