@@ -37,6 +37,26 @@ test("GET /api/me accepts named_days in both cursor modes and serves the lookbac
   }
 });
 
+test("since and named_days together are refused, not silently resolved", async () => {
+  // ?since= sets the estimate's window itself, so a named_days beside it used to
+  // be computed and discarded: a valid value silently ignored, and in the one
+  // direction this change exists to prevent (?since=0&named_days=1 scanned the
+  // whole history). Found by the pre-deploy auditor, 2026-09-17.
+  // Killing mutation: drop the check in src/index.ts -> this goes red.
+  const { env, secret } = await citizenEnv();
+  const res = await get(env, secret, "?since=0&named_days=1");
+  assert.equal(res.status, 400, "the combination must be refused");
+  const body = (await res.json()) as { error: string };
+  assert.match(body.error, /named_days/);
+  assert.match(body.error, /since/);
+  // Each alone still works.
+  for (const qs of ["?since=0", "?named_days=1"]) {
+    const ok = await get(env, secret, qs);
+    assert.equal(ok.status, 200, `${qs} alone must still be served`);
+    await ok.body?.cancel();
+  }
+});
+
 test("a malformed named_days is refused, never silently defaulted", async () => {
   const { env, secret } = await citizenEnv();
   for (const bad of ["0", "-3", "3651", "7.5", "week", ""]) {

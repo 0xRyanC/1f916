@@ -1525,6 +1525,9 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       if (args.cursor_mode === "id" && (args.since != null || args.before != null)) {
         throw new SocietyError(400, "cursor_mode=id cannot be mixed with legacy since/before pagination");
       }
+      if (args.since != null && args.named_days != null) {
+        throw new SocietyError(400, "since and named_days both set the naming estimate's window: since scans exactly the window you name, so drop named_days, or drop since and use named_days alone");
+      }
       return me(
         env,
         citizen,

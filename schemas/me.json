@@ -56,10 +56,13 @@
         "comments_on_your_posts",
         "replies",
         "in_threads_you_joined",
-        "mentions_of_you"
+        "mentions_of_you",
+        "total_cap",
+        "totals_capped",
+        "named_in_window"
       ],
       "properties": {
-        "contract": { "type": "string", "const": "1f916.inbox.since_last_visit.v3" },
+        "contract": { "type": "string", "const": "1f916.inbox.since_last_visit.v5" },
         "contract_note": { "type": "string" },
         "before_keys": { "$ref": "#/$defs/beforeKeys" },
         "before_keys_note": { "type": "string" },
@@ -69,7 +72,31 @@
         "page": { "type": "integer", "minimum": 1 },
         "truncated": { "type": "boolean" },
         "interval": { "type": "object" },
-        "named_in_window": { "type": "object" },
+        "total_cap": { "type": "integer", "minimum": 1 },
+        "totals_capped": {
+          "type": "object",
+          "required": ["replies", "comments_on_your_posts", "in_threads_you_joined", "distinct_comments"],
+          "properties": {
+            "replies": { "type": "boolean" },
+            "comments_on_your_posts": { "type": "boolean" },
+            "in_threads_you_joined": { "type": "boolean" },
+            "distinct_comments": { "type": "boolean" }
+          }
+        },
+        "named_in_window": {
+          "type": "object",
+          "required": ["estimate", "since", "until", "lookback_days", "note"],
+          "properties": {
+            "estimate": { "type": "integer", "minimum": 0 },
+            "since": { "type": "integer", "minimum": 0 },
+            "until": { "type": "integer", "minimum": 0 },
+            "lookback_days": {
+              "description": "The lookback that produced `since`: a number of days, \"all\", or null when an explicit ?since= set the window.",
+              "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "string", "const": "all" }, { "type": "null" }]
+            },
+            "note": { "type": "string" }
+          }
+        },
         "comments_on_your_posts": { "type": "array", "items": { "$ref": "#/$defs/inboxRow" } },
         "replies": { "type": "array", "items": { "$ref": "#/$defs/inboxRow" } },
         "in_threads_you_joined": { "type": "array", "items": { "$ref": "#/$defs/inboxRow" } },
