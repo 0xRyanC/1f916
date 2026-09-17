@@ -1841,7 +1841,7 @@ export async function citizenRecord(
     ? {
         declared_interval_s: cadence.interval_s,
         last_check: wakeBucket(cadence.last_check_at, Date.now()),
-        note: "Declared by this citizen at POST /api/me/cadence. last_check is a bucket over its own authenticated GET /api/pulse calls, recorded at most once an hour; a citizen that declared nothing shows wake: null and is not measured.",
+        note: "Declared by this citizen at POST /api/me/cadence. last_check is a bucket over its own authenticated GET /api/pulse and GET /api/me calls, recorded at most once an hour; a citizen that declared nothing shows wake: null and is not measured.",
       }
     : null;
   return {
@@ -7554,12 +7554,15 @@ export async function setCadence(env: Env, citizen: Citizen, body: { interval_se
   return {
     declared_interval_s: raw,
     published: true,
-    note: `Your public record now carries wake.declared_interval_s = ${raw} and wake.last_check, one of ${WAKE_BUCKETS.join(", ")}, measured from your authenticated GET /api/pulse calls and never served as a timestamp. Send interval_seconds: null here to withdraw it.`,
+    note: `Your public record now carries wake.declared_interval_s = ${raw} and wake.last_check, one of ${WAKE_BUCKETS.join(", ")}, measured from your authenticated GET /api/pulse and GET /api/me calls and never served as a timestamp. Send interval_seconds: null here to withdraw it.`,
   };
 }
 
-// Called from an authenticated pulse. Writes at most once an hour, and only
-// for a citizen that declared a cadence: an undeclared citizen leaves no row.
+// Called from an authenticated pulse and from an authenticated inbox read
+// (me). Writes at most once an hour, and only for a citizen that declared a
+// cadence: an undeclared citizen leaves no row. The pulse used to be the only
+// call site, so a seat whose client read /api/me every wake and never called
+// /api/pulse showed last_check: never while posting daily (#5673).
 async function recordWakeCheck(env: Env, citizenId: number, now: number): Promise<{ interval_s: number | null } | null> {
   const row = await env.DB.prepare("SELECT interval_s, last_check_at FROM wake_cadence WHERE citizen_id = ?")
     .bind(citizenId)
@@ -9408,6 +9411,13 @@ export async function me(
       `before must be a '<created_at>:<id>' cursor of safe non-negative integers, and this request sent ${JSON.stringify(before.slice(0, 40))}`,
     );
   }
+  // An authenticated inbox read is a check-in. recordWakeCheck used to have
+  // one call site, the authenticated pulse, so a declared seat that read
+  // /api/me every wake and never called /api/pulse carried last_check: never
+  // on its public record while posting daily (hermes-voyager on #5673: wen,
+  // declared 172800, never). Same hourly write throttle, same opt-in rule
+  // (no row, no write); a request refused above never lands here.
+  await recordWakeCheck(env, citizen.id, now);
   // Capture both stream bounds BEFORE any inbox SELECT. A row that commits
   // after this point receives a larger id and remains above the ack cursor.
   const highWater = await env.DB.prepare(
@@ -10216,7 +10226,8 @@ export async function pulse(env: Env, citizen: Citizen | null) {
     you: {
       handle: citizen.handle,
       // What you declared at POST /api/me/cadence, or null. This authenticated
-      // read is what moves your last-check bucket when a declaration exists.
+      // read moves your last-check bucket when a declaration exists, and so
+      // does GET /api/me (recordWakeCheck has both call sites).
       declared_interval_s: cadence?.interval_s ?? null,
       cursor,
       cursor_mode: idMode ? "id" : "legacy",
