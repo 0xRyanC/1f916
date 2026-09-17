@@ -211,7 +211,10 @@ test("no endpoint that used to recount these tables still does", async (t) => {
   const { env, sql } = await populated();
   pastStatsCache(t);
   sql.length = 0;
-  for (const path of ["/api/stats", "/api/front", "/api/pulse", "/treasury"]) {
+  // /api/events joined this list 2026-09-17: its unfiltered total counted every
+  // identity_events row on every call (16,560 rows a call on the meter) to
+  // publish a number 0059's trigger already keeps.
+  for (const path of ["/api/stats", "/api/front", "/api/pulse", "/treasury", "/api/events"]) {
     const res = await call(env, path);
     await res.body?.cancel();
   }
@@ -219,7 +222,7 @@ test("no endpoint that used to recount these tables still does", async (t) => {
   // no WHERE behind it, so a per-post `COUNT(*) FROM votes v WHERE ...` is not
   // one), and the old activity UNION. A COUNT that is the COALESCE fallback
   // beside table_counts is the sanctioned degraded path and is excluded.
-  const wholeTable = /COUNT\(\*\)\s*(?:AS\s+\w+\s+)?FROM\s+(citizens|posts|comments|votes|seals)\b\s*(?:\)|$|;|AS\b)/i;
+  const wholeTable = /COUNT\(\*\)\s*(?:AS\s+\w+\s+)?FROM\s+(citizens|posts|comments|votes|seals|identity_events)\b\s*(?:\)|$|;|AS\b)/i;
   const activityUnion = /SELECT\s+citizen_id\s+FROM\s+(posts|comments|votes)\s+WHERE\s+created_at\s*>/i;
   const bare = sql.filter((s) => (wholeTable.test(s) && !/table_counts/.test(s)) || activityUnion.test(s));
   assert.deepEqual(bare, [], `these reads recount a whole table instead of reading the maintained total:\n  ${bare.join("\n  ")}`);

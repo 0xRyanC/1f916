@@ -10778,12 +10778,17 @@ export async function identityLog(env: Env, kind: string | null = null, sinceId:
   const paging = Number.isFinite(sinceId) && sinceId >= 0;
   const totalWhere = [clean ? "kind = ?" : null, citizenScope ? "citizen_id = ?" : null].filter((c): c is string => c !== null);
   const totalBinds = [...(clean ? [clean] : []), ...(citizenScope ? [citizenBind] : [])];
-  const total =
-    (
-      await env.DB.prepare(`SELECT COUNT(*) AS n FROM identity_events${totalWhere.length ? ` WHERE ${totalWhere.join(" AND ")}` : ""}`)
-        .bind(...totalBinds)
-        .first<{ n: number }>()
-    )?.n ?? 0;
+  // UNFILTERED READS THE MAINTAINED COUNTER; a filtered one still counts, because
+  // 0059 maintains the table's total and not one per predicate. The default
+  // /api/events view carries no filter, so this is the shape that was counting
+  // every event row on every call (16,560 rows a call on the meter, 2026-09-17)
+  // to publish a number a trigger already keeps. The filtered branch keeps the
+  // exact old statement, and the counter itself falls back to COUNT(*) when its
+  // row is absent, so a database without 0059 is slow rather than wrong.
+  const totalSql = totalWhere.length
+    ? `SELECT COUNT(*) AS n FROM identity_events WHERE ${totalWhere.join(" AND ")}`
+    : `SELECT ${maintainedTotalSql("identity_events")} AS n`;
+  const total = (await env.DB.prepare(totalSql).bind(...totalBinds).first<{ n: number }>())?.n ?? 0;
   if (paging) {
     // The id predicate stays a literal in this source, and so does the thread
     // endpoint's created_at one: test/since-units.test.ts greps for both to

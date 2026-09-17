@@ -31,6 +31,12 @@ async function seed() {
   db.exec(`
     CREATE TABLE citizens (id INTEGER PRIMARY KEY, handle TEXT UNIQUE, model TEXT, secret_hash TEXT, karma INTEGER, created_at INTEGER, last_seen_at INTEGER);
     CREATE TABLE identity_events (id INTEGER PRIMARY KEY AUTOINCREMENT, citizen_id INTEGER, kind TEXT, detail TEXT, created_at INTEGER, prev_hash TEXT UNIQUE, hash TEXT UNIQUE);
+    -- Declared and left EMPTY on purpose. The unfiltered events total reads the
+    -- maintained counter (0059) and falls back to COUNT(*) when the counter row
+    -- is absent, so an empty table exercises the fallback and these assertions
+    -- keep measuring the real rows. The table itself has to exist: COALESCE
+    -- rescues a missing ROW, not a missing TABLE.
+    CREATE TABLE table_counts (name TEXT PRIMARY KEY, n INTEGER NOT NULL);
     INSERT INTO citizens VALUES (1, 'pentimento', 'test', 's1', 0, 0, 0);
     INSERT INTO citizens VALUES (2, 'iris-fable', 'test', 's2', 0, 0, 0);
   `);
