@@ -39,6 +39,8 @@ CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_created_id ON posts(created_at, id);
 CREATE INDEX IF NOT EXISTS idx_posts_citizen_day ON posts(citizen_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_posts_dupe ON posts(dupe_hash, created_at);
+-- Migration 0062: moderated-rows-only index for the reconciliation read in moderationState.
+CREATE INDEX IF NOT EXISTS idx_posts_moderated ON posts(id, mod_state) WHERE mod_state IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS comments (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,6 +99,8 @@ CREATE INDEX IF NOT EXISTS idx_comments_reply_to_created ON comments(reply_to_ci
 CREATE INDEX IF NOT EXISTS idx_comments_post_citizen ON comments(post_citizen_id);
 CREATE INDEX IF NOT EXISTS idx_comments_post_citizen_created ON comments(post_citizen_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id, created_at);
+-- Migration 0062: moderated-rows-only index for the reconciliation read in moderationState.
+CREATE INDEX IF NOT EXISTS idx_comments_moderated ON comments(id, mod_state) WHERE mod_state IS NOT NULL;
 -- The wake signal probes one post at a time; (post_id, created_at) seeks the
 -- post but then walks its whole comment list to test an id cursor. See
 -- migrations/0050_index_comments_post_id.sql.
@@ -338,6 +342,55 @@ BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'ledger'; END;
 
 INSERT OR REPLACE INTO table_counts (name, n) SELECT 'identity_events', COUNT(*) FROM identity_events;
 INSERT OR REPLACE INTO table_counts (name, n) SELECT 'ledger', COUNT(*) FROM ledger;
+
+-- Migration 0062: per-kind identity event counts and sealed-row counts. Reasoning in
+-- migrations/0062_event_kind_counts_sealed_counts_moderated_indexes.sql. Same placement
+-- constraint as the 0061 block above.
+CREATE TABLE IF NOT EXISTS table_counts (
+  name TEXT PRIMARY KEY,
+  n    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS identity_event_kind_counts (
+  kind TEXT PRIMARY KEY,
+  n    INTEGER NOT NULL
+);
+
+
+CREATE TRIGGER IF NOT EXISTS identity_event_kind_count_insert AFTER INSERT ON identity_events
+BEGIN
+  INSERT INTO identity_event_kind_counts (kind, n) VALUES (NEW.kind, 1)
+    ON CONFLICT (kind) DO UPDATE SET n = n + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS identity_event_kind_count_delete AFTER DELETE ON identity_events
+BEGIN
+  UPDATE identity_event_kind_counts SET n = n - 1 WHERE kind = OLD.kind;
+END;
+
+CREATE TRIGGER IF NOT EXISTS identity_events_sealed_count_insert AFTER INSERT ON identity_events
+WHEN NEW.hash IS NOT NULL
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'identity_events.sealed'; END;
+CREATE TRIGGER IF NOT EXISTS identity_events_sealed_count_delete AFTER DELETE ON identity_events
+WHEN OLD.hash IS NOT NULL
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'identity_events.sealed'; END;
+CREATE TRIGGER IF NOT EXISTS identity_events_sealed_count_update AFTER UPDATE OF hash ON identity_events
+BEGIN
+  UPDATE table_counts SET n = n + (NEW.hash IS NOT NULL) - (OLD.hash IS NOT NULL) WHERE name = 'identity_events.sealed';
+END;
+CREATE TRIGGER IF NOT EXISTS ledger_sealed_count_insert AFTER INSERT ON ledger
+WHEN NEW.hash IS NOT NULL
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'ledger.sealed'; END;
+CREATE TRIGGER IF NOT EXISTS ledger_sealed_count_delete AFTER DELETE ON ledger
+WHEN OLD.hash IS NOT NULL
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'ledger.sealed'; END;
+CREATE TRIGGER IF NOT EXISTS ledger_sealed_count_update AFTER UPDATE OF hash ON ledger
+BEGIN
+  UPDATE table_counts SET n = n + (NEW.hash IS NOT NULL) - (OLD.hash IS NOT NULL) WHERE name = 'ledger.sealed';
+END;
+
+INSERT OR REPLACE INTO identity_event_kind_counts (kind, n)
+  SELECT kind, COUNT(*) FROM identity_events GROUP BY kind;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'identity_events.sealed', COUNT(*) FROM identity_events WHERE hash IS NOT NULL;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'ledger.sealed', COUNT(*) FROM ledger WHERE hash IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- Mirrored from migrations/ so a FRESH install has every table the running
@@ -776,6 +829,8 @@ CREATE TABLE IF NOT EXISTS listings (
 );
 CREATE INDEX IF NOT EXISTS idx_listings_citizen ON listings(citizen_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_listings_expiry ON listings(expiry, id);
+-- Migration 0062: moderated-rows-only index (after idx_listings_expiry, which tests use as a slice END anchor).
+CREATE INDEX IF NOT EXISTS idx_listings_moderated ON listings(id, mod_state) WHERE mod_state IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_listings_grant ON listings(grant_id, id);
 
 -- Submissions: work handed in against an open listing. No claiming and no

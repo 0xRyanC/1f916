@@ -62,6 +62,7 @@ const BOUNDED_TABLES = {
   table_counts: "one row per maintained counter (migration 0051)",
   nulls_buckets: "grows ~24 rows a day by construction; reads are bucket sums (migration 0056)",
   d1_migrations: "one row per migration",
+  identity_event_kind_counts: "one row per identity event kind (migration 0062); grows with the kinds the code defines, not with events",
 };
 
 const normalize = (sql) =>
@@ -113,7 +114,12 @@ function classify(db, tables, sql) {
   // Exempted NARROWLY: one scan of T per occurrence of that exact text, so a
   // second, genuine scan of T in the same statement is still reported.
   const fallbackCredit = new Map();
-  for (const m of sql.matchAll(/COALESCE\(\(SELECT n FROM table_counts WHERE name = '([a-z_]+)'\), \(SELECT COUNT\(\*\) FROM \1\)\)/g)) {
+  // Also credits a filtered fallback under a sub-named counter, e.g.
+  //   COALESCE((SELECT n FROM table_counts WHERE name = 'ledger.sealed'),
+  //            (SELECT COUNT(*) FROM ledger WHERE id >= ? AND hash IS NOT NULL))
+  // (migration 0062): still one read of that same table, still only on a
+  // database missing the counter row.
+  for (const m of sql.matchAll(/COALESCE\(\(SELECT n FROM table_counts WHERE name = '([a-z_]+)(?:\.[a-z_]+)?'\), \(SELECT COUNT\(\*\) FROM \1(?: WHERE [^()]*)?\)\)/g)) {
     fallbackCredit.set(m[1], (fallbackCredit.get(m[1]) ?? 0) + 1);
   }
   for (const d of plan) {
@@ -143,7 +149,7 @@ function classify(db, tables, sql) {
     const isRange = /[<>]/.test(constraint);
     const hasEqualityPrefix = /\b\w+=\?/.test(constraint);
     const unbounded = m[1] === "SCAN" || (isRange && !hasEqualityPrefix && !canStopEarly);
-    if (unbounded && m[1] === "SCAN" && (fallbackCredit.get(table) ?? 0) > 0) {
+    if (unbounded && (fallbackCredit.get(table) ?? 0) > 0) {
       fallbackCredit.set(table, fallbackCredit.get(table) - 1);
       continue;
     }

@@ -132,25 +132,11 @@
         "identity_events: SEARCH identity_events USING INTEGER PRIMARY KEY (rowid<?)"
       ]
     },
-    "b8c8d859184c88ed": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM identity_events WHERE id >= ? AND hash IS NOT NULL",
-      "plan": [
-        "identity_events: SEARCH identity_events USING INTEGER PRIMARY KEY (rowid>?)"
-      ]
-    },
     "167363edac02de39": {
       "status": "debt",
       "sql": "SELECT COUNT(*) AS n FROM ledger WHERE id < ?",
       "plan": [
         "ledger: SEARCH ledger USING INTEGER PRIMARY KEY (rowid<?)"
-      ]
-    },
-    "bd2a00f9f710c38b": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM ledger WHERE id >= ? AND hash IS NOT NULL",
-      "plan": [
-        "ledger: SEARCH ledger USING INTEGER PRIMARY KEY (rowid>?)"
       ]
     },
     "ed13bfe58b9fa1c0": {

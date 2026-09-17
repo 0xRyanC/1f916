@@ -322,3 +322,56 @@ test("the legacy-manifest read seeks identity events by kind instead of walking 
   assert.match(plan, /idx_identity_events_kind \(kind=\?\)/, `expected a kind seek, got: ${plan}`);
   assert.doesNotMatch(plan, /TEMP B-TREE/, "and the (kind, id) index gives id order without a sort");
 });
+
+// Migration 0062: per-kind identity event totals, sealed-row counts, and the
+// moderated-rows-only indexes. Killing mutations: remove the kind insert trigger
+// -> the equality goes red; drop the SUM self-check (always trust the table) ->
+// the corrupted-seed assertion goes red; restore the sealed COUNT(*) in chain.ts
+// -> the forced sealed value goes red; drop a moderated index -> its plan
+// assertion goes red.
+test("/api/events totals_by_kind comes from maintained counts, self-checked against the event total", async () => {
+  const { env, db } = await populated();
+  db.exec("INSERT INTO identity_events (citizen_id, kind, detail, created_at) VALUES (90,'alpha','a',1),(90,'alpha','b',2),(91,'beta','c',3)");
+  const real = () =>
+    Object.fromEntries((db.prepare("SELECT kind, COUNT(*) n FROM identity_events GROUP BY kind ORDER BY kind").all() as { kind: string; n: number }[]).map((r) => [r.kind, r.n]));
+  const served = async () => ((await (await call(env, "/api/events")).json()) as { totals_by_kind: Record<string, number> }).totals_by_kind;
+  assert.deepEqual(await served(), real(), "maintained per-kind totals equal the GROUP BY");
+  // Move one count between kinds, keeping the sum: only a read of the table can
+  // serve this, and the self-check cannot notice it, which is what proves the
+  // counter path is the one serving.
+  db.exec("UPDATE identity_event_kind_counts SET n = n + 1 WHERE kind = 'alpha'; UPDATE identity_event_kind_counts SET n = n - 1 WHERE kind = 'beta'");
+  assert.equal((await served()).alpha, 3, "the served totals come from identity_event_kind_counts");
+  // Break the sum: the self-check must refuse the table and count for real.
+  db.exec("UPDATE identity_event_kind_counts SET n = n + 50 WHERE kind = 'alpha'");
+  assert.deepEqual(await served(), real(), "a table disagreeing with the maintained total is never served");
+});
+
+test("chain attestation sealed_entries_total comes from the maintained sealed count", async () => {
+  const { attest } = await import("../src/chain.ts");
+  const { env, db } = await populated();
+  const DB = (env as unknown as { DB: never }).DB;
+  db.exec(`INSERT INTO identity_events (citizen_id, kind, detail, created_at, prev_hash, hash) VALUES
+    (90, 'test', 'unsealed', 1, NULL, NULL),
+    (90, 'test', 's1', 2, 'p1', 'h1'),
+    (91, 'test', 's2', 3, 'h1', 'h2')`);
+  const realSealed = Number((db.prepare("SELECT COUNT(*) n FROM identity_events WHERE hash IS NOT NULL").get() as { n: number }).n);
+  assert.equal(realSealed, 2, "fixture holds sealed rows");
+  assert.equal(counter(db, "identity_events.sealed"), realSealed, "maintained sealed count equals the real one");
+  let a = (await attest(DB)) as unknown as { identity_log: { sealed_entries_total: number } };
+  assert.equal(a.identity_log.sealed_entries_total, realSealed);
+  db.exec("UPDATE table_counts SET n = 4242 WHERE name = 'identity_events.sealed'");
+  a = (await attest(DB)) as never;
+  assert.equal(a.identity_log.sealed_entries_total, 4242, "attestation reads the maintained sealed count");
+  db.exec("DELETE FROM table_counts WHERE name = 'identity_events.sealed'");
+  a = (await attest(DB)) as never;
+  assert.equal(a.identity_log.sealed_entries_total, realSealed, "a missing row is recounted, never served as 0");
+});
+
+test("moderation reconciliation reads use the moderated-rows-only indexes", () => {
+  const { db } = recording();
+  for (const [table, index] of [["posts", "idx_posts_moderated"], ["comments", "idx_comments_moderated"], ["listings", "idx_listings_moderated"]]) {
+    const plan = (db.prepare(`EXPLAIN QUERY PLAN SELECT id, mod_state FROM ${table} WHERE mod_state IS NOT NULL`).all() as { detail: string }[])
+      .map((r) => r.detail).join(" | ");
+    assert.match(plan, new RegExp(`COVERING INDEX ${index}`), `${table}: expected ${index}, got ${plan}`);
+  }
+});

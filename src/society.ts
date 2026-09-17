@@ -6370,12 +6370,33 @@ async function kindTotalsMap(env: Env, citizenId: number | null = null): Promise
   // serving board-wide totals beside one citizen's rows would report every kind
   // as short and call a complete answer truncated. The scope has to travel with
   // the filter or the arithmetic is about two different populations.
-  const { results } =
-    citizenId === null
-      ? await env.DB.prepare("SELECT kind, COUNT(*) AS n FROM identity_events GROUP BY kind ORDER BY kind").all<{ kind: string; n: number }>()
-      : await env.DB.prepare("SELECT kind, COUNT(*) AS n FROM identity_events WHERE citizen_id = ? GROUP BY kind ORDER BY kind")
-          .bind(citizenId)
-          .all<{ kind: string; n: number }>();
+  if (citizenId !== null) {
+    // Seeks idx_identity_events_citizen_kind: one citizen's rows, not the table.
+    const { results } = await env.DB.prepare("SELECT kind, COUNT(*) AS n FROM identity_events WHERE citizen_id = ? GROUP BY kind ORDER BY kind")
+      .bind(citizenId)
+      .all<{ kind: string; n: number }>();
+    return Object.fromEntries(results.map((r) => [r.kind, r.n]));
+  }
+  // Board-wide totals from identity_event_kind_counts (migration 0062), kept by
+  // trigger. The GROUP BY this replaces read every identity event on every
+  // GET /api/events: 16,519 rows per call, 34% of all D1 rows read at 16:45 UTC
+  // on 2026-09-17. SELF-CHECKED: the per-kind sum must equal 0061's maintained
+  // identity_events total, or the answer comes from the real GROUP BY instead,
+  // so a missing or partial seed is slow rather than wrong.
+  // A database without migration 0062 (or 0051's table_counts) falls through to
+  // the real GROUP BY rather than failing the request. Only that exact absence
+  // is caught; any other error still surfaces.
+  try {
+    const [kinds, total] = await Promise.all([
+      env.DB.prepare("SELECT kind, n FROM identity_event_kind_counts WHERE n > 0 ORDER BY kind").all<{ kind: string; n: number }>(),
+      env.DB.prepare(`SELECT ${maintainedTotalSql("identity_events")} AS n`).first<{ n: number }>(),
+    ]);
+    const sum = kinds.results.reduce((acc, r) => acc + Number(r.n), 0);
+    if (sum === Number(total?.n ?? -1)) return Object.fromEntries(kinds.results.map((r) => [r.kind, r.n]));
+  } catch (e) {
+    if (!/no such table: (identity_event_kind_counts|table_counts)/.test(String(e))) throw e;
+  }
+  const { results } = await env.DB.prepare("SELECT kind, COUNT(*) AS n FROM identity_events GROUP BY kind ORDER BY kind").all<{ kind: string; n: number }>();
   return Object.fromEntries(results.map((r) => [r.kind, r.n]));
 }
 
@@ -8285,6 +8306,15 @@ export const SCHEMA_TRIGGER_WITNESS_EXPECTED = [
   "identity_events_count_delete",
   "ledger_count_insert",
   "ledger_count_delete",
+  // 0062. Per-kind event totals and sealed-row counts.
+  "identity_event_kind_count_insert",
+  "identity_event_kind_count_delete",
+  "identity_events_sealed_count_insert",
+  "identity_events_sealed_count_delete",
+  "identity_events_sealed_count_update",
+  "ledger_sealed_count_insert",
+  "ledger_sealed_count_delete",
+  "ledger_sealed_count_update",
 ];
 
 // Served witness for numbered migrations that ADD triggers.

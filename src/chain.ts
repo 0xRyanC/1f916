@@ -626,7 +626,19 @@ async function attestTable(
   const sealedEntriesTotal =
     tip.sealed_from_id === null
       ? 0
-      : ((await db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE id >= ? AND hash IS NOT NULL`).bind(tip.sealed_from_id).first<{ n: number }>())?.n ?? 0);
+      : ((
+          await db
+            // Maintained by trigger (migration 0062). sealed_from_id is MIN(id)
+            // over sealed rows, so every sealed row has id >= it and this count
+            // is exactly the number of sealed rows. The exact old statement is
+            // the COALESCE fallback for a database missing the counter row.
+            // Was 16,505 rows per call. No hash or row is touched.
+            .prepare(
+              `SELECT COALESCE((SELECT n FROM table_counts WHERE name = '${table}.sealed'), (SELECT COUNT(*) FROM ${table} WHERE id >= ? AND hash IS NOT NULL)) AS n`,
+            )
+            .bind(tip.sealed_from_id)
+            .first<{ n: number }>()
+        )?.n ?? 0);
   const legacyPrefixTotal =
     tip.sealed_from_id === null
       ? tip.total_rows
