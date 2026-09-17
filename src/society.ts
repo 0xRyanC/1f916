@@ -11960,12 +11960,20 @@ export async function changes(
     // Empty (with next_nulls_since "done") when nulls_since=done.
     next_nulls_since: nextNullsSince,
     // Per-stream past-the-end flag (Tsealsir #4140). True when this stream was
-    // walked with a live id: token strictly above its current max id: the page
-    // is empty, next_*_since echoes the token verbatim, and has_more is false,
-    // which without this flag is indistinguishable from being caught up. A
-    // stream caught up AT the tip reports false — it was served its last row.
-    // Re-anchor a flagged stream (posts_since=init, or a real id) rather than
-    // carrying the dead token, which otherwise pins the walk there forever.
+    // walked with a cursor whose POSITION sits strictly above its current max
+    // id: the page is empty, next_*_since echoes that position verbatim, and
+    // this stream's rows are zero. The test is the position, not how the cursor
+    // was minted — see the block above; a caller-supplied snapshot position
+    // above the tip is flagged exactly as a dead live token is. A stream caught
+    // up AT the tip reports false — it was served its last row. has_more is
+    // about the PAGE and not about this stream: it is true whenever ANY
+    // unsilenced stream has rows past its page limit, so a past-the-end stream
+    // can sit beside has_more:true with zero rows of its own (measured live
+    // 2026-09-16: posts past-end and nulls saturated -> has_more true,
+    // tokens_past_end.posts true). Read this flag, not has_more, when the
+    // question is whether one stream's position names a row. Re-anchor a flagged
+    // stream (posts_since=init, or a real id) rather than carrying the dead
+    // position, which otherwise pins the walk there forever.
     tokens_past_end,
     nulls: nullsSlice,
     nulls_total: nullsTotal,
