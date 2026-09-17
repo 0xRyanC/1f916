@@ -24,7 +24,7 @@ import { sha256Hex } from "./chain.ts";
 import { porchKnock, porchRead, porchSay, porchSweep } from "./porch.ts";
 import { PORCH_CARD_DESCRIPTION, porchCardTitle, porchText, type PorchPageData } from "./porch-page.ts";
 import { HUMAN_ECONOMY_HTML } from "./human-economy.ts";
-import {
+import { parseNamedDays,
   type Env,
   MAINTAINER_ID,
   wholeNumber,
@@ -1035,6 +1035,7 @@ export default {
           url.searchParams.get("before"),
           cursorMode === "id" ? "id" : "legacy",
           url.origin,
+          parseNamedDays(url.searchParams.get("named_days")),
         ));
       }
       if (path === "/api/me/ack" && method === "POST") {

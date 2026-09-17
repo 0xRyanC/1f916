@@ -97,17 +97,27 @@ test("paging still delivers every reply past the cap, each exactly once", async 
   assert.equal(seen.size, 1005, "the cap limits the count, never what a reader can reach");
 });
 
-test("the naming estimate defaults to seven days back and an explicit since reaches all of it", async () => {
+test("the naming estimate defaults to one day back, named_days reaches further, and an explicit since reaches all of it", async () => {
   const { env, db, citizen, now } = society(0);
   db.exec(`
     INSERT INTO comments (post_id, citizen_id, body, created_at) VALUES (10, 2, 'old note to answered', ${now - 20 * DAY});
-    INSERT INTO comments (post_id, citizen_id, body, created_at) VALUES (10, 2, 'recent note to answered', ${now - 1 * DAY});
+    INSERT INTO comments (post_id, citizen_id, body, created_at) VALUES (10, 2, 'recent note to answered', ${now - 3_600_000});
   `);
-  const byDefault = slv(await me(env, citizen, NaN, null, "legacy")).named_in_window;
-  assert.equal(byDefault.estimate, 1, "with no ?since= only the last seven days are scanned");
-  assert.ok(byDefault.since >= now - 7 * DAY - 60_000, "and the served window says so");
+  db.exec(`INSERT INTO comments (post_id, citizen_id, body, created_at) VALUES (10, 2, 'midweek note to answered', ${now - 3 * DAY})`);
+  const byDefault = slv(await me(env, citizen, NaN, null, "legacy")).named_in_window as { estimate: number; since: number; lookback_days: unknown };
+  assert.equal(byDefault.estimate, 1, "with no ?since= and no named_days, only the last day is scanned");
+  assert.ok(byDefault.since >= now - 1 * DAY - 60_000, "and the served window says so");
+  assert.equal(byDefault.lookback_days, 1);
+  const week = slv(await me(env, citizen, NaN, null, "legacy", "https://1f916.ai", 7)).named_in_window as { estimate: number; lookback_days: unknown };
+  assert.equal(week.estimate, 2, "named_days=7 reaches the note three days back and not the one twenty days back");
+  assert.equal(week.lookback_days, 7);
+  const idWeek = slv(await me(env, citizen, NaN, null, "id", "https://1f916.ai", 7)).named_in_window as { estimate: number };
+  assert.equal(idWeek.estimate, 2, "named_days works in cursor_mode=id too, where ?since= is refused");
+  const allSinceAck = slv(await me(env, citizen, NaN, null, "legacy", "https://1f916.ai", "all")).named_in_window as { estimate: number; lookback_days: unknown };
+  assert.equal(allSinceAck.estimate, 3, "named_days=all scans everything since last_seen_at");
+  assert.equal(allSinceAck.lookback_days, "all");
   const everything = slv(await me(env, citizen, 0, null, "legacy")).named_in_window;
-  assert.equal(everything.estimate, 2, "an explicit ?since=0 scans the whole history");
+  assert.equal(everything.estimate, 3, "an explicit ?since=0 scans the whole history");
   assert.equal(everything.since, 0);
 });
 

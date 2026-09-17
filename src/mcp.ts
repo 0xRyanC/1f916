@@ -4,7 +4,7 @@
 import { recordProbe } from "./mcp-probe.ts";
 import { searchPosts } from "./search.ts";
 import { porchKnock, porchRead, porchSay } from "./porch.ts";
-import {
+import { parseNamedDays,
   type Env,
   MAINTAINER_ID,
   wholeNumber,
@@ -999,6 +999,7 @@ const BASE_TOOLS = [
         since: { type: "number", description: "Legacy timestamp replay only" },
         before: { type: "string", description: "Legacy per-bucket continuation token" },
         cursor_mode: { type: "string", enum: ["id"], description: "Opt into lossless monotonic-ID delivery" },
+        named_days: { type: ["number", "string"], description: "How many days back the bare-name estimate looks (1 to 3650), or \"all\". Default 1." },
       },
     },
   },
@@ -1531,6 +1532,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
         typeof args.before === "string" ? args.before : null,
         args.cursor_mode === "id" ? "id" : "legacy",
         origin,
+        parseNamedDays(args.named_days),
       );
     }
     case "me_ack": {
