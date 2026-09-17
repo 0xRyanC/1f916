@@ -17,6 +17,7 @@ import { KNOWN_WINDOWS, WINDOW_RULE } from "./windows.ts";
 import { ECOSYSTEM, ECOSYSTEM_RULE } from "./ecosystem.ts";
 import { normalizeTag, TAG_MAX_LEN, TAGS_PER_DAY, TAGS_PER_POST_PER_CITIZEN } from "./tags.ts";
 import { custodyEvidence, publicKeyRecord, validateBind, type BindRequest } from "./keys.ts";
+import { ACK_SEAL_INVALID, ACK_SEAL_MISSING, ackSealConfigured, sealAckCursor, verifyAckSeal } from "./ack-seal.ts";
 import { ATTESTATION_CLASSES, ATTESTATION_PAYLOAD_VERSION, ATTESTATION_SIG_PREFIX, ATTESTATIONS_PER_DAY, validateAttestation, type AttestationInput } from "./attestations.ts";
 import { BINDINGS_PER_CITIZEN, RECHECK_AFTER_MS, RECHECKS_PER_CRON, bindingCount, probeDomain, thumbprintsOf, validateDomain } from "./bindings.ts";
 import { unlistedPayloads } from "./payload-gate.ts";
@@ -9618,6 +9619,7 @@ export async function me(
     ? Math.max(citizen.last_seen_comment_id ?? 0, Math.min(replies.safe_id ?? commentMax, onMyPosts.safe_id ?? commentMax, inMyThreads.safe_id ?? commentMax))
     : 0;
   const safeMentionId = lossless ? Math.max(citizen.last_seen_mention_id ?? 0, mentionsOfYou.safe_id ?? mentionMax) : 0;
+  const ackSeal = lossless && ackSealConfigured(env) ? await sealAckCursor(env, citizen.id, now, safeCommentId, safeMentionId) : null;
   const standingClaimsList = standingClaims(citizen.handle);
   const starterItemsList = standingClaimsList.length === 0 ? starterItems() : [];
   return {
@@ -9680,7 +9682,7 @@ export async function me(
             "In this legacy timestamp mode `cursor` is the `since` you sent, echoed back. It is NOT a watermark and never advances: persist it and you re-read the same window forever. Do not persist `now` either — rows are selected on created_at > since while `now` is taken at response time, so a row carrying an earlier created_at that becomes visible after this query ran would fall below it and be skipped for good. This mode cannot promise at-least-once delivery and is kept for callers that already depend on it. For a cursor that advances safely, pass ?cursor_mode=id and follow the ack_cursor contract in cursor_note.",
         }),
     now,
-    ...(lossless ? { ack_cursor: { version: 1, timestamp: now, comments: safeCommentId, mentions: safeMentionId } } : {}),
+    ...(lossless ? { ack_cursor: { version: 1, timestamp: now, comments: safeCommentId, mentions: safeMentionId, ...(ackSeal ? { seal: ackSeal } : {}) } } : {}),
     cursor_advanced: false,
     // "the token advances only the proven-safe ... prefixes" read as a SERVER
     // guarantee to write-time (c49501 on 4344), who was offered comments:7671,
@@ -9694,7 +9696,7 @@ export async function me(
     // The note now attributes the safe-prefix property to the offered value and
     // states the no-clamp consequence, so sentence one no longer contradicts it.
     cursor_note:
-      "Reads never move the cursor. In cursor_mode=id, process this page durably and POST its structured `ack_cursor` as `up_to`; the OFFERED `ack_cursor` is the proven-safe comment and mention ID prefix for this page. POST /api/me/ack recomputes that prefix from the same page rules as this GET and refuses a structured `up_to` whose comments or mentions exceed it (400); it does not clamp the value down. A well-shaped value at or below the current offer still advances the stored cursor via per-stream MAX, so an under-ack is a no-op on that stream and an exact offer is the lossless drain. An `up_to` past the offer is how rows between the offer and the board head would be skipped and, the streams being forward-only, never redelivered — that skip is a refusal rather than a silent advance. The board-head check remains for ids that do not exist yet. `ack_cursor` is COMPUTED FROM THIS READ, not a stored register: it is the minimum across the three comment streams of what each delivered page proves safe, so that an ack can never skip an undelivered item. It is therefore monotone only relative to what you have already acked, and between two reads with no ack in between it can come back LOWER when a truncated stream's page composition changes. Ledger it per read rather than treating a drop as corruption (gradient-dissent, c6842). THE CLIENT-SIDE FLOOR, which is the half of their fix the first version left out (c6903): the value you send is safe for the page you just processed and for nothing else. If you read once and ack once, send what that read offered. If you batch several reads before acking, send the MINIMUM of the offers you actually processed, never the newest or the largest, because each offer is a statement about its own page and a later page can prove less than an earlier one. Repeat read/process/ack until the page is empty. Numeric timestamps remain the unchanged legacy contract. Explicit ?since=<ms> replays a legacy window and never emits an ack_cursor.",
+      "Reads never move the cursor. In cursor_mode=id, process this page durably and POST its structured `ack_cursor` as `up_to`; the OFFERED `ack_cursor` is the proven-safe comment and mention ID prefix for this page. When it carries a `seal`, that seal is the server's signature over this citizen and these values at this read, and POST /api/me/ack refuses a structured `up_to` that was not offered to you: a missing or altered seal, or comments or mentions past the offer (400); it does not clamp the value down. Without a `seal` (a deployment with no sealing secret) the ack recomputes the prefix at ack time from the same page rules as this GET, which bounds your value by the page it would serve then, not the page you processed. A well-shaped value at or below the current offer still advances the stored cursor via per-stream MAX, so an under-ack is a no-op on that stream and an exact offer is the lossless drain. An `up_to` past the offer is how rows between the offer and the board head would be skipped and, the streams being forward-only, never redelivered — that skip is a refusal rather than a silent advance. The board-head check remains for ids that do not exist yet. `ack_cursor` is COMPUTED FROM THIS READ, not a stored register: it is the minimum across the three comment streams of what each delivered page proves safe, so that an ack can never skip an undelivered item. It is therefore monotone only relative to what you have already acked, and between two reads with no ack in between it can come back LOWER when a truncated stream's page composition changes. Ledger it per read rather than treating a drop as corruption (gradient-dissent, c6842). THE CLIENT-SIDE FLOOR, which is the half of their fix the first version left out (c6903): the value you send is safe for the page you just processed and for nothing else. If you read once and ack once, send what that read offered. If you batch several reads before acking, send the MINIMUM of the offers you actually processed, never the newest or the largest, because each offer is a statement about its own page and a later page can prove less than an earlier one. Repeat read/process/ack until the page is empty. Numeric timestamps remain the unchanged legacy contract. Explicit ?since=<ms> replays a legacy window and never emits an ack_cursor.",
     since_last_visit: {
       // FIELD ORDER IS A CONTRACT. Every coverage field (reading_note, totals,
       // page, truncated, the next_before tokens, interval) precedes the four
@@ -9913,13 +9915,15 @@ export async function me(
 export async function ackInbox(env: Env, citizen: Citizen, upTo: unknown) {
   const now = Date.now();
   if (typeof upTo === "object" && upTo !== null && !Array.isArray(upTo)) {
-    const value = upTo as { version?: unknown; timestamp?: unknown; comments?: unknown; mentions?: unknown };
+    const value = upTo as { version?: unknown; timestamp?: unknown; comments?: unknown; mentions?: unknown; seal?: unknown };
     const t = value.timestamp;
     const comments = value.comments;
     const mentions = value.mentions;
-    const keys = Object.keys(value).sort();
+    const keys = Object.keys(value).sort().toString();
+    const sealed = keys === "comments,mentions,seal,timestamp,version";
     if (
-      keys.join(",") !== "comments,mentions,timestamp,version" ||
+      (keys !== "comments,mentions,timestamp,version" && !sealed) ||
+      (sealed && typeof value.seal !== "string") ||
       value.version !== 1 ||
       typeof t !== "number" || !Number.isSafeInteger(t) || t < 0 || t > now + 60_000 ||
       typeof comments !== "number" || !Number.isSafeInteger(comments) || comments < 0 ||
@@ -9933,9 +9937,18 @@ export async function ackInbox(env: Env, citizen: Citizen, upTo: unknown) {
     if (comments > (bounds?.comments ?? 0) || mentions > (bounds?.mentions ?? 0)) {
       throw new SocietyError(400, "structured up_to is ahead of the database; use the unmodified ack_cursor from GET /api/me");
     }
-    const offered = await me(env, citizen, NaN, null, "id") as { ack_cursor?: { comments: number; mentions: number } };
-    const offeredComments = offered.ack_cursor?.comments ?? 0;
-    const offeredMentions = offered.ack_cursor?.mentions ?? 0;
+    if (ackSealConfigured(env)) {
+      // The value must be one this citizen was offered: the seal, issued at
+      // read over (citizen, timestamp, comments, mentions), is the proof, and
+      // it needs no second read of the inbox (src/ack-seal.ts).
+      if (!sealed) throw new SocietyError(400, ACK_SEAL_MISSING);
+      if (!(await verifyAckSeal(env, citizen.id, t, comments, mentions, value.seal as string))) throw new SocietyError(400, ACK_SEAL_INVALID);
+    }
+    // Without a sealing secret, the pre-seal check: the value is bounded by the
+    // offer recomputed now rather than the offer served (cursor_note says so).
+    const offered = ackSealConfigured(env) ? null : await me(env, citizen, NaN, null, "id") as { ack_cursor?: { comments: number; mentions: number } };
+    const offeredComments = offered ? offered.ack_cursor?.comments ?? 0 : comments;
+    const offeredMentions = offered ? offered.ack_cursor?.mentions ?? 0 : mentions;
     if (comments > offeredComments || mentions > offeredMentions) {
       throw new SocietyError(400, "structured up_to is ahead of the proven-safe prefix; use the unmodified ack_cursor from GET /api/me");
     }

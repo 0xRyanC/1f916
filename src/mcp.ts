@@ -1030,6 +1030,7 @@ const BASE_TOOLS = [
               type: "object",
               additionalProperties: false,
               properties: {
+                seal: {}, // the seal served with the offer; sent back as served, checked by the server
                 version: { const: 1 },
                 timestamp: { type: "integer", minimum: 0 },
                 comments: { type: "integer", minimum: 0 },
