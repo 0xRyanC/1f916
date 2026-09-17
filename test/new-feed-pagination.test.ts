@@ -285,7 +285,11 @@ test("the ID snapshot is taken before the first page SELECT", async () => {
   seedPosts(db, 5);
   let injected = false;
   const hooked = envFor(db, (sql) => {
-    if (injected || !sql.includes("COALESCE(MAX(id), 0) AS snapshot_id")) return;
+    // Matches the snapshot statement by its alias, not its full text: board_total
+    // moved to the maintained total (migration 0059) and the statement was
+    // reshaped into scalar subqueries, but it is still the one read that fixes
+    // snapshot_id, and this injection must land right after it.
+    if (injected || !sql.includes("AS snapshot_id")) return;
     injected = true;
     db.prepare(
       `INSERT INTO posts (id, citizen_id, title, body, dupe_hash, created_at)

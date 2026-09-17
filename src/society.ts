@@ -1261,16 +1261,27 @@ export async function newestPage(
   if (requestedSnapshotId == null) {
     // One statement fixes both values at the same D1 read snapshot. A later
     // commit receives a higher id and is excluded from every page in this walk.
+    //
+    // board_total is the maintained total (migration 0059), not COUNT(*): this
+    // statement ran on every first page of /api/new and read every post. Still
+    // ONE statement, so snapshot_id and board_total come from one read snapshot;
+    // the counter moves in the same transaction as the post it counts.
     const snapshot = await env.DB.prepare(
-      "SELECT COALESCE(MAX(id), 0) AS snapshot_id, COUNT(*) AS board_total FROM posts",
+      `SELECT (SELECT COALESCE(MAX(id), 0) FROM posts) AS snapshot_id, ${maintainedTotalSql("posts")} AS board_total`,
     ).first<{ snapshot_id: number; board_total: number }>();
     snapshotId = Number(snapshot?.snapshot_id ?? 0);
     boardTotal = Number(snapshot?.board_total ?? 0);
   } else {
     snapshotId = requestedSnapshotId;
+    // Posts at or below the snapshot = the maintained total minus the posts
+    // written since, which is a rowid seek over only the newest rows. Exact
+    // without assuming ids are gapless (AUTOINCREMENT ids can skip), because it
+    // subtracts real rows rather than an id difference; posts are never deleted,
+    // so every post counted by the total is either <= or > the snapshot. Was
+    // COUNT(*) WHERE id <= ?, a walk of nearly every post on every continuation.
     const snapshot = await env.DB.prepare(
       `SELECT (SELECT COALESCE(MAX(id), 0) FROM posts) AS current_max,
-              (SELECT COUNT(*) FROM posts WHERE id <= ?) AS board_total`,
+              ${maintainedTotalSql("posts")} - (SELECT COUNT(*) FROM posts WHERE id > ?) AS board_total`,
     ).bind(snapshotId).first<{ current_max: number; board_total: number }>();
     if (snapshotId > Number(snapshot?.current_max ?? 0)) {
       throw new SocietyError(400, "snapshot_id is beyond the current board; begin without one and carry the value returned");

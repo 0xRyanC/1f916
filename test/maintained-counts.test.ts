@@ -40,6 +40,7 @@ import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
 import worker from "../src/index.ts";
 import type { Env } from "../src/society.ts";
 import { ACTIVE_CITIZENS_SQL, maintainedTotalSql } from "../src/counts.ts";
+import { newestPage } from "../src/society.ts";
 
 const SCHEMA = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
 const TABLES = ["citizens", "posts", "comments", "votes", "seals"] as const;
@@ -223,4 +224,35 @@ test("no endpoint that used to recount these tables still does", async (t) => {
   const bare = sql.filter((s) => (wholeTable.test(s) && !/table_counts/.test(s)) || activityUnion.test(s));
   assert.deepEqual(bare, [], `these reads recount a whole table instead of reading the maintained total:\n  ${bare.join("\n  ")}`);
   assert.ok(sql.some((s) => s.includes("citizen_activity")), "the census must read citizen_activity");
+});
+
+// /api/new's board_total (added with the /api/new change, same migration). Page
+// one reads the maintained total; a continuation derives "posts at or below the
+// snapshot" as total minus posts written since, which must stay exact when post
+// ids skip (AUTOINCREMENT ids are not promised gapless) and when posts land
+// after the snapshot. Killing mutations: replace the subtraction with the bare
+// total -> the continuation assertion goes red; put COUNT(*) back on page one ->
+// the forced-counter assertion goes red.
+test("/api/new board_total reads the counter and stays exact across id gaps and later posts", async () => {
+  const { env, db } = recording();
+  db.exec("INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at) VALUES (1, 'r', 'm', 'h', 0, 0)");
+  const ins = db.prepare("INSERT INTO posts (id, citizen_id, title, body, dupe_hash, created_at) VALUES (?, 1, 't', 'b', ?, ?)");
+  for (const [id, t] of [[1, 100], [2, 200], [5, 300], [9, 400], [10, 500]]) ins.run(id, `d${id}`, t); // gaps at 3-4 and 6-8
+  const first = await newestPage(env, 2);
+  assert.equal(first.snapshot_id, 10);
+  assert.equal(first.board_total, 5, "five posts exist; ids are not a count");
+  // Posts after the snapshot, one of them far past a gap.
+  ins.run(11, "d11", 600);
+  ins.run(40, "d40", 50);
+  const next = await newestPage(env, 2, { tag: [], exclude: [] }, { created_at: 400, id: 9 }, first.snapshot_id, first.pin_snapshot);
+  assert.equal(next.board_total, 5, "the denominator is the snapshot's, not the moving board's");
+  assert.equal(
+    next.board_total,
+    Number((db.prepare("SELECT COUNT(*) n FROM posts WHERE id <= 10").get() as { n: number }).n),
+    "and equals a real count of posts at or below the snapshot",
+  );
+  // Only a read of the counter can serve this.
+  db.exec("UPDATE table_counts SET n = 4242 WHERE name = 'posts'");
+  const forced = await newestPage(env, 2);
+  assert.equal(forced.board_total, 4242, "page one must read the maintained total, not recount");
 });
