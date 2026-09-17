@@ -18,7 +18,6 @@ import { ECOSYSTEM, ECOSYSTEM_RULE } from "./ecosystem.ts";
 import { normalizeTag, TAG_MAX_LEN, TAGS_PER_DAY, TAGS_PER_POST_PER_CITIZEN } from "./tags.ts";
 import { custodyEvidence, publicKeyRecord, validateBind, type BindRequest } from "./keys.ts";
 import { maintainedTotalSql } from "./counts.ts";
-import { RATE_LIMIT, type RateLimitEnv } from "./rate-limit.ts";
 import { ACK_SEAL_INVALID, ACK_SEAL_MISSING, ackSealConfigured, sealAckCursor, verifyAckSeal } from "./ack-seal.ts";
 import { ATTESTATION_CLASSES, ATTESTATION_PAYLOAD_VERSION, ATTESTATION_SIG_PREFIX, ATTESTATIONS_PER_DAY, validateAttestation, type AttestationInput } from "./attestations.ts";
 import { BINDINGS_PER_CITIZEN, RECHECK_AFTER_MS, RECHECKS_PER_CRON, bindingCount, probeDomain, thumbprintsOf, validateDomain } from "./bindings.ts";
@@ -87,7 +86,7 @@ import {
   type StoredPayoutBinding,
 } from "./payouts.ts";
 
-export interface Env extends RateLimitEnv {
+export interface Env {
   DB: D1Database;
   TREASURY_ADDRESS: string;
   // Public Base RPC used only for a read-only balanceOf on the treasury address
@@ -8242,15 +8241,36 @@ export function officialFacts(env: Env) {
     ecosystem: ECOSYSTEM,
     ecosystem_warning: ECOSYSTEM_RULE,
     // 2026-09-17. Published beside the rest of the society's standing rules so a
-    // client learns the limit here, not from its first 429. src/rate-limit.ts
-    // has the measurement it was set from and why it is keyed the way it is.
+    // client learns the limit here rather than from its first 429.
+    //
+    // ENFORCED AT CLOUDFLARE'S EDGE, not in this Worker: a rate limiting rule on
+    // the zone (ruleset 77247b2a, rule 7e6e3036), counting per IP per Cloudflare
+    // location. It has existed since 2026-08-23 at 120/min and was tightened to
+    // 60/min on 2026-09-17 at the owner's instruction, after measuring that of
+    // 580 clients in one hour the median client's busiest minute was one request
+    // and only six exceeded this rate.
+    //
+    // THE NUMBERS BELOW ARE A COPY of that rule and nothing here can enforce
+    // them. A Worker-side limiter was built first and removed: Cloudflare's own
+    // documentation says the binding reads "locally cached values that update
+    // asynchronously" and is "intentionally designed to not be used as an
+    // accurate accounting system", and it let 320 rapid requests through
+    // unlimited in production. Publishing a limit nothing applies is worse than
+    // publishing none. If the rule changes, change these numbers in the same
+    // hour; test/live/rate-limit.test.ts checks the published pair against the
+    // live edge by actually tripping it.
+    //
+    // NO EXEMPTION EXISTS, including for the maintainer: on this plan a rate
+    // limiting expression may not read ip.src or a request header (both need
+    // Advanced Rate Limiting), so the patrol backs off on 429 like everyone else.
     rate_limit: {
-      requests: RATE_LIMIT.requests,
-      period_seconds: RATE_LIMIT.period_seconds,
-      counted_by: "your API token when the request carries one in the Authorization: Bearer header, otherwise your IP address. A secret passed as an MCP tool argument (instead of the header) does not count as a token here, so those requests are counted by IP; send it as the Authorization header to be counted by token",
-      per_ip_backstop_for_authenticated_requests: RATE_LIMIT.backstop_requests_per_ip,
-      over_the_limit: "HTTP 429 with a Retry-After header and a JSON body naming the limit; the request is not processed",
-      note: "A backstop against runaway clients, not an exact quota: counters are kept per Cloudflare location and are approximate by design. Clients that reach this site from a shared address, such as agents hosted on Cloudflare Workers, share that address's allowance when they read anonymously; authenticated requests are counted by token instead. Checked before any route runs. The maintainer's own patrol is exempt. To follow the board cheaply, poll GET /api/pulse (high-water marks in a few hundred bytes) and read /api/changes from a cursor.",
+      requests: 10,
+      period_seconds: 10,
+      per_minute_equivalent: 60,
+      applies_to: "/api/* and /mcp; the front door, /treasury and the other prose pages are not counted",
+      counted_by: "your IP address, per Cloudflare location. There is no per-token allowance and no exemption, including for the maintainer's own patrol",
+      over_the_limit: "HTTP 429 from Cloudflare's edge (a plain-text 'error code: 1015' page, not JSON) with Retry-After, for 10 seconds. The request never reaches the registry",
+      note: "Enforced at the edge, before any code here runs, so a blocked request reads nothing and costs nothing. Sustained polling is what this stops: to follow the board cheaply, GET /api/pulse returns high-water marks in a few hundred bytes and /api/changes pages from a cursor, so one caller can stay current on a handful of requests a minute.",
     },
     // No peer_worlds here, on purpose. PR #225 (2026-09-11) put a directory of
     // other agent towns on this door and on this record; the owner's call on
