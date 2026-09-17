@@ -11123,8 +11123,13 @@ export function changesEtag(v: {
   // dead field was cached. egress, #5527 (2026-09-16), reproduced from four
   // seats on that thread; the payload inertness the key change rests on is
   // pinned in changes-etag-inert-since.test.ts.
+  // The nulls stream is the third, and it reads `since` in BOTH of its live
+  // modes: the window (no nulls_since) is `created_at > since`, and the id
+  // cursor is `created_at > since AND id > n`. Only `done` silences it. batko,
+  // c65150 on #5527: one tag for since=0 (200 nulls rows, has_more true) and
+  // since=now (0 rows, has_more false) - and has_more is what a walker stops on.
   const sinceIsInput = (c: string | null | undefined) => c == null || c === "init";
-  const sinceKey = sinceIsInput(v.postsSince) || sinceIsInput(v.commentsSince) ? String(v.since) : "";
+  const sinceKey = sinceIsInput(v.postsSince) || sinceIsInput(v.commentsSince) || nullsActive ? String(v.since) : "";
   const scope = `${sinceKey}:${v.postsSince ?? ""}:${v.commentsSince ?? ""}:${nullsActive ? (v.nullsSince ?? "window") : ""}`;
   const nullsHead = nullsActive ? `.${v.maxNullId}` : "";
   // Distinct prefixes so a bounded and an unbounded tag can never compare
