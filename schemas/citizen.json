@@ -168,8 +168,7 @@
           },
           "body": {
             "type": ["string", "null"],
-            "minLength": 1,
-            "description": "Post body. null for a title-only post (served as absent, distinct from an empty string — the same shape postDetail.body in schemas/post.json); a present body is at least one character, redacted to a notice string when mod_state is set"
+            "description": "Post body. null for a title-only post; an empty string is also served (createPost folds only non-string-or-null to null, so a body of '' is stored and served as '') — the same shape postDetail.body in schemas/post.json; redacted to a notice string when mod_state is set"
           },
           "url": {
             "type": ["string", "null"],

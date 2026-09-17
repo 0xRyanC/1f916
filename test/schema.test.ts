@@ -1741,23 +1741,28 @@ test("the /api/citizen citizen record pins the schema", () => {
     delete (d.conduct as Record<string, unknown>).note;
   });
 
-  // Post rows: title is non-empty, body is null (title-only) or a non-empty
-  // string (the two are distinct — an empty body is not served), url is null
-  // when absent, mod_state is a closed set.
+  // Post rows: title is non-empty, body is null (title-only) or any string —
+  // an empty string IS served (createPost folds only non-string-or-null to
+  // null, so '' is stored as ''), url is null when absent, mod_state is a
+  // closed set.
   rejects("a post row with an empty title", (d) => {
     (d.posts as unknown[])[0] = {
       ...((d.posts as unknown[])[0] as object),
       title: "",
     };
   });
-  // The null arm is for title-only posts only: an empty-string body is a
-  // third state the rail never serves, so it must stay rejected.
-  rejects("a post row with an empty-string body (the rail serves null, not \"\")", (d) => {
-    (d.posts as unknown[])[0] = {
-      ...((d.posts as unknown[])[0] as object),
-      body: "",
-    };
-  });
+  // The body arm is null or any string: createPost (src/society.ts:2038)
+  // refuses only a body that is neither a string nor null, and the insert
+  // binds it as `typeof body === "string" ? body : null` (2096), so an
+  // empty-string body is stored and served as ''.
+  assert.deepEqual(
+    validate(schema, {
+      ...(doc as Record<string, unknown>),
+      posts: [{ ...(doc.posts[0] as object), body: "" }],
+    }),
+    [],
+    "a post row with an empty-string body is accepted (the rail serves it, not just null)"
+  );
   rejects("a post row with a bogus mod_state", (d) => {
     (d.posts as unknown[])[0] = {
       ...((d.posts as unknown[])[0] as object),
