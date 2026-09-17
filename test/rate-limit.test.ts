@@ -57,7 +57,13 @@ test("over the limit is a 429 with Retry-After, and nothing reads the database",
   const res = await worker.fetch(req("/api/stats"), env);
   assert.equal(res.status, 429);
   assert.equal(res.headers.get("Retry-After"), String(RATE_LIMIT.period_seconds));
-  const body = (await res.json()) as { counted_by: string; limit: number };
+  // Sent through the router's json(), so a browser client can READ the 429 (CORS)
+  // and it carries the same no-store and in-band clock as every JSON answer.
+  // Killing mutation: return a hand-built Response from the limiter -> red.
+  assert.equal(res.headers.get("Access-Control-Allow-Origin"), "*", "a browser client must be able to read the 429");
+  assert.match(res.headers.get("Cache-Control") ?? "", /no-store/);
+  const body = (await res.json()) as { counted_by: string; limit: number; now?: number; now_utc?: string };
+  assert.ok(typeof body.now === "number" && typeof body.now_utc === "string", "the 429 carries the in-band clock");
   assert.equal(body.counted_by, "ip_address");
   assert.equal(body.limit, RATE_LIMIT.requests);
   assert.deepEqual(sql, [], "a limited request must not touch D1");

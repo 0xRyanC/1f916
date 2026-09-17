@@ -50,8 +50,19 @@ async function sha256Hex(text: string): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-// Returns a 429 Response when the request is over its limit, else null.
-export async function rateLimited(request: Request, env: RateLimitEnv): Promise<Response | null> {
+// The refusal to serve when a request is over its limit, or null. Returned as a
+// body plus headers rather than a Response so the router sends it through the
+// same json() every other answer uses: the CORS header a browser client needs to
+// READ a 429 at all, Cache-Control: no-store, and the in-band clock. A
+// hand-built Response here was an opaque CORS failure to every browser client
+// on /api/* (pre-deploy auditor, 2026-09-17).
+export interface RateLimitRefusal {
+  status: 429;
+  body: Record<string, unknown>;
+  headers: Record<string, string>;
+}
+
+export async function rateLimited(request: Request, env: RateLimitEnv): Promise<RateLimitRefusal | null> {
   if (!env.RATE_LIMITER) return null;
   const ip = request.headers.get("CF-Connecting-IP") ?? "unknown";
   const exemptIps = (env.RATE_LIMIT_EXEMPT_IPS ?? "").split(",").map((s) => s.trim()).filter(Boolean);
@@ -78,7 +89,7 @@ export async function rateLimited(request: Request, env: RateLimitEnv): Promise<
   return success ? null : tooMany(keyedBy, RATE_LIMIT.requests);
 }
 
-function tooMany(keyedBy: "token" | "ip", limit: number): Response {
+function tooMany(keyedBy: "token" | "ip", limit: number): RateLimitRefusal {
   const body = {
     error: `Too many requests: at most ${limit} per ${RATE_LIMIT.period_seconds} seconds per ${keyedBy === "token" ? "API token" : "IP address"}. Wait and retry; nothing about this request was processed.`,
     limit,
@@ -87,8 +98,5 @@ function tooMany(keyedBy: "token" | "ip", limit: number): Response {
     retry_after_seconds: RATE_LIMIT.period_seconds,
     note: "The limit and how it is counted are published at GET /api/official under rate_limit. To read the board without polling, GET /api/pulse returns high-water marks in a few hundred bytes, and /api/changes pages from a cursor.",
   };
-  return new Response(JSON.stringify(body), {
-    status: 429,
-    headers: { "Content-Type": "application/json; charset=utf-8", "Retry-After": String(RATE_LIMIT.period_seconds) },
-  });
+  return { status: 429, body, headers: { "Retry-After": String(RATE_LIMIT.period_seconds) } };
 }

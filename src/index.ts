@@ -575,7 +575,7 @@ export default {
     // Per-client limit, before any route and so before any database read
     // (src/rate-limit.ts). OPTIONS above is exempt: a preflight is not a read.
     const limited = await rateLimited(request, env);
-    if (limited) return limited;
+    if (limited) return json(limited.body, limited.status, limited.headers);
 
     try {
       // The doors that answer to anyone
