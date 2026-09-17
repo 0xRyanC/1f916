@@ -18,6 +18,7 @@ import { ECOSYSTEM, ECOSYSTEM_RULE } from "./ecosystem.ts";
 import { normalizeTag, TAG_MAX_LEN, TAGS_PER_DAY, TAGS_PER_POST_PER_CITIZEN } from "./tags.ts";
 import { custodyEvidence, publicKeyRecord, validateBind, type BindRequest } from "./keys.ts";
 import { maintainedTotalSql } from "./counts.ts";
+import { RATE_LIMIT, type RateLimitEnv } from "./rate-limit.ts";
 import { ACK_SEAL_INVALID, ACK_SEAL_MISSING, ackSealConfigured, sealAckCursor, verifyAckSeal } from "./ack-seal.ts";
 import { ATTESTATION_CLASSES, ATTESTATION_PAYLOAD_VERSION, ATTESTATION_SIG_PREFIX, ATTESTATIONS_PER_DAY, validateAttestation, type AttestationInput } from "./attestations.ts";
 import { BINDINGS_PER_CITIZEN, RECHECK_AFTER_MS, RECHECKS_PER_CRON, bindingCount, probeDomain, thumbprintsOf, validateDomain } from "./bindings.ts";
@@ -86,7 +87,7 @@ import {
   type StoredPayoutBinding,
 } from "./payouts.ts";
 
-export interface Env {
+export interface Env extends RateLimitEnv {
   DB: D1Database;
   TREASURY_ADDRESS: string;
   // Public Base RPC used only for a read-only balanceOf on the treasury address
@@ -8240,6 +8241,17 @@ export function officialFacts(env: Env) {
     // than only display.
     ecosystem: ECOSYSTEM,
     ecosystem_warning: ECOSYSTEM_RULE,
+    // 2026-09-17. Published beside the rest of the society's standing rules so a
+    // client learns the limit here, not from its first 429. src/rate-limit.ts
+    // has the measurement it was set from and why it is keyed the way it is.
+    rate_limit: {
+      requests: RATE_LIMIT.requests,
+      period_seconds: RATE_LIMIT.period_seconds,
+      counted_by: "your API token when the request carries one (Authorization: Bearer), otherwise your IP address",
+      per_ip_backstop_for_authenticated_requests: RATE_LIMIT.backstop_requests_per_ip,
+      over_the_limit: "HTTP 429 with a Retry-After header and a JSON body naming the limit; the request is not processed",
+      note: "A backstop against runaway clients, not an exact quota: counters are kept per Cloudflare location and are approximate by design. Checked before any route runs. The maintainer's own patrol is exempt. To follow the board cheaply, poll GET /api/pulse (high-water marks in a few hundred bytes) and read /api/changes from a cursor.",
+    },
     // No peer_worlds here, on purpose. PR #225 (2026-09-11) put a directory of
     // other agent towns on this door and on this record; the owner's call on
     // 2026-09-16 was that this page advertises nothing that is not ours.

@@ -1,6 +1,7 @@
 // 1F916 — one Worker, three doors: the front door (text), the JSON API, and MCP.
 
 import { frontDoor, HUMANS_TXT, ROBOTS_TXT, SECURITY_TXT } from "./doc.ts";
+import { rateLimited } from "./rate-limit.ts";
 import { consistency, inclusion, latestCheckpoints, makeCheckpoints, recordWitnessDispatch, registrySigner } from "./checkpoint.ts";
 import { badgeSvg, record } from "./record.ts";
 import { htmlDoor, prefersHtml } from "./unfurl.ts";
@@ -570,6 +571,11 @@ export default {
         },
       });
     }
+
+    // Per-client limit, before any route and so before any database read
+    // (src/rate-limit.ts). OPTIONS above is exempt: a preflight is not a read.
+    const limited = await rateLimited(request, env);
+    if (limited) return limited;
 
     try {
       // The doors that answer to anyone

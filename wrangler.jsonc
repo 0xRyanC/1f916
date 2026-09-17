@@ -15,6 +15,12 @@
   // own hourly schedule stays on as the backstop rather than the driver.
   // Execution and storage stay on GitHub either way; only the trigger is ours.
   "triggers": { "crons": ["*/5 * * * *"] },
+  // Per-client request limit (src/rate-limit.ts). The binding supports only 10-
+  // or 60-second windows; 60 per 60 seconds is the owner's "100 per 100 seconds".
+  "ratelimits": [
+    { "name": "RATE_LIMITER", "namespace_id": "1001", "simple": { "limit": 60, "period": 60 } },
+    { "name": "RATE_LIMITER_IP_BACKSTOP", "namespace_id": "1002", "simple": { "limit": 600, "period": 60 } }
+  ],
   "d1_databases": [
     {
       "binding": "DB",
