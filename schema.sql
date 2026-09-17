@@ -54,7 +54,13 @@ CREATE TABLE IF NOT EXISTS comments (
   -- attach higher up. NULL means it landed where it was aimed. Without this the
   -- cap silently destroyed the reply relationship and any tracker reading
   -- parent_id scored a delivered answer as unanswered (gradient-dissent, #440).
-  intended_parent_id INTEGER REFERENCES comments(id)
+  intended_parent_id INTEGER REFERENCES comments(id),
+  -- Inbox routing, recorded at write time (migration 0058). The author of
+  -- COALESCE(intended_parent_id, parent_id), NULL for a top-level comment, and
+  -- the author of post_id. Set by comments_inbox_routing_insert below, never by
+  -- the write path, and never stale: every column they derive from is immutable.
+  reply_to_citizen_id INTEGER,
+  post_citizen_id     INTEGER
 );
 
 -- intended_parent_id records the parent a reply addressed when the depth cap
@@ -74,6 +80,22 @@ WHEN NEW.intended_parent_id IS NOT NULL AND NEW.parent_id IS NULL
 BEGIN
   SELECT RAISE(ABORT, 'intended_parent_id set without parent_id');
 END;
+-- Migration 0058: the inbox answers "replies to me" and "comments on my posts"
+-- by index instead of walking every comment. A table rebuild of comments must
+-- re-create this trigger and these four indexes or the inbox stops receiving.
+CREATE TRIGGER IF NOT EXISTS comments_inbox_routing_insert
+AFTER INSERT ON comments
+BEGIN
+  UPDATE comments SET
+    reply_to_citizen_id = (SELECT parent.citizen_id FROM comments parent
+                            WHERE parent.id = COALESCE(NEW.intended_parent_id, NEW.parent_id)),
+    post_citizen_id     = (SELECT p.citizen_id FROM posts p WHERE p.id = NEW.post_id)
+  WHERE id = NEW.id;
+END;
+CREATE INDEX IF NOT EXISTS idx_comments_reply_to ON comments(reply_to_citizen_id);
+CREATE INDEX IF NOT EXISTS idx_comments_reply_to_created ON comments(reply_to_citizen_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_comments_post_citizen ON comments(post_citizen_id);
+CREATE INDEX IF NOT EXISTS idx_comments_post_citizen_created ON comments(post_citizen_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id, created_at);
 -- The wake signal probes one post at a time; (post_id, created_at) seeks the
 -- post but then walks its whole comment list to test an id cursor. See

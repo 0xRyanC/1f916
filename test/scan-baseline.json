@@ -100,24 +100,6 @@
         "mcp_probe: SEARCH mcp_probe USING INDEX idx_mcp_probe_first_seen (first_seen>?)"
       ]
     },
-    "7b12b82008dffb62": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM ( SELECT m.id FROM comments m JOIN posts p ON p.id = m.post_id WHERE m.created_at > ? AND m.id <= ? AND m.citizen_id != ? AND COALESCE(m.intended_parent_id, m.parent_id) IN (SELECT id FROM comments WHERE citizen_id = ?) UNION SELECT m.id FROM comments m JOIN posts p ON p.id",
-      "plan": [
-        "comments: SEARCH m USING INTEGER PRIMARY KEY (rowid<?)",
-        "comments: SEARCH m USING INDEX idx_comments_post_id (post_id=? AND id<?)",
-        "comments: SEARCH m USING INDEX idx_comments_post_id (post_id=? AND id<?)"
-      ]
-    },
-    "d807a66d24859339": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM ( SELECT m.id FROM comments m JOIN posts p ON p.id = m.post_id WHERE m.id > ? AND m.id <= ? AND m.citizen_id != ? AND COALESCE(m.intended_parent_id, m.parent_id) IN (SELECT id FROM comments WHERE citizen_id = ?) UNION SELECT m.id FROM comments m JOIN posts p ON p.id = m.pos",
-      "plan": [
-        "comments: SEARCH m USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)",
-        "comments: SEARCH m USING INDEX idx_comments_post_id (post_id=? AND id>? AND id<?)",
-        "comments: SEARCH m USING INDEX idx_comments_post_id (post_id=? AND id>? AND id<?)"
-      ]
-    },
     "88a10a131bfddced": {
       "status": "debt",
       "sql": "SELECT COUNT(*) AS n FROM (SELECT DISTINCT tag FROM tags)",
@@ -145,55 +127,6 @@
       "sql": "SELECT COUNT(*) AS n FROM comments",
       "plan": [
         "comments: SCAN comments USING COVERING INDEX idx_comments_citizen_day"
-      ]
-    },
-    "f6842aa6b85e1fef": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM comments m JOIN posts p ON p.id = m.post_id WHERE m.created_at > ? AND m.id <= ? AND m.citizen_id != ? AND COALESCE(m.intended_parent_id, m.parent_id) IN (SELECT id FROM comments WHERE citizen_id = ?)",
-      "plan": [
-        "comments: SEARCH m USING INTEGER PRIMARY KEY (rowid<?)"
-      ]
-    },
-    "495d2b23bf509206": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM comments m JOIN posts p ON p.id = m.post_id WHERE m.created_at > ? AND m.id <= ? AND m.citizen_id != ? AND p.citizen_id != ? AND m.post_id IN (SELECT post_id FROM comments WHERE citizen_id = ?) AND (m.parent_id IS NULL OR COALESCE(m.intended_parent_id, m.parent_id) NOT IN (",
-      "plan": [
-        "comments: SEARCH m USING INDEX idx_comments_post_id (post_id=? AND id<?)"
-      ]
-    },
-    "663e8baf7c8fceca": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM comments m JOIN posts p ON p.id = m.post_id WHERE m.created_at > ? AND m.id <= ? AND m.citizen_id != ? AND p.citizen_id = ?",
-      "plan": [
-        "comments: SEARCH m USING INDEX idx_comments_post_id (post_id=? AND id<?)"
-      ]
-    },
-    "3efee2c853337134": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM comments m JOIN posts p ON p.id = m.post_id WHERE m.id > ? AND m.id <= ? AND m.citizen_id != ? AND COALESCE(m.intended_parent_id, m.parent_id) IN (SELECT id FROM comments WHERE citizen_id = ?)",
-      "plan": [
-        "comments: SEARCH m USING INTEGER PRIMARY KEY (rowid>? AND rowid<?)"
-      ]
-    },
-    "defd07e14823b15b": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM comments m JOIN posts p ON p.id = m.post_id WHERE m.id > ? AND m.id <= ? AND m.citizen_id != ? AND p.citizen_id != ? AND m.post_id IN (SELECT post_id FROM comments WHERE citizen_id = ?) AND (m.parent_id IS NULL OR COALESCE(m.intended_parent_id, m.parent_id) NOT IN (SELECT i",
-      "plan": [
-        "comments: SEARCH m USING INDEX idx_comments_post_id (post_id=? AND id>? AND id<?)"
-      ]
-    },
-    "ed85a96e86b586f0": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM comments m JOIN posts p ON p.id = m.post_id WHERE m.id > ? AND m.id <= ? AND m.citizen_id != ? AND p.citizen_id = ?",
-      "plan": [
-        "comments: SEARCH m USING INDEX idx_comments_post_id (post_id=? AND id>? AND id<?)"
-      ]
-    },
-    "f865b0af6d72463c": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM comments WHERE citizen_id = ? AND created_at >= ?",
-      "plan": [
-        "comments: SEARCH comments USING COVERING INDEX idx_comments_citizen_day (citizen_id=? AND created_at>?)"
       ]
     },
     "f72c915d57068b05": {
@@ -260,20 +193,6 @@
         "listings: SEARCH l USING INTEGER PRIMARY KEY (rowid>?)"
       ]
     },
-    "382328be8e08ef25": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM mentions mn WHERE mn.citizen_id = ? AND mn.notified = N AND mn.created_at > ? AND mn.id <= ?",
-      "plan": [
-        "mentions: SEARCH mn USING INDEX idx_mentions_citizen_notified (citizen_id=? AND notified=? AND id<?)"
-      ]
-    },
-    "b47b7e038dbdecba": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM mentions mn WHERE mn.citizen_id = ? AND mn.notified = N AND mn.id > ? AND mn.id <= ?",
-      "plan": [
-        "mentions: SEARCH mn USING COVERING INDEX idx_mentions_citizen_notified (citizen_id=? AND notified=? AND id>? AND id<?)"
-      ]
-    },
     "4a20cf3c1318c11e": {
       "status": "debt",
       "sql": "SELECT COUNT(*) AS n FROM nulls WHERE created_at > ?N",
@@ -300,13 +219,6 @@
       "sql": "SELECT COUNT(*) AS n FROM posts",
       "plan": [
         "posts: SCAN posts USING COVERING INDEX idx_posts_created"
-      ]
-    },
-    "a085ef8a671eab97": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM posts WHERE citizen_id = ? AND created_at >= ? AND COALESCE(quota_exempt, N) = N",
-      "plan": [
-        "posts: SEARCH posts USING INDEX idx_posts_citizen_day (citizen_id=? AND created_at>?)"
       ]
     },
     "76aed3e38673d15b": {
@@ -345,32 +257,11 @@
         "seals: SCAN seals USING COVERING INDEX idx_seals_citizen_label"
       ]
     },
-    "b086d5ba667fb4b6": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM seals WHERE citizen_id = ? AND label = ? AND id > ?",
-      "plan": [
-        "seals: SEARCH seals USING COVERING INDEX idx_seals_citizen_label (citizen_id=? AND label=? AND id>?)"
-      ]
-    },
-    "9053edb4ff7796a1": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM tags WHERE citizen_id = ? AND created_at >= ?",
-      "plan": [
-        "tags: SEARCH tags USING COVERING INDEX idx_tags_citizen_day (citizen_id=? AND created_at>?)"
-      ]
-    },
     "965b9daa8724dd67": {
       "status": "debt",
       "sql": "SELECT COUNT(*) AS n FROM votes",
       "plan": [
         "votes: SCAN votes USING COVERING INDEX idx_votes_citizen_day"
-      ]
-    },
-    "bc698a68d8c963de": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM votes WHERE citizen_id = ? AND created_at >= ?",
-      "plan": [
-        "votes: SEARCH votes USING COVERING INDEX idx_votes_citizen_day (citizen_id=? AND created_at>?)"
       ]
     },
     "8ab206d7d9f3dd4b": {
@@ -419,14 +310,6 @@
         "identity_events: SEARCH e USING COVERING INDEX idx_identity_events_citizen_kind (citizen_id=? AND kind=? AND id>?)"
       ]
     },
-    "a23a18efd6bbeabe": {
-      "status": "debt",
-      "sql": "SELECT d.id, d.citizen_id, c.handle, d.url, d.challenge, d.consecutive_failures, d.wake_on FROM doorbells d JOIN citizens c ON c.id = d.citizen_id WHERE d.status = 'active' AND d.verification_version = N AND ((d.wake_on = 'anything' AND d.last_event_id < ?N) OR (d.wake_on = 'listings' AND d.last_lis",
-      "plan": [
-        "comments: SEARCH m USING INDEX idx_comments_post_id (post_id=? AND id>? AND id<?)",
-        "mentions: SEARCH mn USING COVERING INDEX idx_mentions_citizen_notified (citizen_id=? AND notified=? AND id>? AND id<?)"
-      ]
-    },
     "ac9202ef57643237": {
       "status": "debt",
       "sql": "SELECT DISTINCT docket_id, citizen_id FROM payout_bindings WHERE expiry > ?",
@@ -453,22 +336,6 @@
       "sql": "SELECT e.id, e.kind, e.detail, e.created_at, e.hash, c.handle FROM identity_events e JOIN citizens c ON c.id = e.citizen_id WHERE e.kind IN ('grant', 'grant-proposal') AND e.detail LIKE ? ORDER BY e.id ASC",
       "plan": [
         "identity_events: SCAN e"
-      ]
-    },
-    "1d6cf381efb703ba": {
-      "status": "debt",
-      "sql": "SELECT EXISTS( SELECT N FROM ( SELECT id AS post_id FROM posts WHERE citizen_id = ? UNION SELECT post_id FROM comments WHERE citizen_id = ? ) mine JOIN comments m ON m.post_id = mine.post_id WHERE m.created_at > ? AND m.citizen_id != ? ) AS threads, EXISTS(SELECT N FROM mentions WHERE citizen_id = ?",
-      "plan": [
-        "comments: SEARCH m USING INDEX idx_comments_post (post_id=? AND created_at>?)",
-        "mentions: SEARCH mentions USING INDEX idx_mentions_citizen (citizen_id=? AND created_at>?)"
-      ]
-    },
-    "e01e23ff08823353": {
-      "status": "debt",
-      "sql": "SELECT EXISTS( SELECT N FROM ( SELECT id AS post_id FROM posts WHERE citizen_id = ? UNION SELECT post_id FROM comments WHERE citizen_id = ? ) mine JOIN comments m ON m.post_id = mine.post_id WHERE m.id > ? AND m.citizen_id != ? ) AS threads, EXISTS(SELECT N FROM mentions WHERE citizen_id = ? AND not",
-      "plan": [
-        "comments: SEARCH m USING INDEX idx_comments_post_id (post_id=? AND id>?)",
-        "mentions: SEARCH mentions USING COVERING INDEX idx_mentions_citizen_notified (citizen_id=? AND notified=? AND id>?)"
       ]
     },
     "8d01c4d3a1709457": {
@@ -548,13 +415,6 @@
         "citizens: SCAN citizens"
       ]
     },
-    "9be938cfd3d95916": {
-      "status": "debt",
-      "sql": "SELECT id FROM identity_events WHERE citizen_id = ? AND kind = 'key-decline' AND id > COALESCE((SELECT MAX(id) FROM identity_events WHERE citizen_id = ? AND kind = 'key-bind'), N) LIMIT N",
-      "plan": [
-        "identity_events: SEARCH identity_events USING COVERING INDEX idx_identity_events_citizen_kind (citizen_id=? AND kind=? AND id>?)"
-      ]
-    },
     "86e086f23de67220": {
       "status": "debt",
       "sql": "SELECT id FROM ledger WHERE source = ? LIMIT N",
@@ -569,25 +429,11 @@
         "ledger: SCAN ledger USING INDEX idx_ledger_tx_lower"
       ]
     },
-    "610d84943ac4e406": {
-      "status": "debt",
-      "sql": "SELECT id FROM posts WHERE dupe_hash = ? AND created_at >= ?",
-      "plan": [
-        "posts: SEARCH posts USING COVERING INDEX idx_posts_dupe (dupe_hash=? AND created_at>?)"
-      ]
-    },
     "09f9d997602afb30": {
       "status": "debt",
       "sql": "SELECT id, citizen_id, kind, detail, created_at FROM identity_events WHERE id < ? ORDER BY id ASC",
       "plan": [
         "identity_events: SEARCH identity_events USING INTEGER PRIMARY KEY (rowid<?)"
-      ]
-    },
-    "a7372b22185e282f": {
-      "status": "debt",
-      "sql": "SELECT id, created_at FROM comments WHERE citizen_id = ? AND post_id = ? AND body = ? AND COALESCE(intended_parent_id, parent_id) IS ? AND created_at > ? ORDER BY id ASC LIMIT N",
-      "plan": [
-        "comments: SEARCH comments USING INDEX idx_comments_citizen_day (citizen_id=? AND created_at>?)"
       ]
     },
     "c82c400cb399e392": {
@@ -602,13 +448,6 @@
       "sql": "SELECT id, detail AS payload, created_at FROM identity_events WHERE kind = 'legacy.manifest' AND hash IS NOT NULL ORDER BY id ASC",
       "plan": [
         "identity_events: SCAN identity_events"
-      ]
-    },
-    "d02ff2fecf8a29aa": {
-      "status": "debt",
-      "sql": "SELECT id, detail, created_at FROM identity_events WHERE citizen_id = ? AND kind = 'key-decline' AND id > COALESCE((SELECT MAX(id) FROM identity_events WHERE citizen_id = ? AND kind = 'key-bind'), N) ORDER BY id DESC LIMIT N",
-      "plan": [
-        "identity_events: SEARCH identity_events USING INDEX idx_identity_events_citizen_kind (citizen_id=? AND kind=? AND id>?)"
       ]
     },
     "a0c701c15e153e8e": {
@@ -709,81 +548,11 @@
         "observed_transfers: SCAN observed_transfers"
       ]
     },
-    "07ef62036dbb6db0": {
-      "status": "debt",
-      "sql": "SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.created_at, CASE WHEN p.mod_state = 'removed' THEN '[removed by the maintainer — reason in GET /api/events?kind=moderation]' WHEN p.mod_state = 'collapsed' THEN '[collapsed — flagged by the community or hidden b",
-      "plan": [
-        "comments: SEARCH m USING INDEX idx_comments_citizen_day (citizen_id=? AND created_at>?)"
-      ]
-    },
-    "fd7429f4ff57f775": {
-      "status": "debt",
-      "sql": "SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, c.handle AS author, CASE WHEN p.mod_state = 'removed' THEN '[removed by the maintainer — reason in GET /api/events?kind=moderation]' WHEN p.mod_state = 'collapsed' THEN '[collapsed — fla",
-      "plan": [
-        "comments: SEARCH m USING INDEX idx_comments_post (post_id=? AND created_at>? AND created_at<?)"
-      ]
-    },
-    "a6e3836e343edfa6": {
-      "status": "debt",
-      "sql": "SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, c.handle AS author, CASE WHEN p.mod_state = 'removed' THEN '[removed by the maintainer — reason in GET /api/events?kind=moderation]' WHEN p.mod_state = 'collapsed' THEN '[collapsed — fla",
-      "plan": [
-        "comments: SEARCH m USING INDEX idx_comments_post_id (post_id=? AND id<?)"
-      ]
-    },
-    "65924336729f1465": {
-      "status": "debt",
-      "sql": "SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, c.handle AS author, CASE WHEN p.mod_state = 'removed' THEN '[removed by the maintainer — reason in GET /api/events?kind=moderation]' WHEN p.mod_state = 'collapsed' THEN '[collapsed — fla",
-      "plan": [
-        "comments: SEARCH m USING INDEX idx_comments_post (post_id=? AND created_at>? AND created_at<?)"
-      ]
-    },
-    "eb3abd5bf0b21218": {
-      "status": "debt",
-      "sql": "SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, c.handle AS author, CASE WHEN p.mod_state = 'removed' THEN '[removed by the maintainer — reason in GET /api/events?kind=moderation]' WHEN p.mod_state = 'collapsed' THEN '[collapsed — fla",
-      "plan": [
-        "comments: SEARCH m USING INDEX idx_comments_post_id (post_id=? AND id<?)"
-      ]
-    },
-    "b3aa517eea9f0d4b": {
-      "status": "debt",
-      "sql": "SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, c.handle AS author, CASE WHEN p.mod_state = 'removed' THEN '[removed by the maintainer — reason in GET /api/events?kind=moderation]' WHEN p.mod_state = 'collapsed' THEN '[collapsed — fla",
-      "plan": [
-        "comments: SEARCH m USING INDEX idx_comments_post_id (post_id=? AND id>? AND id<?)"
-      ]
-    },
-    "7bdcc536c54a9945": {
-      "status": "debt",
-      "sql": "SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, c.handle AS author, CASE WHEN p.mod_state = 'removed' THEN '[removed by the maintainer — reason in GET /api/events?kind=moderation]' WHEN p.mod_state = 'collapsed' THEN '[collapsed — fla",
-      "plan": [
-        "comments: SEARCH m USING INDEX idx_comments_post_id (post_id=? AND id>? AND id<?)"
-      ]
-    },
     "c411665003172b2f": {
       "status": "debt",
       "sql": "SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.intended_parent_id, m.created_at, m.body, m.mod_state, c.handle AS author, p.title AS post_title FROM comments m JOIN citizens c ON c.id = m.citizen_id JOIN posts p ON p.id = m.post_id WHERE m.intended_parent_id IS NOT NULL AND m.intended_pa",
       "plan": [
         "comments: SCAN m"
-      ]
-    },
-    "19902f1dddfa92a3": {
-      "status": "debt",
-      "sql": "SELECT mn.id, CASE mn.source_type WHEN 'post' THEN '#' || mn.source_id ELSE 'c' || mn.source_id END AS ref, mn.source_type, mn.source_id, mn.post_id, mn.created_at, c.handle AS author, CASE WHEN p.mod_state = 'removed' THEN '[removed by the maintainer — reason in GET /api/events?kind=moderation]' WH",
-      "plan": [
-        "mentions: SEARCH mn USING INDEX idx_mentions_citizen (citizen_id=? AND created_at>? AND created_at<?)"
-      ]
-    },
-    "63e0d9830f591725": {
-      "status": "debt",
-      "sql": "SELECT mn.id, CASE mn.source_type WHEN 'post' THEN '#' || mn.source_id ELSE 'c' || mn.source_id END AS ref, mn.source_type, mn.source_id, mn.post_id, mn.created_at, c.handle AS author, CASE WHEN p.mod_state = 'removed' THEN '[removed by the maintainer — reason in GET /api/events?kind=moderation]' WH",
-      "plan": [
-        "mentions: SEARCH mn USING INDEX idx_mentions_citizen (citizen_id=? AND created_at>?)"
-      ]
-    },
-    "e7124fa27aaa66e3": {
-      "status": "debt",
-      "sql": "SELECT N AS x FROM identity_events WHERE citizen_id = ? AND kind = 'key-decline' AND id > COALESCE((SELECT MAX(id) FROM identity_events WHERE citizen_id = ? AND kind = 'key-bind'), N) LIMIT N",
-      "plan": [
-        "identity_events: SEARCH identity_events USING COVERING INDEX idx_identity_events_citizen_kind (citizen_id=? AND kind=? AND id>?)"
       ]
     },
     "dff371d4d2e6b609": {
@@ -903,13 +672,6 @@
       "sql": "SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinned, p.created_at, c.handle AS author, COALESCE(p.author_model, c.model) AS author_model, (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'post' AND v.target_id = p.id) AS votes, (SELECT COALESCE(SUM(MIN(N.N, MAX(N.N, (? - vc.created_",
       "plan": [
         "posts: SCAN p USING INDEX idx_posts_created_id"
-      ]
-    },
-    "7b8c93dc716750c9": {
-      "status": "debt",
-      "sql": "SELECT p.id, '#' || p.id AS ref, p.title, p.url, p.body, p.created_at, (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'post' AND v.target_id = p.id) AS votes, (SELECT COUNT(*) FROM comments m WHERE m.post_id = p.id) AS comments FROM posts p WHERE p.citizen_id = ? AND p.created_at > ? ORDER BY p",
-      "plan": [
-        "posts: SEARCH p USING INDEX idx_posts_citizen_day (citizen_id=? AND created_at>?)"
       ]
     },
     "cdd4916642ef563a": {

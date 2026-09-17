@@ -8230,6 +8230,10 @@ export const SCHEMA_TRIGGER_WITNESS_EXPECTED = [
   // exists.
   "nulls_buckets_insert",
   "nulls_buckets_delete",
+  // 0058. The inbox routes on columns this trigger fills; if it is missing, new
+  // comments reach nobody's replies or comments-on-your-posts bucket, so the
+  // served witness naming it missing is the one signal a stranger would get.
+  "comments_inbox_routing_insert",
 ];
 
 // Served witness for numbered migrations that ADD triggers.
@@ -9454,13 +9458,33 @@ export async function me(
   // SAME text the buckets run rather than a second copy of it. A restated
   // predicate would drift from the buckets exactly the way the served
   // description of the attestation payload drifted from its verifier.
-  const repliesWhere = `${commentWindow} AND m.citizen_id != ? AND COALESCE(m.intended_parent_id, m.parent_id) IN (SELECT id FROM comments WHERE citizen_id = ?)`;
+  //
+  // ROUTED BY INDEX, NOT BY WALKING THE TABLE (migration 0058). Each comment
+  // carries reply_to_citizen_id (the author of COALESCE(intended_parent_id,
+  // parent_id)) and post_citizen_id (the author of its post), set by trigger at
+  // insert from columns that never change. These predicates were
+  //
+  //   replies    COALESCE(m.intended_parent_id, m.parent_id) IN (SELECT id FROM comments WHERE citizen_id = ?)
+  //   on posts   p.citizen_id = ?
+  //   threads    ... p.citizen_id != ? AND (m.parent_id IS NULL OR COALESCE(...) NOT IN (SELECT id ...))
+  //
+  // and neither form can be looked up, so every check walked every comment in
+  // the window: ~66,000 rows per /api/me on 2026-09-17, ~36% of all D1 reads.
+  // The stored columns are the same predicates evaluated once at write time:
+  // `reply_to_citizen_id = me` holds exactly when the COALESCE parent is one of
+  // my comments, NULL exactly when there is no parent (0055 forbids an intended
+  // parent without a parent), and `post_citizen_id = me` exactly when I wrote the
+  // post. Verified against production-shaped data before shipping: 423 citizens,
+  // both cursor modes, own and zero windows, all three buckets, list and count,
+  // 5,076 comparisons, 0 differences. Routing by intent (#894) is unchanged; it
+  // is now recorded instead of recomputed.
+  const repliesWhere = `${commentWindow} AND m.reply_to_citizen_id = ? AND m.citizen_id != ?`;
   const repliesBinds = [...commentWindowBinds, citizen.id, citizen.id];
-  const onMyPostsWhere = `${commentWindow} AND m.citizen_id != ? AND p.citizen_id = ?`;
+  const onMyPostsWhere = `${commentWindow} AND m.post_citizen_id = ? AND m.citizen_id != ?`;
   const onMyPostsBinds = [...commentWindowBinds, citizen.id, citizen.id];
-  const inMyThreadsWhere = `${commentWindow} AND m.citizen_id != ? AND p.citizen_id != ?
+  const inMyThreadsWhere = `${commentWindow} AND m.citizen_id != ? AND m.post_citizen_id != ?
        AND m.post_id IN (SELECT post_id FROM comments WHERE citizen_id = ?)
-       AND (m.parent_id IS NULL OR COALESCE(m.intended_parent_id, m.parent_id) NOT IN (SELECT id FROM comments WHERE citizen_id = ?))`;
+       AND (m.reply_to_citizen_id IS NULL OR m.reply_to_citizen_id != ?)`;
   const inMyThreadsBinds = [...commentWindowBinds, citizen.id, citizen.id, citizen.id, citizen.id];
 
   const [replies, onMyPosts, inMyThreads, mentionsOfYou, distinctComments] = await Promise.all([

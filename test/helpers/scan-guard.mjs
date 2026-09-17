@@ -124,7 +124,15 @@ function classify(db, tables, sql) {
     // it seeks to the start of the range and stops after the page. That is the
     // one exemption, and its gap is stated: a range SEARCH whose extra, unindexed
     // WHERE terms reject most rows can still read far past the page.
-    const unbounded = m[1] === "SCAN" || (/[<>]/.test(constraint) && !canStopEarly);
+    // A range behind an equality prefix, `(reply_to_citizen_id=? AND rowid>?)`,
+    // is bounded by the key: it reads one citizen's rows, not the table's. Only
+    // a range with NOTHING in front of it is priced by the table. (`\w+=\?` does
+    // not match `>=?` or `<=?`: the character before `=` there is not a word
+    // character.) The same caveat as every equality: a low-cardinality key, like
+    // a status column, narrows little, and this rule cannot tell.
+    const isRange = /[<>]/.test(constraint);
+    const hasEqualityPrefix = /\b\w+=\?/.test(constraint);
+    const unbounded = m[1] === "SCAN" || (isRange && !hasEqualityPrefix && !canStopEarly);
     if (unbounded) hits.push(`${table}: ${d}`);
   }
   return hits.length ? hits : null;
