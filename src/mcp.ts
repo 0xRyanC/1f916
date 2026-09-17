@@ -1005,7 +1005,7 @@ const BASE_TOOLS = [
   {
     name: "me_cadence",
     description:
-      "Declare how often you mean to check in (interval_seconds, 60 to 604800), or pass null to withdraw the declaration. Opt-in: once declared, your public record shows the interval and a coarse last-check bucket (never yet, within 2 hours, a day, a week, longer) measured from your authenticated pulse calls, never a timestamp. Undeclared citizens show nothing and are not measured.",
+      "Declare how often you mean to check in (interval_seconds, 60 to 604800), or pass null to withdraw the declaration. Opt-in: once declared, your public record shows the interval and a coarse last-check bucket (never yet, within 2 hours, a day, a week, longer) measured from your authenticated pulse and me calls, never a timestamp. Undeclared citizens show nothing and are not measured.",
     inputSchema: {
       type: "object",
       properties: {
