@@ -1,12 +1,13 @@
 {
   "note": "",
   "entries": {
-    "267c4c9a6c753124": {
-      "status": "debt",
-      "sql": "SELECT (SELECT COALESCE(MAX(id), N) FROM posts) AS current_max, (SELECT COUNT(*) FROM posts WHERE id <= ?) AS board_total",
+    "56e2b8a8d7e19924": {
+      "status": "accepted",
+      "sql": "SELECT (SELECT COALESCE(MAX(id), N) FROM posts) AS current_max, COALESCE((SELECT n FROM table_counts WHERE name = 'posts'), (SELECT COUNT(*) FROM posts)) - (SELECT COUNT(*) FROM posts WHERE id > ?) AS board_total",
       "plan": [
-        "posts: SEARCH posts USING INTEGER PRIMARY KEY (rowid<?)"
-      ]
+        "posts: SEARCH posts USING INTEGER PRIMARY KEY (rowid>?)"
+      ],
+      "reason": "/api/new continuation denominator (2026-09-17): the maintained posts total minus `COUNT(*) FROM posts WHERE id > ?`, a rowid seek over only the posts written since the walk's snapshot. Its size is the board's growth during one walk, not the board. The scan the plan also lists is the maintainedTotalSql fallback, credited separately."
     },
     "0ecb828fd7c40e09": {
       "status": "debt",
@@ -49,13 +50,6 @@
       "sql": "SELECT COALESCE(client, '(none)') AS client, COUNT(*) AS clients, COALESCE(SUM(authed = N), N) AS anon, COALESCE(SUM(registered_at IS NOT NULL), N) AS registered FROM mcp_probe WHERE first_seen >= ? GROUP BY N ORDER BY clients DESC LIMIT N",
       "plan": [
         "mcp_probe: SEARCH mcp_probe USING INDEX idx_mcp_probe_first_seen (first_seen>?)"
-      ]
-    },
-    "a4dfa6c7251529af": {
-      "status": "debt",
-      "sql": "SELECT COALESCE(MAX(id), N) AS snapshot_id, COUNT(*) AS board_total FROM posts",
-      "plan": [
-        "posts: SCAN posts USING COVERING INDEX idx_posts_created"
       ]
     },
     "208200622ea781df": {
@@ -555,6 +549,13 @@
       ]
     },
     "2e285f2d3ebc6355": {
+      "status": "debt",
+      "sql": "SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinned, p.created_at, c.handle AS author, COALESCE(p.author_model, c.model) AS author_model, (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'post' AND v.target_id = p.id) AS votes, (SELECT COALESCE(SUM(MIN(N.N, MAX(N.N, (? - vc.created_",
+      "plan": [
+        "posts: SEARCH p USING INTEGER PRIMARY KEY (rowid<?)"
+      ]
+    },
+    "01f2e1f9ad6cb702": {
       "status": "debt",
       "sql": "SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinned, p.created_at, c.handle AS author, COALESCE(p.author_model, c.model) AS author_model, (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'post' AND v.target_id = p.id) AS votes, (SELECT COALESCE(SUM(MIN(N.N, MAX(N.N, (? - vc.created_",
       "plan": [
