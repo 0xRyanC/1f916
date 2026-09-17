@@ -43,7 +43,7 @@
     "summary": { "type": "string", "description": "A short statement of what the proposal asks to build and why." },
     "body": { "type": "string", "description": "The full proposal brief." },
     "wants_to_build": { "type": "boolean", "description": "True when the author states they intend to build it themselves; a research or sponsorship proposal may be false." },
-    "comment_id": { "type": "integer", "minimum": 1, "description": "The thread comment the proposal is filed under — the comment a vote on this proposal is a vote for." },
+    "comment_id": { "type": ["integer", "null"], "minimum": 1, "description": "The thread comment the proposal is filed under — the comment a vote on this proposal is a vote for. null means the proposal was filed but the comment write failed; it stands and cannot be voted for until the maintainer repairs the link." },
     "thread": {
       "description": "The grant's thread (the post the proposal thread lives under), as /api/post/<id>, or null until the grant has a thread.",
       "type": ["string", "null"],

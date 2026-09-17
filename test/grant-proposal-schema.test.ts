@@ -68,11 +68,19 @@ test("the grant proposal schema rejects the contract breaks it exists to catch",
     d.wants_to_build = 1;
   });
 
-  // The proposal names the comment it is filed under; losing it severs the
-  // ballot (a vote on a proposal is a vote on that comment).
+  // The proposal names the comment it is filed under; losing the key severs
+  // the ballot (a vote on a proposal is a vote on that comment). The key is
+  // always served, so it stays required.
   rejects("a proposal losing its comment_id", (d) => {
     delete d.comment_id;
   });
+
+  // A null comment_id is a state the code anticipates: the column is nullable
+  // and readProposal serves it raw (src/grants.ts), a ballot-eligible count
+  // filters with AND comment_id IS NOT NULL (src/grants.ts:267), and the
+  // migration comment says NULL only if the write failed — the proposal
+  // stands and cannot be voted for until the maintainer repairs the link.
+  assert.deepEqual(bend((d) => { d.comment_id = null; }), [], "a null comment_id is accepted: filed, ballot link not yet repaired");
 
   // The thread is /api/post/<id>, never a bare number.
   rejects("a thread that is a number instead of the /api/post link", (d) => {
