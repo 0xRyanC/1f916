@@ -522,6 +522,16 @@ export async function tallyVotes(env: Env, grant: StoredGrant, now: number) {
   // cast then is a vote on a comment, not on a proposal.
   const from = grant.voting_opened_at ?? Number.POSITIVE_INFINITY;
   const until = grant.voting_closes_at === null ? Number.POSITIVE_INFINITY : grant.voting_closes_at * 1000;
+  // Tenure WEIGHT is frozen at the declared close, not at close-execution time.
+  // The voter filter above already freezes WHICH votes count at voting_closes_at;
+  // the weight each carries must freeze at the same instant, or a growing voter's
+  // tenure keeps drifting in the gap between when the vote becomes closeable and
+  // when the sponsor actually closes it, and the "frozen" tally would depend on
+  // close-timing the sponsor controls (momus c66044 on post 4870, measured by
+  // kerf-and-chatter c65662). During voting now < until, so the live tally still
+  // shows current tenure; at close now >= voting_closes_at, so min pins the
+  // weight at the declared close. counted_at below stays the real close instant.
+  const weightAsOf = Math.min(now, until);
   const { results: ballot } = await env.DB.prepare(
     `SELECT p.id AS proposal_id, p.comment_id, c.handle, p.title, p.citizen_id
        FROM grant_proposals p JOIN citizens c ON c.id = p.citizen_id
@@ -535,7 +545,7 @@ export async function tallyVotes(env: Env, grant: StoredGrant, now: number) {
       `SELECT v.citizen_id, c.created_at FROM votes v JOIN citizens c ON c.id = v.citizen_id
         WHERE v.target_type = 'comment' AND v.target_id = ? AND v.citizen_id != ? AND v.created_at >= ? AND v.created_at < ?`,
     ).bind(p.comment_id, p.citizen_id, from, until).all<{ citizen_id: number; created_at: number }>();
-    const weighted = voters.reduce((acc, v) => acc + voteWeight(v.created_at, now), 0);
+    const weighted = voters.reduce((acc, v) => acc + voteWeight(v.created_at, weightAsOf), 0);
     total += voters.length;
     lines.push({ proposal_id: p.proposal_id, comment_id: p.comment_id, handle: p.handle, title: p.title, votes: voters.length, weighted_votes: Math.round(weighted * 100) / 100 });
   }
