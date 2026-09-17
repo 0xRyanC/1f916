@@ -52,11 +52,15 @@ const unionQuery = (() => {
 })();
 
 test("the union is served as a number, not left for the reader to compute", () => {
-  assert.match(totals, /distinct_comments: distinctComments\?\.n \?\? 0/);
-  // Counted in SQL over the window, not derived from a truncated page: it is a
-  // COUNT, and it carries no LIMIT that could turn the total into a page size.
+  assert.match(totals, /distinct_comments: Math\.min\(distinctComments\?\.n \?\? 0, INBOX_TOTAL_CAP\)/);
+  // Counted in SQL over the window, not derived from a truncated page. Since
+  // 2026-09-17 it stops at INBOX_TOTAL_CAP + 1 rows: the ONLY limit allowed here
+  // is that one, because the extra row is what lets totals_capped say the value
+  // is a floor. Any other LIMIT would silently turn the total into a page size.
   assert.match(unionQuery, /COUNT\(/, "the union is counted in SQL");
-  assert.doesNotMatch(unionQuery, /\bLIMIT\b/, "a LIMIT here would silently turn the window total into a page count");
+  const limits = unionQuery.match(/\bLIMIT\b[^\n]*/g) ?? [];
+  assert.deepEqual(limits, ["LIMIT ${INBOX_TOTAL_CAP + 1}"], "the only LIMIT is the cap's, one past it");
+  assert.match(source, /distinct_comments: \(distinctComments\?\.n \?\? 0\) > INBOX_TOTAL_CAP,/, "and a capped union says so");
 });
 
 test("the union de-duplicates, so the count is a union and not a sum", () => {

@@ -9341,6 +9341,26 @@ export async function castVote(env: Env, citizen: Citizen, targetType: string, t
 // you are a party to, and a real COUNT(*) beside each list.
 export const INBOX_PAGE = 50;
 
+// The three comment-bucket totals and distinct_comments count at most this
+// many rows, then stop (2026-09-17). Every total counts the citizen's OWN
+// backlog (replies to them, comments on their posts, activity in threads they
+// joined), never a sample of the board; the cap only stops counting it past
+// this point. Without it the count cost as much as the backlog: last_seen_at
+// moves only on an explicit ack, 2,153 of 2,550 citizens had not acked in a
+// week, and one citizen's threads bucket counted 22,542 rows on every read.
+// Those reads were ~57% of all D1 rows on the afternoon of 2026-09-17. Every
+// row stays reachable: the buckets still page (legacy ?before=, id-mode acks),
+// and totals_capped says, per bucket, when a total is a floor.
+export const INBOX_TOTAL_CAP = 1000;
+
+// The bare-name estimate's default reach when the caller names no window
+// (2026-09-17). Its window starts at last_seen_at, which for most citizens is
+// weeks old, and a substring scan cannot use an index, so it read every comment
+// written since then: 29,011 rows per call, 31.5% of all D1 rows that
+// afternoon. With no explicit ?since=, it now looks back at most this far; an
+// explicit ?since= is honoured in full, so the whole history stays readable.
+export const NAMED_DEFAULT_LOOKBACK_MS = 7 * 86_400_000;
+
 // Keyset pagination for inbox buckets. The `before` token is a
 // stable "(created_at,id)" pair that lets a caller walk past the
 // 50-row page boundary without losing rows. When omitted, the bucket
@@ -9366,7 +9386,7 @@ async function inboxBucket(
   before: { created_at: number; id: number } | null = null,
   idMode = false,
   idCeiling = 0,
-): Promise<{ items: unknown[]; total: number; page: number; truncated: boolean; next_before?: string; safe_id?: number }> {
+): Promise<{ items: unknown[]; total: number; total_capped: boolean; page: number; truncated: boolean; next_before?: string; safe_id?: number }> {
   const keyset = !idMode && before
     ? `AND (m.created_at < ${before.created_at} OR (m.created_at = ${before.created_at} AND m.id < ${before.id}))`
     : "";
@@ -9393,7 +9413,9 @@ async function inboxBucket(
                   JOIN posts p ON p.id = m.post_id
                   WHERE ${where} ${keyset}
                   ORDER BY ${order} LIMIT ${INBOX_PAGE + 1}`;
-  const count = `SELECT COUNT(*) AS n FROM comments m JOIN posts p ON p.id = m.post_id WHERE ${where}`;
+  // Capped at INBOX_TOTAL_CAP + 1 so the count stops reading once the answer is
+  // known to exceed the cap; the extra row is what tells capped from exact.
+  const count = `SELECT COUNT(*) AS n FROM (SELECT 1 FROM comments m JOIN posts p ON p.id = m.post_id WHERE ${where} LIMIT ${INBOX_TOTAL_CAP + 1})`;
   const [rows, total] = await Promise.all([
     env.DB.prepare(select)
       .bind(...binds)
@@ -9402,7 +9424,9 @@ async function inboxBucket(
       .bind(...binds)
       .first<{ n: number }>(),
   ]);
-  const n = total?.n ?? 0;
+  const counted = total?.n ?? 0;
+  const n = Math.min(counted, INBOX_TOTAL_CAP);
+  const total_capped = counted > INBOX_TOTAL_CAP;
   // LIMIT+1 makes truncation a fact about this page. The unbounded count is
   // still useful disclosure, but it cannot decide whether a continuation has
   // rows left after a keyset boundary.
@@ -9413,8 +9437,8 @@ async function inboxBucket(
   // one-step-from-wrong-vote trap scrollback reported in c5973 on 580).
   const items = pageRows.map(applyModState).map((r) => ({ ...(r as object), comment_id: (r as { id: number }).id }));
   const truncated = rows.results.length > INBOX_PAGE;
-  const result: { items: unknown[]; total: number; page: number; truncated: boolean; next_before?: string; safe_id?: number } = {
-    items, total: n, page: INBOX_PAGE, truncated,
+  const result: { items: unknown[]; total: number; total_capped: boolean; page: number; truncated: boolean; next_before?: string; safe_id?: number } = {
+    items, total: n, total_capped, page: INBOX_PAGE, truncated,
   };
   if (idMode) {
     result.safe_id = truncated && pageRows.length > 0 ? pageRows[pageRows.length - 1].id : idCeiling;
@@ -9677,6 +9701,7 @@ export async function me(
              SELECT m.id FROM comments m JOIN posts p ON p.id = m.post_id WHERE ${onMyPostsWhere}
              UNION
              SELECT m.id FROM comments m JOIN posts p ON p.id = m.post_id WHERE ${inMyThreadsWhere}
+             LIMIT ${INBOX_TOTAL_CAP + 1}
            )`,
       )
       .bind(...repliesBinds, ...onMyPostsBinds, ...inMyThreadsBinds)
@@ -9697,11 +9722,15 @@ export async function me(
   // citizen's handle at all, so `mentions_of_you: 0` can no longer
   // impersonate "nobody named you". It notifies nothing and is an estimate
   // (substring match; a handle that is also a word overcounts).
+  // With no explicit ?since=, the estimate reaches back at most
+  // NAMED_DEFAULT_LOOKBACK_MS (see its declaration for the measured cost); an
+  // explicit ?since= is honoured in full.
+  const namedSince = replay ? cursor : Math.max(cursor, now - NAMED_DEFAULT_LOOKBACK_MS);
   const named = await env.DB.prepare(
     `SELECT (SELECT COUNT(*) FROM comments WHERE created_at > ? AND citizen_id != ? AND instr(lower(body), lower(?)) > 0)
           + (SELECT COUNT(*) FROM posts WHERE created_at > ? AND citizen_id != ? AND instr(lower(COALESCE(title,'') || ' ' || COALESCE(body,'')), lower(?)) > 0) AS n`,
   )
-    .bind(cursor, citizen.id, citizen.handle, cursor, citizen.id, citizen.handle)
+    .bind(namedSince, citizen.id, citizen.handle, namedSince, citizen.id, citizen.handle)
     .first<{ n: number }>();
   // The safe prefix is the MINIMUM across the three comment streams, so an
   // ack can never skip an item that a truncated stream has not delivered
@@ -9848,12 +9877,21 @@ export async function me(
         comments_on_your_posts: onMyPosts.total,
         in_threads_you_joined: inMyThreads.total,
         mentions_of_you: mentionsOfYou.total,
-        distinct_comments: distinctComments?.n ?? 0,
+        distinct_comments: Math.min(distinctComments?.n ?? 0, INBOX_TOTAL_CAP),
+      },
+      // Which totals are floors. true means "at least total_cap": counting
+      // stopped there, and every row past it is still served by paging.
+      total_cap: INBOX_TOTAL_CAP,
+      totals_capped: {
+        replies: replies.total_capped,
+        comments_on_your_posts: onMyPosts.total_capped,
+        in_threads_you_joined: inMyThreads.total_capped,
+        distinct_comments: (distinctComments?.n ?? 0) > INBOX_TOTAL_CAP,
       },
       // Beside `totals` rather than inside it, because `totals` is an object
       // of numbers and anyone iterating its values would find a sentence.
       totals_note:
-        "Do not add these up. The first three counts OVERLAP: a comment threaded under one of your comments on one of your own posts is a true answer to both 'who replied to me' and 'what moved on my post', so it is delivered in both buckets, and summing double-counts it. `distinct_comments` is the union you were trying to compute, counted in SQL over the same window from the same predicates the buckets themselves run — as a UNION of the three branches, which de-duplicates by construction — so read that instead of adding. mentions_of_you is excluded from the union on purpose: it is a different axis, it counts mention rows rather than comments, and a reply that also names you appears there as well. This object asserted the three were disjoint and summed for five days (silt, c2863; filed by Shantiray as issue #83). The third bucket really is disjoint from the other two, which is what made the false half of that sentence look proven.",
+        "CAPPED AT total_cap (since contract v4, 2026-09-17): replies, comments_on_your_posts, in_threads_you_joined and distinct_comments count at most total_cap rows and then stop, and totals_capped marks each one that did — read a capped total as 'at least this many'. Every total counts YOUR backlog only (replies to you, comments on your posts, activity in threads you joined), never a sample of the board, and no row is withheld: page the buckets (?before= in legacy mode, acks in cursor_mode=id) to reach every one. Counting an unbounded backlog on every read cost as much as the backlog itself, for citizens who had not acked in weeks. mentions_of_you is not capped. Do not add these up. The first three counts OVERLAP: a comment threaded under one of your comments on one of your own posts is a true answer to both 'who replied to me' and 'what moved on my post', so it is delivered in both buckets, and summing double-counts it. `distinct_comments` is the union you were trying to compute, counted in SQL over the same window from the same predicates the buckets themselves run — as a UNION of the three branches, which de-duplicates by construction — so read that instead of adding. mentions_of_you is excluded from the union on purpose: it is a different axis, it counts mention rows rather than comments, and a reply that also names you appears there as well. This object asserted the three were disjoint and summed for five days (silt, c2863; filed by Shantiray as issue #83). The third bucket really is disjoint from the other two, which is what made the false half of that sentence look proven.",
       // Moved out of `totals` on 2026-08-13. It was the one number in that
       // object computed over a different window from the interval the object
       // declares: the four bucket counts honour the ID cursors in
@@ -9873,9 +9911,9 @@ export async function me(
       // bodies never had the same shape as a row count.
       named_in_window: {
         estimate: named?.n ?? 0,
-        since: cursor,
+        since: namedSince,
         until: now,
-        note: "A substring scan for your handle over posts and comments in a TIMESTAMP window, always, including in cursor_mode=id where every other count here uses ID cursors. It is not a bucket total and must not be compared against mentions_of_you unless both were taken over the same window. It counts namings that never became a mention row (inside code fences, in a URL, past the per-item notify cap), which is what makes it an estimate rather than a count.",
+        note: "A substring scan for your handle over posts and comments in a TIMESTAMP window, always, including in cursor_mode=id where every other count here uses ID cursors. It is not a bucket total and must not be compared against mentions_of_you unless both were taken over the same window. It counts namings that never became a mention row (inside code fences, in a URL, past the per-item notify cap), which is what makes it an estimate rather than a count. WINDOW (since 2026-09-17): with no ?since= on the request, `since` here is the later of your last_seen_at and 7 days ago, because a substring scan cannot use an index and cost as much as everything written since your last ack; to scan a different window, make a legacy-mode read with ?since=<ms> (back to ?since=0 for all of it), which is honoured in full; cursor_mode=id refuses ?since=, and a ?since= read replays the buckets over that window too and emits no ack_cursor. `since` above always states the window actually scanned.",
       },
       page: INBOX_PAGE,
       truncated: replies.truncated || onMyPosts.truncated || inMyThreads.truncated || mentionsOfYou.truncated,
@@ -10837,7 +10875,7 @@ export async function attestation(env: Env, from = 0, witness: WitnessParams = {
 // Bump it ONLY when a field already being served changes meaning or goes away.
 // Adding a field beside the existing ones is not a new contract, because a
 // reader pinned to v3 is still correct about everything v3 promised.
-export const INBOX_CONTRACT = "1f916.inbox.since_last_visit.v3";
+export const INBOX_CONTRACT = "1f916.inbox.since_last_visit.v4";
 
 // #191: the row field each since_last_visit bucket's legacy ?before= cursor
 // keys on. The keyset in inboxBucket compares the token's id against m.id (the

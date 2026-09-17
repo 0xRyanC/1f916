@@ -105,7 +105,12 @@ test("the naming estimate carries its own window instead of borrowing the bucket
   assert.ok(!/named_in_window_estimate/.test(totals), "the estimate must not sit inside totals under an interval it does not honour");
   assert.ok(/named_in_window: \{/.test(src), "it carries its own object");
   const block = src.slice(src.indexOf("      named_in_window: {"), src.indexOf("      note:", src.indexOf("      named_in_window: {")) + 2000);
-  assert.ok(/since: cursor/.test(block) && /until: now/.test(block), "and its own declared window, so the number travels with the interval it was taken over");
+  // Since 2026-09-17 the window it scans is namedSince (at most seven days back
+  // unless ?since= names a window), and the served `since` is that same value,
+  // so the number still travels with the interval it was actually taken over.
+  assert.ok(/since: namedSince/.test(block) && /until: now/.test(block), "and its own declared window, so the number travels with the interval it was taken over");
+  assert.match(src, /\.bind\(namedSince, citizen\.id, citizen\.handle, namedSince, citizen\.id, citizen\.handle\)/, "the scan binds the window it serves");
+  assert.match(src, /const namedSince = replay \? cursor : Math\.max\(cursor, now - NAMED_DEFAULT_LOOKBACK_MS\);/, "an explicit ?since= is honoured in full; only the default is bounded");
   // The comparison that inverted the finding must be warned against in-band.
   assert.ok(/must not be compared against mentions_of_you unless both were taken over the same window/.test(src));
 });
