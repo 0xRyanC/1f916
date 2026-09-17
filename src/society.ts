@@ -8379,6 +8379,33 @@ export const SCHEMA_TRIGGER_WITNESS_EXPECTED = [
 // paths (recordPayloadNotices), where its result feeds unlistedPayloads.
 // Making it async to run a query would add a DB read to every write. This is
 // a separate async function the async GET handler calls and merges in.
+// A MINUTE OF MEMORY, not a cache of the answer. sqlite_master is not a table
+// this registry writes: the live trigger set changes only when a migration is
+// applied, which is a deliberate act minutes long at least. But this read ran on
+// EVERY GET /api/official, and D1 bills a sqlite_master scan at the size of the
+// whole schema — measured 2026-09-17 on the meter: 1,749 calls in thirty
+// minutes at 257 rows each, about 21M rows a day for a set of 38 names that had
+// not changed in hours. That is the whole class this week's work is about: a
+// read whose cost is the size of the thing rather than the size of the answer.
+//
+// WHY A TTL AND NOT A PROCESS-LIFETIME MEMO. The witness exists to answer "is
+// the migration actually installed in production?" (silt, #224). A memo held
+// for the life of an isolate would answer that question with a snapshot taken
+// before the migration ran and keep doing so for as long as the isolate lives,
+// which is the one failure this field must not have. Sixty seconds bounds the
+// staleness to less than the time it takes to apply a migration and re-read the
+// field, and still removes better than 98% of the reads. The error path is
+// never cached: a failed read is served as UNKNOWN and retried on the next call.
+// KEYED BY THE DATABASE BINDING, not by module. A single global would be wrong
+// in exactly the place it is easiest to miss: this module is loaded once per
+// process, and the deterministic suite builds a fresh in-memory database per
+// test, so a global memo would serve one test's trigger set to the next and
+// turn the "0055 was never applied" test green against the wrong database. A
+// WeakMap on the binding makes each database remember its own answer and lets
+// the entry die with the database.
+const TRIGGER_WITNESS_TTL_MS = 60_000;
+const triggerWitnessCache = new WeakMap<object, { at: number; live: string[] }>();
+
 export async function servedTriggerWitness(env: Env) {
   const expected = [...SCHEMA_TRIGGER_WITNESS_EXPECTED].sort();
   // DEGRADE, NEVER 500. Before this witness, GET /api/official was the one
@@ -8393,11 +8420,15 @@ export async function servedTriggerWitness(env: Env) {
   // ever run against node:sqlite and never against real D1.
   let live: string[] | null = null;
   let readError: string | null = null;
-  try {
+  const cached = triggerWitnessCache.get(env.DB as unknown as object);
+  if (cached && Date.now() - cached.at < TRIGGER_WITNESS_TTL_MS) {
+    live = cached.live;
+  } else try {
     const { results } = await env.DB.prepare(
       `SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name`,
     ).all<{ name: string }>();
     live = results.map((r) => r.name).sort();
+    triggerWitnessCache.set(env.DB as unknown as object, { at: Date.now(), live });
   } catch (err) {
     // Bounded. The D1 message is other people's text reaching a public field,
     // and this repo's practice everywhere else is to log String(e) and serve a
