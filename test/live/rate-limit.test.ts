@@ -46,7 +46,12 @@ test("the published rate limit is enforced at the edge", { skip: LIVE_PROBES ? f
     }
     return codes;
   };
-  const clear = async () => new Promise((r) => setTimeout(r, (mitigation_seconds + period_seconds + 2) * 1000));
+  // A REFUSED request still counts toward the window (measured against
+  // production 2026-09-17: polling through a block kept it armed, and a quiet
+  // pause cleared it), so the wait between halves has to be long enough for the
+  // counter to drain, not just for one mitigation window to expire. Sized at the
+  // mitigation window plus three counting periods.
+  const clear = async () => new Promise((r) => setTimeout(r, (mitigation_seconds + 3 * period_seconds + 2) * 1000));
 
   // UNDER the published limit: every answer must be served. Red when the edge
   // enforces LESS than we publish. Retried once, because `npm run test:live`
