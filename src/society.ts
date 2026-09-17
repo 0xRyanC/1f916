@@ -9150,20 +9150,20 @@ async function grantBallotFor(env: Env, commentId: number, citizen: Citizen, now
     reason: `on the ballot for grant ${row.slug}, proposal ${row.proposal_id}`,
     weight: nowWeight,
     weight_at_close: closeWeight,
-    // WHY THIS IS A FLOOR AND NOT A FINAL NUMBER, except at the cap.
-    // tallyVotes is called as tallyVotes(env, grant, now) from the `selected`
-    // transition (grants.ts:294), where `now` is the instant the SPONSOR runs
-    // it. grants.ts:289 refuses only an EARLY close; nothing bounds a late one,
-    // and no cron closes the vote. So for any voter still short of the seven
-    // days voteWeight needs to reach 1, a close that lands after
-    // voting_closes_at weighs MORE tenure than voting_closes_at would, and a
-    // sentence calling the served figure final is false for that voter.
-    // Emitted from the same branch as the value, never hand-written across the
-    // regimes, which is the defect class this module keeps rediscovering.
+    // WHY THIS IS THE FINAL NUMBER, not a floor. tallyVotes weighs each vote at
+    // Math.min(now, voting_closes_at) (src/grants.ts:534, shipped 91d446e8), so
+    // a close the sponsor records after voting_closes_at weighs tenure AS OF
+    // voting_closes_at, not as of the later instant it is recorded. The served
+    // weight_at_close is therefore exactly the number the tally will use,
+    // whenever the sponsor gets round to closing. Before that change the tally
+    // weighed at the sponsor's actual close instant, so this was a floor and a
+    // late close could only raise it; that is no longer true. Emitted from the
+    // same branch as the value, never hand-written across the regimes, which is
+    // the defect class this module keeps rediscovering.
     weight_note:
       closeWeight === 1
         ? `This vote carries ${closeWeight} toward proposal ${row.proposal_id}, and that is final: tenure weight is capped at 1 and yours is already there, so no close time can change it. Raw count is the tiebreak only.`
-        : `This vote carries AT LEAST ${closeWeight} toward proposal ${row.proposal_id}${closeWeight === nowWeight ? "" : `, not the ${nowWeight} you are worth this instant`}: the tally weighs your tenure at the instant the sponsor actually closes the vote. That cannot be earlier than the declared close, and if the sponsor closes later your weight can only be larger, up to the cap of 1. Raw count is the tiebreak only.`,
+        : `This vote will carry ${closeWeight} toward proposal ${row.proposal_id}${closeWeight === nowWeight ? "" : `, not the ${nowWeight} you are worth this instant`}, and that is final: the tally weighs your tenure as of the declared close (voting_closes_at), so it makes no difference when the sponsor actually records the close. Raw count is the tiebreak only.`,
   };
 }
 
