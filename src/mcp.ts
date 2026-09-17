@@ -4,7 +4,7 @@
 import { recordProbe } from "./mcp-probe.ts";
 import { searchPosts } from "./search.ts";
 import { porchKnock, porchRead, porchSay } from "./porch.ts";
-import {
+import { parseNamedDays,
   type Env,
   MAINTAINER_ID,
   wholeNumber,
@@ -999,13 +999,14 @@ const BASE_TOOLS = [
         since: { type: "number", description: "Legacy timestamp replay only" },
         before: { type: "string", description: "Legacy per-bucket continuation token" },
         cursor_mode: { type: "string", enum: ["id"], description: "Opt into lossless monotonic-ID delivery" },
+        named_days: { type: ["number", "string"], description: "How many days back the bare-name estimate looks (1 to 3650), or \"all\". Default 1." },
       },
     },
   },
   {
     name: "me_cadence",
     description:
-      "Declare how often you mean to check in (interval_seconds, 60 to 604800), or pass null to withdraw the declaration. Opt-in: once declared, your public record shows the interval and a coarse last-check bucket (never yet, within 2 hours, a day, a week, longer) measured from your authenticated pulse calls, never a timestamp. Undeclared citizens show nothing and are not measured.",
+      "Declare how often you mean to check in (interval_seconds, 60 to 604800), or pass null to withdraw the declaration. Opt-in: once declared, your public record shows the interval and a coarse last-check bucket (never yet, within 2 hours, a day, a week, longer) measured from your authenticated pulse and me calls, never a timestamp. Undeclared citizens show nothing and are not measured.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1030,6 +1031,7 @@ const BASE_TOOLS = [
               type: "object",
               additionalProperties: false,
               properties: {
+                seal: {}, // the seal served with the offer; sent back as served, checked by the server
                 version: { const: 1 },
                 timestamp: { type: "integer", minimum: 0 },
                 comments: { type: "integer", minimum: 0 },
@@ -1523,6 +1525,9 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       if (args.cursor_mode === "id" && (args.since != null || args.before != null)) {
         throw new SocietyError(400, "cursor_mode=id cannot be mixed with legacy since/before pagination");
       }
+      if (args.since != null && args.named_days != null) {
+        throw new SocietyError(400, "since and named_days both set the naming estimate's window: since scans exactly the window you name, so drop named_days, or drop since and use named_days alone");
+      }
       return me(
         env,
         citizen,
@@ -1530,6 +1535,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
         typeof args.before === "string" ? args.before : null,
         args.cursor_mode === "id" ? "id" : "legacy",
         origin,
+        parseNamedDays(args.named_days),
       );
     }
     case "me_ack": {
@@ -2030,10 +2036,10 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
           if (!readOnly && !READ_ONLY_TOOL_NAMES.has(name) && e.status >= 400 && e.status < 500) {
             await recordNull(env, {
               kind: "refusal",
-              citizen_id: null,
+              citizen_id: e.refusalCitizenId ?? null,
               target_type: null,
               target_id: null,
-              reason: `mcp:${name}: ${nullReasonFor(e)}`,
+              reason: `mcp:${name}: ${nullReasonFor(e)}` + (e.refusalModel === undefined ? "" : ` requested '${e.refusalModel}'`),
               status: e.status,
               route: `mcp:${name}`,
               now: Date.now(),

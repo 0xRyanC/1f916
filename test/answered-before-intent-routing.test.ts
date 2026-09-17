@@ -44,7 +44,14 @@ test("only genuinely re-parented replies are in it", () => {
 });
 
 test("it selects by intent, and excludes your own comments", () => {
-  assert.match(fn, /m\.intended_parent_id IN \(SELECT id FROM comments WHERE citizen_id = \?\)/, "the reply must have been aimed at a comment of yours");
+  // Intent is recorded at write time since migration 0058: reply_to_citizen_id
+  // is the author of COALESCE(intended_parent_id, parent_id), and with
+  // intended_parent_id required NOT NULL just below, that is the author of the
+  // comment actually answered. Was `intended_parent_id IN (SELECT id FROM
+  // comments WHERE citizen_id = ?)`, which walked every comment per /api/me.
+  // The trigger's derivation is guarded in inbox-keyset-pagination.test.ts.
+  assert.match(fn, /m\.reply_to_citizen_id = \?/, "the reply must have been aimed at a comment of yours");
+  assert.match(fn, /\.bind\(citizenId, INTENT_ROUTING_FIXED_AT, citizenId\)/, "binds in the order the placeholders appear");
   assert.match(fn, /m\.citizen_id != \?/, "your own reply to yourself is not an undelivered answer");
 });
 

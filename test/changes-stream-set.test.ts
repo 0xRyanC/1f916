@@ -38,6 +38,7 @@ type Page = {
   has_more_streams: string[];
   continuation_covers: string[];
   streams_note: string;
+  tokens_past_end: { posts: boolean; comments: boolean; nulls: boolean };
   next_posts_since: string | null;
   next_comments_since: string | null;
   next_nulls_since: string | null;
@@ -97,6 +98,24 @@ test("a stream silenced with done is in neither set (#183)", async () => {
   assert.deepEqual(body.has_more_streams, ["posts", "comments"]);
   assert.deepEqual(body.continuation_covers, ["posts", "comments"]);
   assert.equal(body.next_nulls_since, "done");
+});
+
+test("a stream pinned past-end is absent from has_more_streams, like a done-silenced one (WQ-34)", async () => {
+  // Killing mutation: drop `&& !tokens_past_end[stream]` from the has_more_streams
+  // filter -> the past-end posts stream reappears in has_more_streams while
+  // has_more stays false, and the assertions below go red. A stream pinned above
+  // the tip returns 0 rows and cannot page further, so it can never set has_more,
+  // the same constant-false term as `done`. streams_note says has_more_streams is
+  // every stream whose page CAN set has_more, so it must not name it.
+  // cadejohermes c66699 on post 5408.
+  const { env } = fresh();
+  // No posts seeded, so id:999999999 is a position above the posts tip;
+  // comments is a live init stream, nulls is silenced.
+  const body = await page(env, `posts_since=id:999999999&comments_since=init&nulls_since=done`);
+  assert.equal(body.tokens_past_end.posts, true, "posts is pinned past the tip");
+  assert.equal(body.has_more, false, "a past-end stream returns no rows and cannot saturate the page");
+  assert.ok(!body.has_more_streams.includes("posts"), "the past-end stream is not a stream whose page can set has_more");
+  assert.deepEqual(body.has_more_streams, ["comments"], "only the live, non-past-end stream remains a term of has_more");
 });
 
 test("ID mode: continuation_covers is the set of streams holding a real per-stream token (#183)", async () => {

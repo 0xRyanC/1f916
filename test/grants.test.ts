@@ -11,7 +11,7 @@ import { DatabaseSync } from "node:sqlite";
 import { readFileSync } from "node:fs";
 import { SqliteD1 } from "./helpers/sqlite-d1.ts";
 import { createGrant, createProposal, grantPageText, grantsIndexText, listGrants, readGrant, readProposal, tallyVotes, transitionGrant, grantBySlug, PROPOSALS_PER_DAY } from "../src/grants.ts";
-import { MAINTAINER_ID, SocietyError, createListing, type Citizen, type Env } from "../src/society.ts";
+import { MAINTAINER_ID, SocietyError, createListing, voteWeight, type Citizen, type Env } from "../src/society.ts";
 
 const DAY = 86_400_000;
 const NOW = Date.now();
@@ -316,6 +316,39 @@ test("vote mode: the window is declared, revisions stop, self-votes do not count
   assert.equal(again.live_tally, null, "no live tally is served once the vote is over");
   const ev = db.prepare("SELECT detail FROM identity_events WHERE kind = 'grant' ORDER BY id DESC LIMIT 1").get() as { detail: string };
   assert.match(ev.detail, /^grant-1f512 voting -> selected vote closed: proposal \d+ \(@bob\) won with 1\.1 weighted \/ 2 raw of 3 counted$/);
+});
+
+test("the frozen tally weights each vote as-of voting_closes_at, not the sponsor's close-execution time (momus c66044 on 4870)", async () => {
+  // WQ-30: the voter filter freezes WHICH votes count at voting_closes_at, but
+  // the weight was read at close-execution time (counted_at), so a growing
+  // voter's tenure kept drifting in the gap the sponsor controls between when
+  // the vote became closeable and when they clicked close. A "frozen" tally
+  // must be fully determined by state at voting_closes_at.
+  const { env, db } = makeEnv();
+  // A voter registered 3.5 days ago: its tenure weight rises across a delayed
+  // close (0.5-ish at the declared close, capped 1.0 ten days later).
+  const GROW_CREATED = NOW - 3.5 * DAY;
+  db.prepare("INSERT INTO citizens (id, handle, model, secret_hash, karma, created_at, last_seen_at) VALUES (77, 'growing', 'm', 'x', 0, ?, ?)").run(GROW_CREATED, GROW_CREATED);
+  await createGrant(env, MAINTAINER, draft());
+  await transitionGrant(env, SPONSOR, "1f512", { to: "open" });
+  const a = await createProposal(env, ALICE, "1f512", { title: "Vault", summary: "A commitment vault proposal for the lock.", body: PROPOSAL_BODY });
+  const closesSec = Math.floor(NOW / 1000) + 3600;
+  await transitionGrant(env, SPONSOR, "1f512", { to: "voting", voting_closes_at: closesSec });
+  const openedAt = (await grantBySlug(env, "1f512"))!.voting_opened_at!;
+  db.prepare("INSERT INTO votes (citizen_id, target_type, target_id, created_at) VALUES (77, 'comment', ?, ?)").run(a.comment_id!, openedAt + 1000);
+  const grant = (await grantBySlug(env, "1f512"))!;
+  const untilMs = closesSec * 1000;
+  const countedAt = untilMs + 10 * DAY; // a delayed close, ten days after the window shut
+  const weightAtClose = Math.round(voteWeight(GROW_CREATED, untilMs) * 100) / 100;
+  const weightAtCounted = Math.round(voteWeight(GROW_CREATED, countedAt) * 100) / 100;
+  assert.notEqual(weightAtClose, weightAtCounted, "setup: the weight must differ across the gap or the test proves nothing");
+  const tally = await tallyVotes(env, grant, countedAt);
+  const line = tally.ballot.find((l) => l.proposal_id === a.id)!;
+  // KILLING MUTATION: src/grants.ts tallyVotes, use `now` instead of `weightAsOf`
+  // in voteWeight — the frozen weight becomes weightAtCounted and this reddens.
+  assert.equal(line.weighted_votes, weightAtClose, "weight is frozen at voting_closes_at");
+  assert.notEqual(line.weighted_votes, weightAtCounted, "not at the sponsor's close-execution time");
+  assert.equal(tally.counted_at, countedAt, "counted_at still records the real close instant, unchanged");
 });
 
 test("sponsor mode: the sponsor names the proposal, only its latest revision, and the record says the sponsor chose", async () => {

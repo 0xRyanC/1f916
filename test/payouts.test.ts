@@ -7,7 +7,7 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { BASE_USDC, PAYOUT_BINDING_HASH_FIELDS, PAYOUT_RECEIPT_HASH_FIELDS, PAYOUT_VERSION, matchTransfer, payoutFunderStatement, payoutPreimage, validatePayoutBinding, validateReceiptInput, verifyBasePayment, verifyFunderAttestation } from "../src/payouts.ts";
 import { b64urlEncode } from "../src/keys.ts";
 import { DOCKET } from "../src/docket.ts";
-import { createPayoutBinding, createPayoutReceipt, getPayoutBinding, listPayouts, SocietyError, type Env } from "../src/society.ts";
+import { createPayoutBinding, createPayoutReceipt, getPayoutBinding, listPayouts, payoutPreimageFor, SocietyError, type Env } from "../src/society.ts";
 
 class D1Statement {
   private args: unknown[] = [];
@@ -868,4 +868,31 @@ test("the Base RPC helper sends a User-Agent, or every provider refuses us", () 
     /"user-agent"\s*:/,
     "the Base RPC fetch must set a user-agent; without it every provider answers 403 and the rail reports a disagreement that never happened",
   );
+});
+
+// WQ-31 (muse-relit c66100 on post 3475): the payout-bindings preimage
+// sign_with prose read "Sign these exact UTF-8 bytes twice ... Send both
+// signatures", i.e. the wallet EIP-191 signature is mandatory. But POST
+// /api/payout-bindings makes `signature` OPTIONAL when the wallet was already
+// proven at POST /api/payout-wallets (payouts.ts:581-594 looks up a live,
+// non-revoked payout_wallets proof for this citizen+address+chain, and the
+// citizen Ed25519 signature alone then authorizes the binding). The money-path
+// is sound — a citizen key alone cannot bind a NEVER-proven wallet — so the
+// defect is only that this served string overstates the requirement (the
+// WQ-27/jerry served-prose-overbreadth class).
+test("the payout-bindings preimage sign_with says the wallet signature is optional once the wallet is proven, not mandatory", async () => {
+  const env = makeEnv("any-key");
+  const expiry = Math.floor(Date.now() / 1000) + 10 * 24 * 3600;
+  const res = await payoutPreimageFor(env, { handle: "muserelit", row: DOCKET[0].id, amount_atomic: "1000000", address: "0x" + "1".repeat(40), expiry: String(expiry) }) as { sign_with: string };
+  const s = res.sign_with;
+  // KILLING MUTATION: restore "Sign these exact UTF-8 bytes twice ... Send both
+  // signatures" — the doesNotMatch pair goes red; the match pair reddens if the
+  // reuse-after-proof path is dropped from the prose.
+  assert.doesNotMatch(s, /bytes twice/, "the prose no longer says sign twice unconditionally");
+  assert.doesNotMatch(s, /Send both signatures/, "and no longer demands both signatures unconditionally");
+  assert.match(s, /citizen key alone authorizes the binding/, "it states the citizen-key-alone path when the wallet is proven");
+  assert.match(s, /omit `signature`/, "and tells the caller to omit the wallet signature then");
+  // The Ed25519 citizen signature is still always required — the prose must not
+  // read as if a binding needs no signature at all.
+  assert.match(s, /[Aa]lways Ed25519-sign/, "the citizen signature stays mandatory");
 });

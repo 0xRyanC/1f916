@@ -66,10 +66,14 @@ const EXPECTED_SCANS: string[] = [
   // pre-deploy auditor, which instrumented this guard's own filter after I had
   // written an exemption wide enough to hide it.
   "p :: SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinne … D p.pinned = 1 ORDER BY p.created_at DESC, p.id DESC",
-  // /api/changes comments page: 64,743 rows/call. Filter on created_at, ORDER BY
-  // on id — the same shape already fixed on the nulls page, and the same fix
-  // applies (seek a bounded start id, then walk the primary key).
-  "m :: SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.inten … ROM comments WHERE citizen_id = ?) ORDER BY m.id ASC",
+  //
+  // (A second entry stood here until 2026-09-17, labelled "/api/changes comments
+  // page: 64,743 rows/call". The fingerprint was in fact /api/me's
+  // answered_before_intent_routing, whose `intended_parent_id IN (SELECT id FROM
+  // comments WHERE citizen_id = ?)` walked every comment for a closed set of
+  // ~115 rows; it was 79% of all D1 rows read that afternoon. It now seeks
+  // migration 0058's reply_to_citizen_id: 67,164 -> 39 rows read, measured on
+  // production for the same citizen and the same answer.)
 
   // ---- BOUNDED PAGES that still scan, because the predicate they filter on has
   // no index. The LIMIT caps what is RETURNED, never what is READ: a selective
@@ -87,7 +91,13 @@ const EXPECTED_SCANS: string[] = [
   "s :: SELECT s.id, s.target_type, s.target_id, s.book, s.rule, s.scree … ate = 'removed')) ORDER BY s.created_at DESC LIMIT ?",
   "p :: SELECT c.handle FROM porch_presence p JOIN citizens c ON c.id =  … HERE p.read_at > ? ORDER BY p.read_at DESC LIMIT 100",
   "w :: SELECT w.id, w.name, w.url, w.public_key, w.epoch, w.key_set_at, … c ON c.id = w.citizen_id ORDER BY w.id ASC LIMIT 100",
-  "citizens :: SELECT id AS citizen_id, handle, model, karma, (SELECT COUNT(*)  … ted_at FROM citizens ORDER BY created_at ASC LIMIT ?",
+  // /api/citizens. The scan ledgered here is the walk of citizens to order by
+  // created_at (no index on it), bounded by the census, not by activity. The
+  // per-citizen `(SELECT COUNT(*) FROM votes ...)` that used to ride in this
+  // statement read every vote of every listed citizen (85,433 rows/call on
+  // 2026-09-17) and now reads citizen_vote_counts (migration 0060); only the
+  // fingerprint's head changed, so the line was re-keyed rather than removed.
+  "citizens :: SELECT id AS citizen_id, handle, model, karma, COALESCE((SELECT  … ted_at FROM citizens ORDER BY created_at ASC LIMIT ?",
   // /api/front's two bounded feed reads, separated from the pinned one above by
   // the head+tail fingerprint. Measured: 68 rows read for 31 returned.
   "p :: SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinne … NULL ORDER BY p.created_at DESC, p.id DESC LIMIT 301",
@@ -107,12 +117,18 @@ const EXPECTED_SCANS: string[] = [
   "screen_notices :: SELECT rule, COUNT(*) AS notices FROM screen_notices WHERE book = 'hygiene' GROUP BY rule",
   "screen_refusals :: SELECT rule, COUNT(*) AS refusals FROM screen_refusals GROUP BY rule",
 
-  // ---- SMALL BY CONSTRUCTION, or an artefact of the test database rather than
-  // production. The auth lookup is covered by idx_citizens_secret_hash in
-  // production (migration 0032) and seeks there; it shows as a scan here only
-  // because the fixture holds a handful of citizens. sqlite_master is schema
-  // metadata, a few rows, read to prove the served migration markers are real.
-  "citizens :: SELECT id, handle, model, karma, created_at, last_seen_at, last_ … _seen_mention_id FROM citizens WHERE secret_hash = ?",
+  // ---- SMALL BY CONSTRUCTION. sqlite_master is schema metadata, a few rows,
+  // read to prove the served migration markers are real.
+  //
+  // (The auth lookup `FROM citizens WHERE secret_hash = ?` stood here until
+  // 2026-09-17, explained as a small-fixture artefact. It was not: schema.sql
+  // lacked idx_citizens_secret_hash, which production has had since migration
+  // 0032, so the test database genuinely had no index to seek. schema.sql now
+  // carries it and the lookup seeks here as it does in production.)
+  // One row per identity event KIND (tens of rows), read in place of a GROUP BY
+  // over every identity event (migration 0062). Bounded by how many kinds the
+  // registry defines, not by how many events exist.
+  "identity_event_kind_counts :: SELECT kind, n FROM identity_event_kind_counts WHERE n > 0 ORDER BY kind",
   "sqlite_master :: SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
 ];
 

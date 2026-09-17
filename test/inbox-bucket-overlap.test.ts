@@ -52,19 +52,32 @@ const unionQuery = (() => {
 })();
 
 test("the union is served as a number, not left for the reader to compute", () => {
-  assert.match(totals, /distinct_comments: distinctComments\?\.n \?\? 0/);
-  // Counted in SQL over the window, not derived from a truncated page: it is a
-  // COUNT, and it carries no LIMIT that could turn the total into a page size.
+  assert.match(totals, /distinct_comments: Math\.min\(distinctComments\?\.n \?\? 0, INBOX_TOTAL_CAP\)/);
+  // Counted in SQL over the window, not derived from a truncated page. Since
+  // 2026-09-17 it stops at INBOX_TOTAL_CAP + 1 rows: the ONLY limit allowed here
+  // is that one, because the extra row is what lets totals_capped say the value
+  // is a floor. Any other LIMIT would silently turn the total into a page size.
   assert.match(unionQuery, /COUNT\(/, "the union is counted in SQL");
-  assert.doesNotMatch(unionQuery, /\bLIMIT\b/, "a LIMIT here would silently turn the window total into a page count");
+  const limits = unionQuery.match(/\bLIMIT\b[^\n]*/g) ?? [];
+  assert.deepEqual(limits, ["LIMIT ${INBOX_TOTAL_CAP + 1}"], "the only LIMIT is the cap's, one past it");
+  assert.match(source, /distinct_comments: \(distinctComments\?\.n \?\? 0\) > INBOX_TOTAL_CAP,/, "and a capped union says so");
 });
 
 test("the union de-duplicates, so the count is a union and not a sum", () => {
   // THE defect this whole file exists for (#83: naive sum 9 over 7 distinct
   // rows). Under COUNT(DISTINCT) dedup was inherent; expressed as branches it
   // is one keyword, and UNION ALL would restore the wrong arithmetic silently.
+  //
+  // Since 2026-09-17 the branches are UNION ALL under a SELECT DISTINCT, because
+  // a LIMIT over a compound UNION did not stop the read (see the comment at the
+  // query). De-duplication is still mandatory; it just lives in DISTINCT. So the
+  // rule is: UNION ALL is allowed only with a DISTINCT over it, and the
+  // behavioural proof that an overlapping comment counts once is in
+  // test/inbox-total-cap.test.ts.
   assert.match(unionQuery, /\bUNION\b/, "the branches must be combined with UNION");
-  assert.doesNotMatch(unionQuery, /\bUNION\s+ALL\b/, "UNION ALL double-counts the overlap — exactly the bug this file was filed for");
+  if (/\bUNION\s+ALL\b/.test(unionQuery)) {
+    assert.match(unionQuery, /SELECT DISTINCT id FROM \(/, "UNION ALL without a DISTINCT over it double-counts the overlap — exactly the bug this file was filed for");
+  }
 });
 
 test("the distinct count runs the buckets' own predicates, not a restatement", () => {

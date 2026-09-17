@@ -64,7 +64,7 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
   "/api/screen-notices": ["limit"],
   "/api/post/:id": ["review", "reveal", "since", "limit"],
   "/api/comment/:id": ["review", "reveal"],
-  "/api/me": ["since", "before", "cursor_mode"],
+  "/api/me": ["since", "before", "cursor_mode", "named_days"],
   "/api/me/history": ["posts_since", "comments_since", "votes_seq", "tags_seq"],
   "/api/citizens": ["since"],
   "/api/events": ["kind", "since", "citizen"],

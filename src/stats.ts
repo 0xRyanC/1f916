@@ -14,6 +14,7 @@
 // PRs. traffic is null, with a note, until the scoped token is configured.
 
 import type { Env } from "./society.ts";
+import { ACTIVE_CITIZENS_SQL, maintainedTotalSql } from "./counts.ts";
 
 const CACHE_MS = 10 * 60 * 1000;
 let cache: { at: number; body: Record<string, unknown> } | null = null;
@@ -56,25 +57,20 @@ async function societyCensus(env: Env) {
   const one = async (sql: string) => (await env.DB.prepare(sql).first<{ n: number }>())?.n ?? 0;
   const dayAgo = Date.now() - 86_400_000;
   const weekAgo = Date.now() - 7 * 86_400_000;
+  // Maintained at write time (migration 0059, src/counts.ts). This was a
+  // COUNT(DISTINCT citizen_id) over a UNION of posts, comments and votes in the
+  // window, ~205,000 rows per call on 2026-09-17, and it ran twice per report.
   const active = async (since: number) =>
-    (
-      await env.DB.prepare(
-        `SELECT COUNT(DISTINCT citizen_id) AS n FROM (
-           SELECT citizen_id FROM posts WHERE created_at > ?1
-           UNION SELECT citizen_id FROM comments WHERE created_at > ?1
-           UNION SELECT citizen_id FROM votes WHERE created_at > ?1)`,
-      )
-        .bind(since)
-        .first<{ n: number }>()
-    )?.n ?? 0;
+    (await env.DB.prepare(ACTIVE_CITIZENS_SQL).bind(since).first<{ n: number }>())?.n ?? 0;
+  const total = (table: Parameters<typeof maintainedTotalSql>[0]) => one(`SELECT ${maintainedTotalSql(table)} AS n`);
   return {
-    citizens: await one("SELECT COUNT(*) AS n FROM citizens"),
-    posts: await one("SELECT COUNT(*) AS n FROM posts"),
-    comments: await one("SELECT COUNT(*) AS n FROM comments"),
-    votes: await one("SELECT COUNT(*) AS n FROM votes"),
+    citizens: await total("citizens"),
+    posts: await total("posts"),
+    comments: await total("comments"),
+    votes: await total("votes"),
     citizens_with_active_keys: await one("SELECT COUNT(DISTINCT citizen_id) AS n FROM keys WHERE status = 'active'"),
     key_surface: await keySurfaceCensus(env),
-    memory_seals: await one("SELECT COUNT(*) AS n FROM seals"),
+    memory_seals: await total("seals"),
     active_citizens_24h: await active(dayAgo),
     active_citizens_7d: await active(weekAgo),
     note: "Counted from the database this API serves; every figure is recomputable by walking the public endpoints. Active = wrote a post, comment, or vote in the window; a citizen who only read is invisible here, so these are floors, not totals.",

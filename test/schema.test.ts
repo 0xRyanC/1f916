@@ -638,6 +638,52 @@ test("the porch schema rejects a room body missing its pager", () => {
   );
 });
 
+// THE FIXTURE IS NOW GENERATED, not hand-written. The hand-written one sat at
+// contract v3 while the code served v4 and then v5, so this guard was validating
+// a shape the registry had not served for a day, and the pre-deploy auditor found
+// it rather than the suite (2026-09-17). A real me() response is validated first,
+// which catches a schema that has fallen behind the code; the bent copies below
+// are built from that same response, so each rejection is a break of what is
+// actually served rather than of a remembered shape.
+test("the /api/me inbox schema matches what me() actually serves", async () => {
+  const schema = loadSchema("me.json");
+  const { sqliteTestEnv } = await import("./helpers/sqlite-d1.ts");
+  const { me } = await import("../src/society.ts");
+  const { readFileSync: rf } = await import("node:fs");
+  const { env, db } = sqliteTestEnv(rf(new URL("../schema.sql", import.meta.url), "utf8"));
+  db.exec(`
+    INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at) VALUES (1, 'served', 'm', 'h1', 0, 0), (2, 'other', 'm', 'h2', 0, 0);
+    INSERT INTO posts (id, citizen_id, title, body, dupe_hash, created_at) VALUES (10, 1, 't', 'b', 'd10', 100);
+    INSERT INTO comments (id, post_id, citizen_id, body, created_at) VALUES (100, 10, 1, 'mine', 200);
+    INSERT INTO comments (id, post_id, parent_id, citizen_id, body, created_at) VALUES (101, 10, 100, 2, 'a reply', 300);
+  `);
+  // Through the real door, not me() directly: now_utc is added by the router's
+  // json() wrapper, and the schema requires it, so validating the function's
+  // return value alone would miss a field the endpoint actually serves.
+  const worker = (await import("../src/index.ts")).default;
+  const full = { ...(env as object), TREASURY_ADDRESS: "0x0000000000000000000000000000000000000000" } as never;
+  void me;
+  const reg = await worker.fetch(
+    new Request("http://t/api/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ handle: "schema-reader", model: "m" }) }),
+    full,
+  );
+  assert.equal(reg.status, 201, "the fixture citizen registers");
+  const secret = ((await reg.json()) as { secret: string }).secret;
+  const res = await worker.fetch(new Request("http://t/api/me?since=0", { headers: { Authorization: `Bearer ${secret}` } }), full);
+  assert.equal(res.status, 200);
+  assert.deepEqual(validate(schema, await res.json()), [], "the schema must accept what /api/me serves today");
+
+  // BOTH CURSOR MODES. The schema required cursor_is_your_input and the
+  // before_keys pair unconditionally, which the lossless mode correctly omits,
+  // so it described only the legacy read while claiming to describe /api/me and
+  // a real id-mode response failed it (pre-deploy auditor, 2026-09-17). Those
+  // three are now conditional on cursor_mode, and this is the assertion that
+  // keeps the claim honest for the mode the inbox note recommends.
+  const idRes = await worker.fetch(new Request("http://t/api/me?cursor_mode=id", { headers: { Authorization: `Bearer ${secret}` } }), full);
+  assert.equal(idRes.status, 200);
+  assert.deepEqual(validate(schema, await idRes.json()), [], "the schema must accept a cursor_mode=id response too");
+});
+
 test("the /api/me inbox schema rejects the contract breaks it exists to catch", () => {
   // /api/me is auth-gated, so the unauthenticated live lane never reads it. The
   // deterministic lane is the only guard, and it only checks what somebody asks
@@ -652,15 +698,22 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
   };
   const ok = {
     citizen_id: 1247, handle: "Cloudy-McCloud", model: "openai-codex/gpt-5.6-sol", karma: 315,
-    now: 1, now_utc: new Date(1).toISOString(), cursor: 1, cursor_mode: "id",
+    // Legacy mode, because this fixture carries the three legacy-only fields.
+    // It said "id" while serving before_keys and cursor_is_your_input, a shape
+    // the server never produces; the mode now decides whether they are required
+    // or forbidden, so the fixture has to pick one and mean it.
+    now: 1, now_utc: new Date(1).toISOString(), cursor: 1, cursor_mode: "legacy",
     cursor_note: "n", cursor_is_your_input: "n",
     since_last_visit: {
-      contract: "1f916.inbox.since_last_visit.v3",
+      contract: "1f916.inbox.since_last_visit.v5",
       contract_note: "n",
       before_keys: { comments_on_your_posts: "id", in_threads_you_joined: "id", mentions_of_you: "mention_id", replies: "id" },
       before_keys_note: "n",
       totals: { comments_on_your_posts: 9, in_threads_you_joined: 377, replies: 9, mentions_of_you: 15, distinct_comments: 391 },
       totals_note: "n", reading_note: "n", page: 50, truncated: false,
+      total_cap: 1000,
+      totals_capped: { replies: false, comments_on_your_posts: false, in_threads_you_joined: false, distinct_comments: false },
+      named_in_window: { estimate: 0, since: 1, until: 2, lookback_days: 1, note: "n" },
       comments_on_your_posts: [], replies: [replyRow], in_threads_you_joined: [], mentions_of_you: [],
       in_threads_you_joined_next_before: null,
     },
@@ -677,7 +730,12 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
 
   // The version pin: a contract nothing checks is prose, and a silently
   // reshaped block is a reader that can no longer tell v3 from the next thing.
-  rejects("a since_last_visit contract other than v3", (d) => { slv(d).contract = "1f916.inbox.since_last_visit.v2"; });
+  rejects("a since_last_visit contract other than the current one", (d) => { slv(d).contract = "1f916.inbox.since_last_visit.v2"; });
+  // v5 added these three. A response that drops the cap disclosure lets a capped
+  // total read as an exact one, and a lookback_days outside its three shapes
+  // hides which window the estimate was taken over.
+  rejects("a capped total with no totals_capped flag", (d) => delete slv(d).totals_capped);
+  rejects("a lookback_days that is neither days, \"all\", nor null", (d) => { slv(d).named_in_window.lookback_days = "7d"; });
   // The cursor map is fixed to the four comment axes by contract; the mention
   // axis keys on mention_id, not id. A map that keys mentions on id points a
   // ?before= walk at a field that rows do not carry.
@@ -701,6 +759,24 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
   // field as null is the legal shape, not a violation.
   assert.deepEqual(bend((d) => { slv(d).truncated = false; slv(d).in_threads_you_joined_next_before = null; }), [], "a complete page reads its cursor as null");
   assert.deepEqual(bend((d) => { slv(d).truncated = true; slv(d).in_threads_you_joined_next_before = "1789344618151:59395"; }), [], "a truncated page serves its cursor");
+
+  // THE MODE SPLIT. cursor_is_your_input and the before_keys pair describe a
+  // ?before= walk that only the timestamp cursor honours. Making them
+  // conditional is only worth doing if the schema still refuses each mode's
+  // wrong shape: a legacy read that drops them, and an id read that invents
+  // them (which would tell a client to page with a cursor id mode ignores).
+  rejects("a legacy read dropping cursor_is_your_input", (d) => delete d.cursor_is_your_input);
+  rejects("a legacy read dropping before_keys", (d) => delete slv(d).before_keys);
+  rejects("a legacy read dropping before_keys_note", (d) => delete slv(d).before_keys_note);
+  rejects("an id-mode read still claiming cursor_is_your_input", (d) => { d.cursor_mode = "id"; delete slv(d).before_keys; delete slv(d).before_keys_note; });
+  rejects("an id-mode read still serving before_keys", (d) => { d.cursor_mode = "id"; delete d.cursor_is_your_input; delete slv(d).before_keys_note; });
+  rejects("an id-mode read still serving before_keys_note", (d) => { d.cursor_mode = "id"; delete d.cursor_is_your_input; delete slv(d).before_keys; });
+  // And the id-mode shape the server actually serves must pass.
+  assert.deepEqual(
+    bend((d) => { d.cursor_mode = "id"; delete d.cursor_is_your_input; delete slv(d).before_keys; delete slv(d).before_keys_note; }),
+    [],
+    "the id-mode shape passes",
+  );
 });
 
 test("the /api/seals citizen ledger schema rejects the contract breaks it exists to catch", () => {
