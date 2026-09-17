@@ -11212,6 +11212,28 @@ export function changesEtag(v: {
     : `"chg1-${scope}-${v.maxPostId}.${v.maxCommentId}.${v.maxEventId}${nullsHead}"`;
 }
 
+// `since` is resolved ONCE, here, before anything reads it: the validator,
+// the 304 short-circuit and the page all see the same value. An absent
+// `since` reaches this file as NaN (wholeNumber, index.ts). In lossless mode
+// it means floor at zero (peppercorn, #4558: refusing it named a param the
+// caller never set). In legacy mode it is the whole window and is refused.
+// Until 2026-09-17 changes() did this after changesValidator had already
+// folded the raw NaN into the tag, so two things went wrong at once. On the
+// init arm, since omitted and since=0 served one body under two validators
+// (chg1-NaN:init:init:... and chg1-0:init:init:...; egress, c66241 on
+// #5527). In legacy mode the route computed a tag for a request it was about
+// to refuse, so If-None-Match: * (or the tag itself, mintable from the pulse
+// heads) answered 304 where the same request without the header answers
+// 400 - the exact ordering the route forbids for cursors.
+export const CHANGES_SINCE_REQUIRED =
+  "since must be a millisecond epoch timestamp for legacy mode; or supply posts_since and comments_since together for lossless mode (each init, done, or id:<id>), in which since is an optional created_at floor and defaults to 0";
+
+export function resolveChangesSince(since: number, postsCursor: ChangesCursor): number {
+  if (Number.isFinite(since) && since >= 0) return since;
+  if (postsCursor != null) return 0;
+  throw new SocietyError(400, CHANGES_SINCE_REQUIRED);
+}
+
 // The three watermark reads behind changesEtag. Cheap by construction: each is
 // MAX over a primary key.
 export async function changesValidator(
@@ -11227,6 +11249,7 @@ export async function changesValidator(
         .results[0]?.m ?? 0,
     );
   const { postsCursor, commentsCursor } = validateChangesCursors(postsSince, commentsSince);
+  since = resolveChangesSince(since, postsCursor);
   // Parse before the watermark reads: a malformed nulls cursor must be
   // refused, not answered 304 by a matching ETag.
   parseNullsCursor(nullsSince);
@@ -11289,16 +11312,9 @@ export async function changes(
   // set and giving no hint the pair also needs `since`. A present-but-malformed
   // `since` is already refused upstream (wholeNumber), so a non-finite value
   // here means absent, never a bad epoch silently read as zero.
-  if (!Number.isFinite(since) || since < 0) {
-    if (postsCursor != null) {
-      since = 0;
-    } else {
-      throw new SocietyError(
-        400,
-        "since must be a millisecond epoch timestamp for legacy mode; or supply posts_since and comments_since together for lossless mode (each init, done, or id:<id>), in which since is an optional created_at floor and defaults to 0",
-      );
-    }
-  }
+  // Resolved by resolveChangesSince, which changesValidator runs first, so the
+  // page and its tag never disagree about `since` (egress, c66241 on #5527).
+  since = resolveChangesSince(since, postsCursor);
   // The nulls stream is independent of the posts/comments pairing: it is a
   // row-id cursor (or done), parsed before any page query so a matching ETag
   // can never answer 304 for a token this endpoint cannot parse.
