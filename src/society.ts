@@ -8280,6 +8280,11 @@ export const SCHEMA_TRIGGER_WITNESS_EXPECTED = [
   "votes_cast_count_insert",
   "votes_cast_count_delete",
   "citizens_vote_count_row",
+  // 0061. The chain's total_rows; a missing one freezes that attestation field.
+  "identity_events_count_insert",
+  "identity_events_count_delete",
+  "ledger_count_insert",
+  "ledger_count_delete",
 ];
 
 // Served witness for numbered migrations that ADD triggers.

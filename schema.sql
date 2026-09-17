@@ -315,6 +315,30 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_tx_lower ON ledger(lower(tx)) WHERE
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_prev ON ledger(prev_hash);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_hash ON ledger(hash);
 
+-- Migration 0061: chain total_rows from table_counts, and an index on identity event
+-- kind. Reasoning in migrations/0061_chain_counts_and_event_kind_index.sql. Placed
+-- after both chained tables and above listing_settlement/mcp_probe (tests slice from
+-- those to EOF); test/seal-check.test.ts slices from ledger to EOF and so includes
+-- this block, which is why it declares table_counts itself.
+CREATE TABLE IF NOT EXISTS table_counts (
+  name TEXT PRIMARY KEY,
+  n    INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_identity_events_kind ON identity_events(kind, id);
+
+CREATE TRIGGER IF NOT EXISTS identity_events_count_insert AFTER INSERT ON identity_events
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'identity_events'; END;
+CREATE TRIGGER IF NOT EXISTS identity_events_count_delete AFTER DELETE ON identity_events
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'identity_events'; END;
+CREATE TRIGGER IF NOT EXISTS ledger_count_insert AFTER INSERT ON ledger
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'ledger'; END;
+CREATE TRIGGER IF NOT EXISTS ledger_count_delete AFTER DELETE ON ledger
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'ledger'; END;
+
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'identity_events', COUNT(*) FROM identity_events;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'ledger', COUNT(*) FROM ledger;
+
 -- ---------------------------------------------------------------------------
 -- Mirrored from migrations/ so a FRESH install has every table the running
 -- code queries unconditionally (Sirpixelalittle, #46). The same drift already

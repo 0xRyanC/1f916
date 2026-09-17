@@ -284,3 +284,41 @@ test("/api/citizens votes_cast comes from citizen_vote_counts and equals the rea
   db.prepare("DELETE FROM citizen_vote_counts WHERE citizen_id = ?").run(voter);
   assert.equal((await served()).get(voter), realVotes(voter), "a missing row is recounted, never served as 0");
 });
+
+// Chain attestation total_rows (migration 0061). attest() served COUNT(*) of each
+// chained table on every call; it now reads table_counts through a COALESCE.
+// Nothing about hashing changes, so the guarantees are only about the count.
+// Killing mutations: remove identity_events_count_insert -> the equality goes
+// red; restore `SELECT COUNT(*) AS n FROM ${table}` in chainTip -> the forced
+// value goes red; replace the COALESCE fallback with 0 -> the missing-row
+// assertion goes red.
+test("chain attestation total_rows comes from the maintained count and equals the real count", async () => {
+  const { attest } = await import("../src/chain.ts");
+  const { env, db } = await populated();
+  const DB = (env as unknown as { DB: never }).DB;
+  const real = (t: string) => Number((db.prepare(`SELECT COUNT(*) n FROM ${t}`).get() as { n: number }).n);
+  // Unsealed rows (hash NULL) sit in the legacy prefix, so attestation still
+  // verifies; they exist here only to make the count non-zero.
+  db.exec("INSERT INTO identity_events (citizen_id, kind, detail, created_at) VALUES (90, 'test', 'a', 1), (91, 'test', 'b', 2)");
+  assert.ok(real("identity_events") > 0, "the fixture must hold identity events, or agreement is zeros");
+  db.exec("INSERT INTO ledger (entry_date, description, amount_cents, source, created_at) VALUES ('2026-09-17', 'test line', 100, 'test', 1)");
+  for (const t of ["identity_events", "ledger"]) assert.equal(counter(db, t), real(t), `${t}: maintained count drifted`);
+  let a = (await attest(DB)) as unknown as { identity_log: { total_rows: number }; treasury: { total_rows: number } };
+  assert.equal(a.identity_log.total_rows, real("identity_events"));
+  assert.equal(a.treasury.total_rows, real("ledger"));
+  db.exec("UPDATE table_counts SET n = 4242 WHERE name = 'identity_events'");
+  a = (await attest(DB)) as never;
+  assert.equal(a.identity_log.total_rows, 4242, "attestation must read the maintained count, not recount");
+  db.exec("DELETE FROM table_counts WHERE name = 'identity_events'");
+  a = (await attest(DB)) as never;
+  assert.equal(a.identity_log.total_rows, real("identity_events"), "a missing row is recounted, never served as 0");
+});
+
+test("the legacy-manifest read seeks identity events by kind instead of walking the table", () => {
+  const { db } = recording();
+  const plan = (db.prepare(
+    "EXPLAIN QUERY PLAN SELECT id, detail AS payload, created_at FROM identity_events WHERE kind = 'legacy.manifest' AND hash IS NOT NULL ORDER BY id ASC",
+  ).all() as { detail: string }[]).map((r) => r.detail).join(" | ");
+  assert.match(plan, /idx_identity_events_kind \(kind=\?\)/, `expected a kind seek, got: ${plan}`);
+  assert.doesNotMatch(plan, /TEMP B-TREE/, "and the (kind, id) index gives id order without a sort");
+});

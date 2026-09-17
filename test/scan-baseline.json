@@ -139,20 +139,6 @@
         "identity_events: SEARCH identity_events USING INTEGER PRIMARY KEY (rowid>?)"
       ]
     },
-    "d22c0fae8f61da17": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM identity_events WHERE kind = ?",
-      "plan": [
-        "identity_events: SCAN identity_events USING COVERING INDEX idx_identity_events_citizen_kind"
-      ]
-    },
-    "5f7c06c0b40070e9": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM ledger",
-      "plan": [
-        "ledger: SCAN ledger USING COVERING INDEX idx_ledger_hash"
-      ]
-    },
     "167363edac02de39": {
       "status": "debt",
       "sql": "SELECT COUNT(*) AS n FROM ledger WHERE id < ?",
@@ -275,20 +261,6 @@
         "identity_events: SCAN e USING INDEX idx_identity_events"
       ]
     },
-    "793e02e8530134c1": {
-      "status": "debt",
-      "sql": "SELECT e.id, e.citizen_id, e.kind, e.detail, e.created_at, e.prev_hash, e.hash, c.handle AS citizen FROM identity_events e JOIN citizens c ON c.id = e.citizen_id WHERE e.kind = ? ORDER BY e.created_at DESC LIMIT N",
-      "plan": [
-        "identity_events: SCAN e USING INDEX idx_identity_events"
-      ]
-    },
-    "9dd433da10b219c0": {
-      "status": "debt",
-      "sql": "SELECT e.id, e.kind, e.detail, e.created_at, e.hash, c.handle FROM identity_events e JOIN citizens c ON c.id = e.citizen_id WHERE e.kind IN ('grant', 'grant-proposal') AND e.detail LIKE ? ORDER BY e.id ASC",
-      "plan": [
-        "identity_events: SCAN e"
-      ]
-    },
     "8d01c4d3a1709457": {
       "status": "debt",
       "sql": "SELECT f.target_type, f.target_id, COUNT(*) AS flags, MAX(f.created_at) AS newest, (SELECT d.disposition FROM flag_dispositions d WHERE d.target_type = f.target_type AND d.target_id = f.target_id ORDER BY d.id DESC LIMIT N) AS disposition, (SELECT d.reason FROM flag_dispositions d WHERE d.target_typ",
@@ -394,13 +366,6 @@
         "ledger: SCAN ledger"
       ]
     },
-    "caf797c19f9a9e2b": {
-      "status": "debt",
-      "sql": "SELECT id, detail AS payload, created_at FROM identity_events WHERE kind = 'legacy.manifest' AND hash IS NOT NULL ORDER BY id ASC",
-      "plan": [
-        "identity_events: SCAN identity_events"
-      ]
-    },
     "a0c701c15e153e8e": {
       "status": "debt",
       "sql": "SELECT id, entry_date, description, amount_cents, created_at, tx, source FROM ledger WHERE id < ? ORDER BY id ASC",
@@ -427,13 +392,6 @@
       "sql": "SELECT id, hash FROM ledger WHERE hash IS NOT NULL ORDER BY id DESC LIMIT N",
       "plan": [
         "ledger: SCAN ledger"
-      ]
-    },
-    "77bcfd168d2d8014": {
-      "status": "debt",
-      "sql": "SELECT id, kind, detail, created_at, prev_hash, hash FROM identity_events WHERE (kind = 'witness-register' AND instr(detail, ?) = N) OR (kind = 'witness-rotate' AND instr(detail, ?) = N) ORDER BY id ASC LIMIT N",
-      "plan": [
-        "identity_events: SCAN identity_events"
       ]
     },
     "bc90994553e9d5df": {
