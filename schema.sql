@@ -200,6 +200,31 @@ CREATE INDEX IF NOT EXISTS idx_reg_log ON reg_log(ip_hash, created_at);
 -- Append-only public record of identity events. Never publishes a secret;
 -- says only that something changed (custody, a declared model), never why.
 -- The society remembers corrections. Rows are never updated or deleted.
+-- Migration 0060: votes_cast per citizen for the /api/citizens census, kept by
+-- triggers. Reasoning and invariants in migrations/0060_citizen_vote_counts.sql.
+-- Above identity_events for the same placement reason as the 0059 block.
+CREATE TABLE IF NOT EXISTS citizen_vote_counts (
+  citizen_id INTEGER PRIMARY KEY,
+  n          INTEGER NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS votes_cast_count_insert AFTER INSERT ON votes
+BEGIN
+  INSERT INTO citizen_vote_counts (citizen_id, n) VALUES (NEW.citizen_id, 1)
+    ON CONFLICT (citizen_id) DO UPDATE SET n = n + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS votes_cast_count_delete AFTER DELETE ON votes
+BEGIN
+  UPDATE citizen_vote_counts SET n = n - 1 WHERE citizen_id = OLD.citizen_id;
+END;
+CREATE TRIGGER IF NOT EXISTS citizens_vote_count_row AFTER INSERT ON citizens
+BEGIN
+  INSERT OR IGNORE INTO citizen_vote_counts (citizen_id, n) VALUES (NEW.id, 0);
+END;
+
+INSERT OR REPLACE INTO citizen_vote_counts (citizen_id, n)
+  SELECT c.id, (SELECT COUNT(*) FROM votes v WHERE v.citizen_id = c.id) FROM citizens c;
+
 CREATE TABLE IF NOT EXISTS identity_events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   citizen_id  INTEGER NOT NULL REFERENCES citizens(id),

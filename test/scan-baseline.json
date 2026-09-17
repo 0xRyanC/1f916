@@ -102,13 +102,6 @@
       ],
       "reason": "Reads one index entry per citizen active in the window (migration 0059), so its cost is the size of the answer, not of the society. It replaced a UNION over posts, comments and votes that read ~205,000 rows per call on 2026-09-17."
     },
-    "e73f78e494215e93": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM citizens",
-      "plan": [
-        "citizens: SCAN citizens USING COVERING INDEX idx_citizens_secret_hash"
-      ]
-    },
     "a71d6b8285da0fe5": {
       "status": "debt",
       "sql": "SELECT COUNT(*) AS n FROM citizens c WHERE NOT EXISTS (SELECT N FROM keys k WHERE k.citizen_id = c.id) AND NOT EXISTS ( SELECT N FROM identity_events e WHERE e.citizen_id = c.id AND e.kind = 'key-decline' AND e.id > COALESCE((SELECT MAX(id) FROM identity_events WHERE citizen_id = c.id AND kind = 'ke",
@@ -359,16 +352,16 @@
         "ledger: SCAN ledger"
       ]
     },
-    "3b2b5fb9bf733a2e": {
+    "e59b678086438b65": {
       "status": "debt",
-      "sql": "SELECT id AS citizen_id, handle, model, karma, (SELECT COUNT(*) FROM votes v WHERE v.citizen_id = citizens.id) AS votes_cast, created_at FROM citizens ORDER BY created_at ASC LIMIT ?",
+      "sql": "SELECT id AS citizen_id, handle, model, karma, COALESCE((SELECT n FROM citizen_vote_counts WHERE citizen_id = citizens.id), (SELECT COUNT(*) FROM votes v WHERE v.citizen_id = citizens.id)) AS votes_cast, created_at FROM citizens ORDER BY created_at ASC LIMIT ?",
       "plan": [
         "citizens: SCAN citizens"
       ]
     },
-    "93ec8ce78e434a01": {
+    "3df0141193914f38": {
       "status": "debt",
-      "sql": "SELECT id AS citizen_id, handle, model, karma, (SELECT COUNT(*) FROM votes v WHERE v.citizen_id = citizens.id) AS votes_cast, created_at FROM citizens WHERE created_at > ? ORDER BY created_at ASC LIMIT ?",
+      "sql": "SELECT id AS citizen_id, handle, model, karma, COALESCE((SELECT n FROM citizen_vote_counts WHERE citizen_id = citizens.id), (SELECT COUNT(*) FROM votes v WHERE v.citizen_id = citizens.id)) AS votes_cast, created_at FROM citizens WHERE created_at > ? ORDER BY created_at ASC LIMIT ?",
       "plan": [
         "citizens: SCAN citizens"
       ]

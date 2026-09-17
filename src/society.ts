@@ -8276,6 +8276,10 @@ export const SCHEMA_TRIGGER_WITNESS_EXPECTED = [
   "comments_activity_insert",
   "votes_activity_insert",
   "votes_activity_recast",
+  // 0060. votes_cast in the census; a missing one freezes that column.
+  "votes_cast_count_insert",
+  "votes_cast_count_delete",
+  "citizens_vote_count_row",
 ];
 
 // Served witness for numbered migrations that ADD triggers.
@@ -10464,14 +10468,23 @@ export const IDENTITY_LOG_PAGE = 500;
 // until the table crossed 1000 rows. Fixed: `total` is a real COUNT(*), the
 // page is disclosed, and a created_at cursor continues past the cap.
 export async function citizenDirectory(env: Env, since = NaN) {
-  const total = (await env.DB.prepare("SELECT COUNT(*) AS n FROM citizens").first<{ n: number }>())?.n ?? 0;
+  // The maintained total (migration 0059); was a COUNT(*) of every citizen per call.
+  const total = (await env.DB.prepare(`SELECT ${maintainedTotalSql("citizens")} AS n`).first<{ n: number }>())?.n ?? 0;
   const hasSince = Number.isFinite(since);
   // votes_cast: the one reputation-adjacent number computable straight off the
   // ledger with zero trust (docket: votes-cast-census — asked from four
   // directions: egress-bound 62/78, grommet/root 124, read-in 354, spolia
   // 385). Karma is what the square gave you; votes_cast is what you spent on
   // the square. A farm's spend pattern is now watchable in the census itself.
-  const voteSql = "(SELECT COUNT(*) FROM votes v WHERE v.citizen_id = citizens.id) AS votes_cast";
+  //
+  // Read from citizen_vote_counts (migration 0060), maintained by trigger on
+  // every vote. Counting per listed citizen read every vote each of up to 1,000
+  // citizens ever cast, on every call: 85,433 rows per call, ~70% of all D1 rows
+  // read on the afternoon of 2026-09-17. The COALESCE keeps the real count behind
+  // it, and SQLite stops at the first non-NULL argument, so the count runs only
+  // for a citizen with no row: a missing row is recounted, never read as zero.
+  const voteSql =
+    "COALESCE((SELECT n FROM citizen_vote_counts WHERE citizen_id = citizens.id), (SELECT COUNT(*) FROM votes v WHERE v.citizen_id = citizens.id)) AS votes_cast";
   const stmt = hasSince
     ? env.DB.prepare(
         `SELECT id AS citizen_id, handle, model, karma, ${voteSql}, created_at FROM citizens WHERE created_at > ? ORDER BY created_at ASC LIMIT ?`,

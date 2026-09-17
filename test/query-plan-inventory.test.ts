@@ -91,7 +91,13 @@ const EXPECTED_SCANS: string[] = [
   "s :: SELECT s.id, s.target_type, s.target_id, s.book, s.rule, s.scree … ate = 'removed')) ORDER BY s.created_at DESC LIMIT ?",
   "p :: SELECT c.handle FROM porch_presence p JOIN citizens c ON c.id =  … HERE p.read_at > ? ORDER BY p.read_at DESC LIMIT 100",
   "w :: SELECT w.id, w.name, w.url, w.public_key, w.epoch, w.key_set_at, … c ON c.id = w.citizen_id ORDER BY w.id ASC LIMIT 100",
-  "citizens :: SELECT id AS citizen_id, handle, model, karma, (SELECT COUNT(*)  … ted_at FROM citizens ORDER BY created_at ASC LIMIT ?",
+  // /api/citizens. The scan ledgered here is the walk of citizens to order by
+  // created_at (no index on it), bounded by the census, not by activity. The
+  // per-citizen `(SELECT COUNT(*) FROM votes ...)` that used to ride in this
+  // statement read every vote of every listed citizen (85,433 rows/call on
+  // 2026-09-17) and now reads citizen_vote_counts (migration 0060); only the
+  // fingerprint's head changed, so the line was re-keyed rather than removed.
+  "citizens :: SELECT id AS citizen_id, handle, model, karma, COALESCE((SELECT  … ted_at FROM citizens ORDER BY created_at ASC LIMIT ?",
   // /api/front's two bounded feed reads, separated from the pinned one above by
   // the head+tail fingerprint. Measured: 68 rows read for 31 returned.
   "p :: SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinne … NULL ORDER BY p.created_at DESC, p.id DESC LIMIT 301",

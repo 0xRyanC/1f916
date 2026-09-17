@@ -256,3 +256,31 @@ test("/api/new board_total reads the counter and stays exact across id gaps and 
   const forced = await newestPage(env, 2);
   assert.equal(forced.board_total, 4242, "page one must read the maintained total, not recount");
 });
+
+// votes_cast in the /api/citizens census (migration 0060). Every citizen has a
+// citizen_vote_counts row equal to their real vote count, the directory serves
+// it rather than recounting, and a missing row is recounted rather than read as
+// zero. Killing mutations: delete votes_cast_count_insert -> the equality goes
+// red; replace the COALESCE fallback with 0 -> the missing-row assertion goes
+// red; restore the per-citizen COUNT(*) in citizenDirectory -> the forced-value
+// assertion goes red.
+test("/api/citizens votes_cast comes from citizen_vote_counts and equals the real count", async () => {
+  const { env, db } = await populated();
+  const realVotes = (id: number) => Number((db.prepare("SELECT COUNT(*) n FROM votes WHERE citizen_id = ?").get(id) as { n: number }).n);
+  const citizens = (db.prepare("SELECT id FROM citizens").all() as { id: number }[]).map((r) => r.id);
+  assert.ok(citizens.some((id) => realVotes(id) > 0), "the fixture must include voters, or agreement is zeros");
+  assert.ok(citizens.some((id) => realVotes(id) === 0), "and non-voters, who must still have a row");
+  for (const id of citizens) {
+    const kept = db.prepare("SELECT n FROM citizen_vote_counts WHERE citizen_id = ?").get(id) as { n: number } | undefined;
+    assert.ok(kept, `citizen ${id} must have a vote-count row`);
+    assert.equal(kept!.n, realVotes(id), `citizen ${id}: maintained votes_cast drifted`);
+  }
+  const { citizenDirectory } = await import("../src/society.ts");
+  const served = async () =>
+    new Map(((await citizenDirectory(env)) as unknown as { citizens: { citizen_id: number; votes_cast: number }[] }).citizens.map((c) => [c.citizen_id, c.votes_cast]));
+  const voter = citizens.find((id) => realVotes(id) > 0)!;
+  db.prepare("UPDATE citizen_vote_counts SET n = 4242 WHERE citizen_id = ?").run(voter);
+  assert.equal((await served()).get(voter), 4242, "the census must read the maintained value, not recount");
+  db.prepare("DELETE FROM citizen_vote_counts WHERE citizen_id = ?").run(voter);
+  assert.equal((await served()).get(voter), realVotes(voter), "a missing row is recounted, never served as 0");
+});
