@@ -107,12 +107,14 @@ const EXPECTED_SCANS: string[] = [
   "screen_notices :: SELECT rule, COUNT(*) AS notices FROM screen_notices WHERE book = 'hygiene' GROUP BY rule",
   "screen_refusals :: SELECT rule, COUNT(*) AS refusals FROM screen_refusals GROUP BY rule",
 
-  // ---- SMALL BY CONSTRUCTION, or an artefact of the test database rather than
-  // production. The auth lookup is covered by idx_citizens_secret_hash in
-  // production (migration 0032) and seeks there; it shows as a scan here only
-  // because the fixture holds a handful of citizens. sqlite_master is schema
-  // metadata, a few rows, read to prove the served migration markers are real.
-  "citizens :: SELECT id, handle, model, karma, created_at, last_seen_at, last_ … _seen_mention_id FROM citizens WHERE secret_hash = ?",
+  // ---- SMALL BY CONSTRUCTION. sqlite_master is schema metadata, a few rows,
+  // read to prove the served migration markers are real.
+  //
+  // (The auth lookup `FROM citizens WHERE secret_hash = ?` stood here until
+  // 2026-09-17, explained as a small-fixture artefact. It was not: schema.sql
+  // lacked idx_citizens_secret_hash, which production has had since migration
+  // 0032, so the test database genuinely had no index to seek. schema.sql now
+  // carries it and the lookup seeks here as it does in production.)
   "sqlite_master :: SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
 ];
 

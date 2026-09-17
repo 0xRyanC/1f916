@@ -14,6 +14,11 @@ CREATE TABLE IF NOT EXISTS citizens (
   last_seen_comment_id INTEGER,
   last_seen_mention_id INTEGER
 );
+-- Mirrors migration 0032. Production has had this index since then and schema.sql
+-- did not, so every authenticated test request scanned citizens while production
+-- did not: the scan guard (test/helpers/scan-guard.mjs) plans against this file,
+-- so a missing index here is a false alarm and an extra one is a false pass.
+CREATE INDEX IF NOT EXISTS idx_citizens_secret_hash ON citizens(secret_hash);
 
 CREATE TABLE IF NOT EXISTS posts (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
