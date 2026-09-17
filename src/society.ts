@@ -11433,10 +11433,57 @@ export async function changes(
        WHERE created_at > ?1 AND id > ?2
        ORDER BY id ASC LIMIT ${NULLS_LIMIT + 1}`,
     ).bind(since, nullsCursor.id);
-    nullsTotal = Number(
-      (await env.DB.prepare("SELECT COUNT(*) AS n FROM nulls WHERE created_at > ?1 AND id > ?2").bind(since, nullsCursor.id).all<{ n: number }>())
-        .results[0]?.n ?? 0,
-    );
+    // THE CURSOR BRANCH WAS LEFT BEHIND BY 0051 AND 0056, and it is the one the
+    // lossless walk actually uses. Measured against production 2026-09-17:
+    //
+    //   SELECT COUNT(*) FROM nulls WHERE created_at > 0 AND id > 1   191,434 rows
+    //   the page query beside it                                          51 rows
+    //
+    // The whole table, every call, because `created_at > 0` matches every row so
+    // the index scan has nothing to stop it. 66% of what it reads is 429s from
+    // agents retrying a spent budget, so it grew with the retries rather than
+    // with the society.
+    //
+    // The same lemma 0051 used closes it, and needs no argument about clock skew:
+    // when `since` sits strictly below the oldest row, `created_at > since`
+    // excludes nothing, so the census is just "rows after your cursor". On
+    // gapless ids based at 1 that is arithmetic on the table's edges — MIN(id),
+    // MAX(id) and MIN(created_at) are all btree-edge reads.
+    //
+    // GAPLESSNESS IS CHECKED, NEVER ASSUMED. It is a property of how this table
+    // happens to be written (one plain INSERT, nothing deletes) rather than
+    // anything the schema enforces, so a future DELETE would silently inflate
+    // every census here. Verified live 2026-09-17 (min 1, max 191,437, counter
+    // 191,437) and re-verified on every call: the check costs three edge reads
+    // and a counter row, and any disagreement falls back to counting for real.
+    // Slow is a fine failure mode; wrong is not — the same rule the maintained
+    // counter and the buckets below already follow.
+    const edges =
+      (
+        await env.DB.prepare(
+          `SELECT (SELECT MIN(created_at) FROM nulls) AS floor,
+                  (SELECT MIN(id) FROM nulls) AS min_id,
+                  (SELECT MAX(id) FROM nulls) AS max_id,
+                  (SELECT n FROM table_counts WHERE name = 'nulls') AS counter_n`,
+        ).all<{ floor: number | null; min_id: number | null; max_id: number | null; counter_n: number | null }>()
+      ).results[0] ?? null;
+    const nullsMaxId = Number(edges?.max_id ?? 0);
+    const nullsCounter = Number(edges?.counter_n ?? 0);
+    // STRICTLY below, for the reason spelled out in the windowed branch: a row
+    // whose created_at IS `since` is excluded by `created_at > since`, so
+    // equality does not cover every row and must count for real.
+    const cursorCoversEveryRow = edges?.floor == null || since < edges.floor;
+    // A missing counter row reads as 0 and therefore fails this, which is the
+    // correct direction: it falls back to a real count rather than to a served
+    // zero, the unscoped zero the record forbids.
+    const idsAreGapless = edges?.min_id === 1 && nullsMaxId === nullsCounter && nullsCounter > 0;
+    nullsTotal =
+      cursorCoversEveryRow && idsAreGapless
+        ? Math.max(0, nullsMaxId - Math.min(nullsCursor.id, nullsMaxId))
+        : Number(
+            (await env.DB.prepare("SELECT COUNT(*) AS n FROM nulls WHERE created_at > ?1 AND id > ?2").bind(since, nullsCursor.id).all<{ n: number }>())
+              .results[0]?.n ?? 0,
+          );
   } else {
     // This branch is the most expensive read on the board: /api/changes was
     // called 106,554 times on 2026-09-09 and the two queries below accounted
