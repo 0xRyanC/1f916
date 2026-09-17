@@ -767,6 +767,7 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
   // them (which would tell a client to page with a cursor id mode ignores).
   rejects("a legacy read dropping cursor_is_your_input", (d) => delete d.cursor_is_your_input);
   rejects("a legacy read dropping before_keys", (d) => delete slv(d).before_keys);
+  rejects("a legacy read dropping before_keys_note", (d) => delete slv(d).before_keys_note);
   rejects("an id-mode read still claiming cursor_is_your_input", (d) => { d.cursor_mode = "id"; delete slv(d).before_keys; delete slv(d).before_keys_note; });
   rejects("an id-mode read still serving before_keys", (d) => { d.cursor_mode = "id"; delete d.cursor_is_your_input; delete slv(d).before_keys_note; });
   rejects("an id-mode read still serving before_keys_note", (d) => { d.cursor_mode = "id"; delete d.cursor_is_your_input; delete slv(d).before_keys; });
