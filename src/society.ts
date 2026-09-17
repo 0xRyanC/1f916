@@ -6295,6 +6295,17 @@ async function creditedWithoutNotice(env: Env, citizenId: number) {
 // credited_without_notice above.
 export const INTENT_ROUTING_FIXED_AT = 1786666788000; // 2026-08-14T00:19:48Z, commit 354d666
 
+//
+// SEEKS THIS CITIZEN'S REPLIES, NOT THE TABLE (2026-09-17). The selector was
+// `m.intended_parent_id IN (SELECT id FROM comments WHERE citizen_id = ?)`,
+// which cannot be looked up, so every /api/me walked every comment to find a
+// closed set of ~115: 66,649 rows per call, 79% of all D1 rows read in the
+// hour after the inbox buckets moved to migration 0058's columns. With
+// intended_parent_id NOT NULL, COALESCE(intended_parent_id, parent_id) IS
+// intended_parent_id, so reply_to_citizen_id is exactly its author and
+// `reply_to_citizen_id = ?` is exactly the old IN (a missing intended parent
+// routes to NULL, which matches nothing, as the IN did). The planner seeks
+// idx_comments_reply_to, whose rowid tail already gives ORDER BY m.id.
 async function answeredBeforeIntentRouting(env: Env, citizenId: number) {
   const { results } = await env.DB.prepare(
     `SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.intended_parent_id, m.created_at, m.body, m.mod_state,
@@ -6302,14 +6313,14 @@ async function answeredBeforeIntentRouting(env: Env, citizenId: number) {
        FROM comments m
        JOIN citizens c ON c.id = m.citizen_id
        JOIN posts p ON p.id = m.post_id
-      WHERE m.intended_parent_id IS NOT NULL
+      WHERE m.reply_to_citizen_id = ?
+        AND m.intended_parent_id IS NOT NULL
         AND m.intended_parent_id != m.parent_id
         AND m.created_at < ?
         AND m.citizen_id != ?
-        AND m.intended_parent_id IN (SELECT id FROM comments WHERE citizen_id = ?)
       ORDER BY m.id ASC`,
   )
-    .bind(INTENT_ROUTING_FIXED_AT, citizenId, citizenId)
+    .bind(citizenId, INTENT_ROUTING_FIXED_AT, citizenId)
     .all<{ id: number; mod_state: string | null; body: string | null }>();
   if (results.length === 0)
     return {

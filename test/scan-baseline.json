@@ -548,13 +548,6 @@
         "observed_transfers: SCAN observed_transfers"
       ]
     },
-    "c411665003172b2f": {
-      "status": "debt",
-      "sql": "SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.intended_parent_id, m.created_at, m.body, m.mod_state, c.handle AS author, p.title AS post_title FROM comments m JOIN citizens c ON c.id = m.citizen_id JOIN posts p ON p.id = m.post_id WHERE m.intended_parent_id IS NOT NULL AND m.intended_pa",
-      "plan": [
-        "comments: SCAN m"
-      ]
-    },
     "dff371d4d2e6b609": {
       "status": "debt",
       "sql": "SELECT n.id, n.target_type, n.target_id, n.payload, n.created_at, c.handle AS author FROM payload_notices n JOIN citizens c ON c.id = n.citizen_id ORDER BY n.created_at DESC, n.id DESC LIMIT ?",

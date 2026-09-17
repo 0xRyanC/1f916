@@ -66,10 +66,14 @@ const EXPECTED_SCANS: string[] = [
   // pre-deploy auditor, which instrumented this guard's own filter after I had
   // written an exemption wide enough to hide it.
   "p :: SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinne … D p.pinned = 1 ORDER BY p.created_at DESC, p.id DESC",
-  // /api/changes comments page: 64,743 rows/call. Filter on created_at, ORDER BY
-  // on id — the same shape already fixed on the nulls page, and the same fix
-  // applies (seek a bounded start id, then walk the primary key).
-  "m :: SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.inten … ROM comments WHERE citizen_id = ?) ORDER BY m.id ASC",
+  //
+  // (A second entry stood here until 2026-09-17, labelled "/api/changes comments
+  // page: 64,743 rows/call". The fingerprint was in fact /api/me's
+  // answered_before_intent_routing, whose `intended_parent_id IN (SELECT id FROM
+  // comments WHERE citizen_id = ?)` walked every comment for a closed set of
+  // ~115 rows; it was 79% of all D1 rows read that afternoon. It now seeks
+  // migration 0058's reply_to_citizen_id: 67,164 -> 39 rows read, measured on
+  // production for the same citizen and the same answer.)
 
   // ---- BOUNDED PAGES that still scan, because the predicate they filter on has
   // no index. The LIMIT caps what is RETURNED, never what is READ: a selective
