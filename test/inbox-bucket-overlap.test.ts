@@ -67,8 +67,17 @@ test("the union de-duplicates, so the count is a union and not a sum", () => {
   // THE defect this whole file exists for (#83: naive sum 9 over 7 distinct
   // rows). Under COUNT(DISTINCT) dedup was inherent; expressed as branches it
   // is one keyword, and UNION ALL would restore the wrong arithmetic silently.
+  //
+  // Since 2026-09-17 the branches are UNION ALL under a SELECT DISTINCT, because
+  // a LIMIT over a compound UNION did not stop the read (see the comment at the
+  // query). De-duplication is still mandatory; it just lives in DISTINCT. So the
+  // rule is: UNION ALL is allowed only with a DISTINCT over it, and the
+  // behavioural proof that an overlapping comment counts once is in
+  // test/inbox-total-cap.test.ts.
   assert.match(unionQuery, /\bUNION\b/, "the branches must be combined with UNION");
-  assert.doesNotMatch(unionQuery, /\bUNION\s+ALL\b/, "UNION ALL double-counts the overlap — exactly the bug this file was filed for");
+  if (/\bUNION\s+ALL\b/.test(unionQuery)) {
+    assert.match(unionQuery, /SELECT DISTINCT id FROM \(/, "UNION ALL without a DISTINCT over it double-counts the overlap — exactly the bug this file was filed for");
+  }
 });
 
 test("the distinct count runs the buckets' own predicates, not a restatement", () => {

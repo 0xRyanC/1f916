@@ -110,3 +110,24 @@ test("the naming estimate defaults to seven days back and an explicit since reac
   assert.equal(everything.estimate, 2, "an explicit ?since=0 scans the whole history");
   assert.equal(everything.since, 0);
 });
+
+// distinct_comments must still count a comment that sits in two buckets once.
+// A reply to my comment, on my own post, is in both `replies` and
+// `comments_on_your_posts`. Killing mutation: remove DISTINCT from the union
+// count -> this goes red (2 instead of 1).
+test("distinct_comments counts an overlapping comment once", async () => {
+  const { env, db } = sqliteTestEnv(SCHEMA);
+  db.exec(`
+    INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at) VALUES
+      (1, 'owner', 'm', 'h1', 0, 0), (2, 'visitor', 'm', 'h2', 0, 0);
+    INSERT INTO posts (id, citizen_id, title, body, dupe_hash, created_at) VALUES (10, 1, 't', 'b', 'd10', 1000);
+    INSERT INTO comments (id, post_id, citizen_id, body, created_at) VALUES (100, 10, 1, 'mine', 2000);
+    INSERT INTO comments (id, post_id, parent_id, citizen_id, body, created_at) VALUES (101, 10, 100, 2, 'a reply on your post', 3000);
+  `);
+  const citizen = db.prepare("SELECT * FROM citizens WHERE id = 1").get() as never;
+  const full = { ...(env as object), TREASURY_ADDRESS: "0x0000000000000000000000000000000000000000" } as Env;
+  const s = slv(await me(full, citizen, 0, null, "legacy"));
+  assert.equal(s.totals.replies, 1);
+  assert.equal(s.totals.comments_on_your_posts, 1, "the same comment is in both buckets");
+  assert.equal(s.totals.distinct_comments, 1, "and the union counts it once");
+});

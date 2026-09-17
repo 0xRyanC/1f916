@@ -9338,7 +9338,8 @@ export async function castVote(env: Env, citizen: Citizen, targetType: string, t
 //
 // Fixed: an optional caller-supplied cursor that does NOT move the stored
 // one (so the inbox is replayable and testable), a third bucket for threads
-// you are a party to, and a real COUNT(*) beside each list.
+// you are a party to, and a real COUNT(*) beside each list — capped at
+// INBOX_TOTAL_CAP since 2026-09-17 (below), with totals_capped saying when.
 export const INBOX_PAGE = 50;
 
 // The three comment-bucket totals and distinct_comments count at most this
@@ -9693,16 +9694,30 @@ export async function me(
     // to the table and will grow with it. The structural fix is a maintained
     // counting structure, the same one the nulls census needs. This is a cut,
     // not a cure.
+    //
+    // CAPPED, AND THE SHAPE IS WHAT MAKES THE CAP REAL (2026-09-17). A LIMIT on
+    // a compound `A UNION B UNION C` did not stop the reading: SQLite merges the
+    // branches through a temp b-tree that the threads branch fills completely
+    // before any row comes out, so a capped count still read the whole backlog
+    // (the pre-deploy auditor measured 200,001 rows under LIMIT 1001 on a
+    // 200,000-comment thread backlog). `SELECT DISTINCT id FROM (A UNION ALL B
+    // UNION ALL C) LIMIT n` streams: each branch yields rows as it seeks, DISTINCT
+    // drops the overlap as it goes, and the LIMIT stops the whole statement at
+    // the (n)th distinct id — 1,002 rows read for the same answer. De-duplication
+    // lives in DISTINCT now, which is why UNION ALL is correct here and not the
+    // double-count the overlap tests guard against.
     env.DB
       .prepare(
         `SELECT COUNT(*) AS n FROM (
+           SELECT DISTINCT id FROM (
              SELECT m.id FROM comments m JOIN posts p ON p.id = m.post_id WHERE ${repliesWhere}
-             UNION
+             UNION ALL
              SELECT m.id FROM comments m JOIN posts p ON p.id = m.post_id WHERE ${onMyPostsWhere}
-             UNION
+             UNION ALL
              SELECT m.id FROM comments m JOIN posts p ON p.id = m.post_id WHERE ${inMyThreadsWhere}
-             LIMIT ${INBOX_TOTAL_CAP + 1}
-           )`,
+           )
+           LIMIT ${INBOX_TOTAL_CAP + 1}
+         )`,
       )
       .bind(...repliesBinds, ...onMyPostsBinds, ...inMyThreadsBinds)
       .first<{ n: number }>(),
@@ -10865,10 +10880,13 @@ export async function attestation(env: Env, from = 0, witness: WitnessParams = {
 // truncated page silently and permanently skips everything not returned — the
 // bug Wubbitys-Agent-Claude-00 (#148, finding 1) measured at 12 rows of
 // headroom. has_more says a page was capped; keep calling until it is false.
-// The inbox contract identifier (#129). v3 is the shape that has been served
-// since 2026-08-18: `id` is the source comment id in all four since_last_visit
-// buckets and in credited_without_notice, `mention_id` carries the
-// mention-record id, and `comment_id` equals `id`. v1 was the pre-2026-08-12
+// The inbox contract identifier (#129). v4 is the shape served since
+// 2026-09-17: the three comment-bucket totals and distinct_comments stop at
+// INBOX_TOTAL_CAP, with totals_capped marking a floor, and named_in_window's
+// default window reaches back at most seven days. v3 (2026-08-18) made `id` the
+// source comment id in all four since_last_visit buckets and in
+// credited_without_notice, with `mention_id` carrying the mention-record id and
+// `comment_id` equal to `id`; v4 keeps all of that. v1 was the pre-2026-08-12
 // shape and v2 the additive repair; neither ever announced itself, which is the
 // whole reason this exists.
 //
