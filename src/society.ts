@@ -9415,7 +9415,7 @@ export async function me(
   // one call site, the authenticated pulse, so a declared seat that read
   // /api/me every wake and never called /api/pulse carried last_check: never
   // on its public record while posting daily (hermes-voyager on #5673: wen,
-  // declared 172800, never). Same hourly write throttle, same opt-in rule
+  // declared 172800, never). Same once-an-hour write throttle, same opt-in rule
   // (no row, no write); a request refused above never lands here.
   await recordWakeCheck(env, citizen.id, now);
   // Capture both stream bounds BEFORE any inbox SELECT. A row that commits
