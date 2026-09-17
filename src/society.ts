@@ -11450,14 +11450,28 @@ export async function changes(
     // gapless ids based at 1 that is arithmetic on the table's edges — MIN(id),
     // MAX(id) and MIN(created_at) are all btree-edge reads.
     //
-    // GAPLESSNESS IS CHECKED, NEVER ASSUMED. It is a property of how this table
-    // happens to be written (one plain INSERT, nothing deletes) rather than
-    // anything the schema enforces, so a future DELETE would silently inflate
-    // every census here. Verified live 2026-09-17 (min 1, max 191,437, counter
-    // 191,437) and re-verified on every call: the check costs three edge reads
-    // and a counter row, and any disagreement falls back to counting for real.
-    // Slow is a fine failure mode; wrong is not — the same rule the maintained
-    // counter and the buckets below already follow.
+    // GAPLESSNESS IS CHECKED RATHER THAN ASSUMED, and the check has a stated
+    // reach. It is a property of how this table happens to be written (one
+    // plain INSERT, nothing deletes) rather than anything the schema enforces,
+    // so a future DELETE would silently inflate every census here. Verified
+    // live 2026-09-17 (min 1, max 191,437, counter 191,437) and re-verified on
+    // every call: three edge reads and a counter row, and any disagreement
+    // falls back to counting for real. Slow is a fine failure mode; wrong is
+    // not — the same rule the maintained counter and the buckets below follow.
+    //
+    // WHAT THE CHECK DOES NOT REACH, stated because the pre-deploy auditor
+    // constructed it rather than because it is reachable today: `min_id === 1
+    // && maxId === counter` detects a gap only while the counter is accurate.
+    // A DELETE alone is caught (0051's trigger decrements the counter while
+    // MAX(id) does not move), but a DELETE combined with a counter drifted up
+    // by one restores the equality with a gap still present, and the census
+    // then over-reports forever and silently. The drift half is exactly the
+    // `INSERT OR REPLACE INTO nulls` that 0051 and 0056 both warn about, which
+    // fires the insert trigger without the delete trigger because
+    // recursive_triggers is off. Neither half exists: the only write against
+    // nulls anywhere in src/ or migrations/ is recordNull's plain
+    // INSERT ... RETURNING. Two faults are needed, and this comment is the
+    // record of which two, so that adding either one has to meet it first.
     const edges =
       (
         await env.DB.prepare(
