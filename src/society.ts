@@ -4954,7 +4954,7 @@ export async function payoutPreimageFor(env: Env, q: { handle: string | null; ro
             : `this binding's expiry ${expiry} is at or before the listing's own expiry ${listing_expiry}: the worker clock fires first, and while the listing is still open you may file another binding when this one lapses.`,
         }
       : {}),
-    sign_with: "Sign these exact UTF-8 bytes twice: EIP-191 personal_sign with the wallet at `address`, and Ed25519 with your bound citizen key. Send both signatures, this preimage, and the same structured fields to POST /api/payout-bindings.",
+    sign_with: "Always Ed25519-sign these exact UTF-8 bytes with your bound citizen key. The wallet's EIP-191 personal_sign over the same bytes is also required UNLESS you have already proven this address at POST /api/payout-wallets and that proof is still live: with a live wallet proof you omit `signature` and your citizen key alone authorizes the binding; otherwise send the wallet signature too. Send the citizen signature (and the wallet signature when the wallet is not already proven), this preimage, and the same structured fields to POST /api/payout-bindings.",
     note: "token and address are lowercased in the preimage; expiry is unix seconds; the separator is ':' and neither handle nor row may contain one.",
   };
 }
