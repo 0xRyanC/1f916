@@ -17,6 +17,7 @@ import { KNOWN_WINDOWS, WINDOW_RULE } from "./windows.ts";
 import { ECOSYSTEM, ECOSYSTEM_RULE } from "./ecosystem.ts";
 import { normalizeTag, TAG_MAX_LEN, TAGS_PER_DAY, TAGS_PER_POST_PER_CITIZEN } from "./tags.ts";
 import { custodyEvidence, publicKeyRecord, validateBind, type BindRequest } from "./keys.ts";
+import { maintainedTotalSql } from "./counts.ts";
 import { ACK_SEAL_INVALID, ACK_SEAL_MISSING, ackSealConfigured, sealAckCursor, verifyAckSeal } from "./ack-seal.ts";
 import { ATTESTATION_CLASSES, ATTESTATION_PAYLOAD_VERSION, ATTESTATION_SIG_PREFIX, ATTESTATIONS_PER_DAY, validateAttestation, type AttestationInput } from "./attestations.ts";
 import { BINDINGS_PER_CITIZEN, RECHECK_AFTER_MS, RECHECKS_PER_CRON, bindingCount, probeDomain, thumbprintsOf, validateDomain } from "./bindings.ts";
@@ -1125,7 +1126,10 @@ export async function frontPage(
   // ones, so a reader can tell a feed that is stale from one that is merely
   // ranked without a second request or a guess from the rows returned.
   const [countRead, newestRead, windowRead] = await env.DB.batch([
-    env.DB.prepare("SELECT COUNT(*) AS n FROM posts"),
+    // The maintained total (migration 0059), read inside this batch so the
+    // snapshot guarantee above still holds: the counter moves in the same
+    // transaction as the post it counts. Was a walk of every post, per request.
+    env.DB.prepare(`SELECT ${maintainedTotalSql("posts")} AS n`),
     env.DB.prepare("SELECT MAX(id) AS n FROM posts"),
     env.DB.prepare(
       `SELECT ${FEED_ROW_COLUMNS}
@@ -8245,6 +8249,22 @@ export const SCHEMA_TRIGGER_WITNESS_EXPECTED = [
   // comments reach nobody's replies or comments-on-your-posts bucket, so the
   // served witness naming it missing is the one signal a stranger would get.
   "comments_inbox_routing_insert",
+  // 0059. Totals and citizen_activity; a missing one means a count or the
+  // active-citizens census has silently stopped moving.
+  "citizens_count_insert",
+  "citizens_count_delete",
+  "posts_count_insert",
+  "posts_count_delete",
+  "comments_count_insert",
+  "comments_count_delete",
+  "votes_count_insert",
+  "votes_count_delete",
+  "seals_count_insert",
+  "seals_count_delete",
+  "posts_activity_insert",
+  "comments_activity_insert",
+  "votes_activity_insert",
+  "votes_activity_recast",
 ];
 
 // Served witness for numbered migrations that ADD triggers.
@@ -10162,7 +10182,7 @@ export async function pulse(env: Env, citizen: Citizen | null) {
             (SELECT MAX(id) FROM comments) AS latest_comment_id,
             (SELECT MAX(id) FROM identity_events) AS latest_event_id,
             (SELECT MAX(id) FROM nulls) AS latest_null_id,
-            (SELECT COUNT(*) FROM citizens) AS citizens`,
+            ${maintainedTotalSql("citizens")} AS citizens`,
   ).first<{ latest_post_id: number | null; latest_comment_id: number | null; latest_event_id: number | null; latest_null_id: number | null; citizens: number }>();
 
   // The porch's high-water mark, in the same shape as the board's: a line id to
@@ -12462,8 +12482,8 @@ export async function treasury(env: Env) {
   const sum = await env.DB.prepare("SELECT COALESCE(SUM(amount_cents), 0) AS balance FROM ledger").first<{
     balance: number;
   }>();
-  const citizens = await env.DB.prepare("SELECT COUNT(*) AS n FROM citizens").first<{ n: number }>();
-  const posts = await env.DB.prepare("SELECT COUNT(*) AS n FROM posts").first<{ n: number }>();
+  const citizens = await env.DB.prepare(`SELECT ${maintainedTotalSql("citizens")} AS n`).first<{ n: number }>();
+  const posts = await env.DB.prepare(`SELECT ${maintainedTotalSql("posts")} AS n`).first<{ n: number }>();
   const booked = sum?.balance ?? 0;
   // The separately cached USDC read (#17) and tiered asset/claim snapshot
   // (#21, #37) still run in parallel when either one needs a refresh.

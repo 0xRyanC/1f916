@@ -16,13 +16,6 @@
         "posts: SEARCH posts USING INDEX idx_posts_created (created_at>?)"
       ]
     },
-    "84020aa9ca11b3e4": {
-      "status": "debt",
-      "sql": "SELECT (SELECT MAX(id) FROM posts) AS latest_post_id, (SELECT MAX(id) FROM comments) AS latest_comment_id, (SELECT MAX(id) FROM identity_events) AS latest_event_id, (SELECT MAX(id) FROM nulls) AS latest_null_id, (SELECT COUNT(*) FROM citizens) AS citizens",
-      "plan": [
-        "citizens: SCAN citizens USING COVERING INDEX idx_citizens_secret_hash"
-      ]
-    },
     "12178640e74ee942": {
       "status": "debt",
       "sql": "SELECT a.id, a.class, a.claim, a.evidence, a.payload, a.payload_hash, a.signature, a.key_thumbprint, a.target_attestation_id, a.withdraw_when, a.issued_at, a.payload_version, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a",
@@ -107,6 +100,14 @@
         "tags: SCAN tags USING COVERING INDEX idx_tags_tag"
       ]
     },
+    "f69637702696e831": {
+      "status": "accepted",
+      "sql": "SELECT COUNT(*) AS n FROM citizen_activity WHERE last_active_at > ?N",
+      "plan": [
+        "citizen_activity: SEARCH citizen_activity USING COVERING INDEX idx_citizen_activity_last (last_active_at>?)"
+      ],
+      "reason": "Reads one index entry per citizen active in the window (migration 0059), so its cost is the size of the answer, not of the society. It replaced a UNION over posts, comments and votes that read ~205,000 rows per call on 2026-09-17."
+    },
     "e73f78e494215e93": {
       "status": "debt",
       "sql": "SELECT COUNT(*) AS n FROM citizens",
@@ -120,13 +121,6 @@
       "plan": [
         "citizens: SCAN c USING COVERING INDEX idx_citizens_secret_hash",
         "identity_events: SEARCH e USING COVERING INDEX idx_identity_events_citizen_kind (citizen_id=? AND kind=? AND id>?)"
-      ]
-    },
-    "d09fd99d8f559a66": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM comments",
-      "plan": [
-        "comments: SCAN comments USING COVERING INDEX idx_comments_citizen_day"
       ]
     },
     "f72c915d57068b05": {
@@ -214,13 +208,6 @@
         "nulls: SEARCH nulls USING COVERING INDEX idx_nulls_created (created_at>?)"
       ]
     },
-    "227ddc41d8415af6": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM posts",
-      "plan": [
-        "posts: SCAN posts USING COVERING INDEX idx_posts_created"
-      ]
-    },
     "76aed3e38673d15b": {
       "status": "debt",
       "sql": "SELECT COUNT(*) AS n FROM posts WHERE created_at <= ?N AND id <= ?N AND id > COALESCE((SELECT MIN(id) FROM posts WHERE created_at > ?N AND id <= ?N), ?N)",
@@ -250,20 +237,6 @@
         "screen_notices: SCAN s"
       ]
     },
-    "e21c0583cc9598f2": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM seals",
-      "plan": [
-        "seals: SCAN seals USING COVERING INDEX idx_seals_citizen_label"
-      ]
-    },
-    "965b9daa8724dd67": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM votes",
-      "plan": [
-        "votes: SCAN votes USING COVERING INDEX idx_votes_citizen_day"
-      ]
-    },
     "8ab206d7d9f3dd4b": {
       "status": "debt",
       "sql": "SELECT COUNT(*) AS n FROM witnesses",
@@ -284,15 +257,6 @@
       "plan": [
         "citizens: SCAN c",
         "identity_events: SEARCH e EXISTS USING COVERING INDEX idx_identity_events_citizen_kind (citizen_id=? AND kind=? AND id>?)"
-      ]
-    },
-    "f6c02fa8ca103ef0": {
-      "status": "debt",
-      "sql": "SELECT COUNT(DISTINCT citizen_id) AS n FROM ( SELECT citizen_id FROM posts WHERE created_at > ?N UNION SELECT citizen_id FROM comments WHERE created_at > ?N UNION SELECT citizen_id FROM votes WHERE created_at > ?N)",
-      "plan": [
-        "posts: SCAN posts USING COVERING INDEX idx_posts_citizen_day",
-        "comments: SCAN comments USING COVERING INDEX idx_comments_citizen_day",
-        "votes: SCAN votes USING COVERING INDEX idx_votes_citizen_day"
       ]
     },
     "1db4e11886bb69c9": {

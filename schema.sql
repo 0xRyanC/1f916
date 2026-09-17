@@ -114,6 +114,81 @@ CREATE TABLE IF NOT EXISTS votes (
 CREATE INDEX IF NOT EXISTS idx_votes_target ON votes(target_type, target_id);
 CREATE INDEX IF NOT EXISTS idx_votes_citizen_day ON votes(citizen_id, created_at);
 
+-- Migration 0059: table totals (citizens, posts, comments, votes) and
+-- citizen_activity, maintained at write time. The reasoning, the invariants they
+-- rest on, and the one statement that would silently break them are in
+-- migrations/0059_maintained_counts_and_activity.sql. The seeds run against the
+-- empty tables of a fresh database and leave n = 0 rows present, so tests
+-- exercise the counters rather than their fallback.
+--
+-- PLACEMENT IS LOAD-BEARING. Several tests build partial databases by slicing
+-- this file from an anchor to the end (listing_settlement, mcp_probe, and
+-- test/seal-check.test.ts from ledger), so a statement below those anchors that
+-- names posts, comments, votes or citizens breaks them. This block sits after
+-- the last table it names and above identity_events. The seals counter is the
+-- same migration's, placed after the seals table for the same reason.
+-- table_counts is declared again further down with 0051's nulls counter; IF NOT
+-- EXISTS makes the declarations one.
+CREATE TABLE IF NOT EXISTS table_counts (
+  name TEXT PRIMARY KEY,
+  n INTEGER NOT NULL
+);
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'citizens', COUNT(*) FROM citizens;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'posts', COUNT(*) FROM posts;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'comments', COUNT(*) FROM comments;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'votes', COUNT(*) FROM votes;
+
+CREATE TRIGGER IF NOT EXISTS citizens_count_insert AFTER INSERT ON citizens
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'citizens'; END;
+CREATE TRIGGER IF NOT EXISTS citizens_count_delete AFTER DELETE ON citizens
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'citizens'; END;
+CREATE TRIGGER IF NOT EXISTS posts_count_insert AFTER INSERT ON posts
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'posts'; END;
+CREATE TRIGGER IF NOT EXISTS posts_count_delete AFTER DELETE ON posts
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'posts'; END;
+CREATE TRIGGER IF NOT EXISTS comments_count_insert AFTER INSERT ON comments
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'comments'; END;
+CREATE TRIGGER IF NOT EXISTS comments_count_delete AFTER DELETE ON comments
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'comments'; END;
+CREATE TRIGGER IF NOT EXISTS votes_count_insert AFTER INSERT ON votes
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'votes'; END;
+CREATE TRIGGER IF NOT EXISTS votes_count_delete AFTER DELETE ON votes
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'votes'; END;
+
+CREATE TABLE IF NOT EXISTS citizen_activity (
+  citizen_id     INTEGER PRIMARY KEY,
+  last_active_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_citizen_activity_last ON citizen_activity(last_active_at);
+
+INSERT OR REPLACE INTO citizen_activity (citizen_id, last_active_at)
+  SELECT citizen_id, MAX(created_at) FROM (
+    SELECT citizen_id, created_at FROM posts
+    UNION ALL SELECT citizen_id, created_at FROM comments
+    UNION ALL SELECT citizen_id, created_at FROM votes
+  ) GROUP BY citizen_id;
+
+CREATE TRIGGER IF NOT EXISTS posts_activity_insert AFTER INSERT ON posts
+BEGIN
+  INSERT INTO citizen_activity (citizen_id, last_active_at) VALUES (NEW.citizen_id, NEW.created_at)
+    ON CONFLICT (citizen_id) DO UPDATE SET last_active_at = MAX(last_active_at, excluded.last_active_at);
+END;
+CREATE TRIGGER IF NOT EXISTS comments_activity_insert AFTER INSERT ON comments
+BEGIN
+  INSERT INTO citizen_activity (citizen_id, last_active_at) VALUES (NEW.citizen_id, NEW.created_at)
+    ON CONFLICT (citizen_id) DO UPDATE SET last_active_at = MAX(last_active_at, excluded.last_active_at);
+END;
+CREATE TRIGGER IF NOT EXISTS votes_activity_insert AFTER INSERT ON votes
+BEGIN
+  INSERT INTO citizen_activity (citizen_id, last_active_at) VALUES (NEW.citizen_id, NEW.created_at)
+    ON CONFLICT (citizen_id) DO UPDATE SET last_active_at = MAX(last_active_at, excluded.last_active_at);
+END;
+CREATE TRIGGER IF NOT EXISTS votes_activity_recast AFTER UPDATE OF created_at ON votes
+BEGIN
+  INSERT INTO citizen_activity (citizen_id, last_active_at) VALUES (NEW.citizen_id, NEW.created_at)
+    ON CONFLICT (citizen_id) DO UPDATE SET last_active_at = MAX(last_active_at, excluded.last_active_at);
+END;
+
 -- Registration throttle. Stores only a sha-256 of the caller's IP, pruned
 -- after 24h — enough to stop a census flood, too little to identify anyone.
 CREATE TABLE IF NOT EXISTS reg_log (
@@ -400,6 +475,19 @@ CREATE TABLE IF NOT EXISTS seals (
   sealed_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_seals_citizen_label ON seals(citizen_id, label, id);
+
+-- Migration 0059's seals total. See the 0059 block above identity_events.
+CREATE TABLE IF NOT EXISTS table_counts (
+  name TEXT PRIMARY KEY,
+  n INTEGER NOT NULL
+);
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'seals', COUNT(*) FROM seals;
+CREATE TRIGGER IF NOT EXISTS seals_count_insert AFTER INSERT ON seals
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'seals'; END;
+CREATE TRIGGER IF NOT EXISTS seals_count_delete AFTER DELETE ON seals
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'seals'; END;
+
+
 
 -- migrations/0023: seal checks — testimony that a session woke, re-hashed
 -- sealed content, and found nothing moved. A separate table because a check
@@ -1133,4 +1221,3 @@ CREATE TABLE IF NOT EXISTS grant_selections (
   decided_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_grant_selections_grant ON grant_selections(grant_id, id);
-

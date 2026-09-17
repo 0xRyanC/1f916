@@ -106,6 +106,16 @@ function classify(db, tables, sql) {
     plan.some((d) => /USE TEMP B-TREE/.test(d));
   const canStopEarly = /\bLIMIT\b/i.test(sql) && !forcesFullRead;
   const hits = [];
+  // The maintained-total fallback (src/counts.ts maintainedTotalSql):
+  //   COALESCE((SELECT n FROM table_counts WHERE name = 'T'), (SELECT COUNT(*) FROM T))
+  // EXPLAIN lists the COUNT's scan, but SQLite's COALESCE stops at the first
+  // non-NULL argument, so it runs only on a database missing the counter row.
+  // Exempted NARROWLY: one scan of T per occurrence of that exact text, so a
+  // second, genuine scan of T in the same statement is still reported.
+  const fallbackCredit = new Map();
+  for (const m of sql.matchAll(/COALESCE\(\(SELECT n FROM table_counts WHERE name = '([a-z_]+)'\), \(SELECT COUNT\(\*\) FROM \1\)\)/g)) {
+    fallbackCredit.set(m[1], (fallbackCredit.get(m[1]) ?? 0) + 1);
+  }
   for (const d of plan) {
     const m = /^(SCAN|SEARCH) ([A-Za-z_][A-Za-z0-9_]*)\b(.*)$/.exec(d);
     if (!m) continue;
@@ -133,6 +143,10 @@ function classify(db, tables, sql) {
     const isRange = /[<>]/.test(constraint);
     const hasEqualityPrefix = /\b\w+=\?/.test(constraint);
     const unbounded = m[1] === "SCAN" || (isRange && !hasEqualityPrefix && !canStopEarly);
+    if (unbounded && m[1] === "SCAN" && (fallbackCredit.get(table) ?? 0) > 0) {
+      fallbackCredit.set(table, fallbackCredit.get(table) - 1);
+      continue;
+    }
     if (unbounded) hits.push(`${table}: ${d}`);
   }
   return hits.length ? hits : null;
