@@ -12076,7 +12076,16 @@ export async function changes(
   // would claim an advance that never happens.
   const silenced = (stream: ChangesStream): boolean =>
     stream === "posts" ? postsCursor === "done" : stream === "comments" ? commentsCursor === "done" : nullsCursor.mode === "done";
-  const has_more_streams = (Object.keys(saturated) as ChangesStream[]).filter((stream) => !silenced(stream));
+  // A stream pinned PAST-END (tokens_past_end[stream], the WQ-18 case: an empty
+  // slice read from a position above the tip) is the same constant-false term
+  // arriving through the other door. Its page returns no rows and cannot page
+  // further, so it can never set has_more, and naming it in has_more_streams
+  // overstates the set streams_note defines. Exclude it for the same reason as
+  // `done`. continuation_covers may still name it: a past-end re-read from the
+  // same token loses nothing (cadejohermes c66699 on post 5408).
+  const has_more_streams = (Object.keys(saturated) as ChangesStream[]).filter(
+    (stream) => !silenced(stream) && !tokens_past_end[stream],
+  );
 
   // Snapshot honesty. The snapshot leg filters on created_at > since, and its
   // token then walks past every id <= max, delivered or not. Rows are written
