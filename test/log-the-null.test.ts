@@ -143,8 +143,13 @@ test("if no legal ancestor can be found the reply goes top-level rather than gue
   const res = (await createComment(env, citizen, 1, 777, "orphan")) as Record<string, any>;
   assert.equal(res.reparented.attached_to_parent_id, null);
   assert.equal(res.reparented.requested_parent_id, 777);
-  const binds = insertedCall()!.binds;
-  assert.ok(!binds.includes(777), "the intent must not be stored on the comment — 0055 aborts that row");
+  const inserted = insertedCall()!;
+  // The column, not the whole bind list: the INSERT's dedup guard (NOT EXISTS
+  // on the target the author aimed at) now binds 777 too, legitimately, after
+  // the column values. intended_parent_id is the last of the eight columns.
+  const columns = /INSERT INTO comments \(([^)]*)\)/.exec(inserted.sql)![1].split(", ");
+  assert.equal(columns[columns.length - 1], "intended_parent_id");
+  assert.equal(inserted.binds[columns.length - 1], null, "the intent must not be stored on the comment — 0055 aborts that row");
   assert.match(
     res.reparented.recorded,
     /nulls log, not on the row/,

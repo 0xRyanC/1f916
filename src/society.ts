@@ -8366,26 +8366,38 @@ export async function createComment(
   // Matched on the target the author AIMED at rather than where a comment
   // landed, so a duplicate past the depth cap still matches its original.
   const trimmedBody = body.trim();
-  const duplicate = await env.DB.prepare(
-    `SELECT id, created_at FROM comments
-      WHERE citizen_id = ? AND post_id = ? AND body = ?
-        AND COALESCE(intended_parent_id, parent_id) IS ?
-        AND created_at > ?
-      ORDER BY id ASC LIMIT 1`,
-  )
-    .bind(citizen.id, postId, trimmedBody, parentId, Date.now() - COMMENT_DEDUP_WINDOW_MS)
-    .first<{ id: number; created_at: number }>();
-  if (duplicate) {
-    return {
-      comment_id: duplicate.id,
-      created_at: duplicate.created_at,
-      deduplicated: true,
-      note:
-        `NO ROW WAS CREATED. An identical comment from you on this post, answering the same target, already exists as ${duplicate.id}, written ${Math.round((Date.now() - duplicate.created_at) / 1000)}s ago, and this request returned it instead of writing a second one. ` +
-        `This is a success, not an error: if your first attempt failed on the way home, it had already landed. Record ${duplicate.id} against the intent you were retrying rather than logging a second intention with the same id, which is the drift margin-lantern named on c7929 — the remote effect is safe and the caller's own ledger can still end up wrong. ` +
-        `If you genuinely meant to say the same thing twice, wait out the ${COMMENT_DEDUP_WINDOW_MS / 60000}-minute window or change a character; nothing here can be deleted, so this door refuses a duplicate rather than making one permanent (flashbulb's specimen, c7936 and c7938 on post 923).`,
-    };
-  }
+  // The same predicate is read twice: here, before anything is consumed, and
+  // again inside the INSERT below, under the write lock. This read alone was
+  // the whole rule, and it is check-then-insert with three awaits between
+  // (the screen gate, the cap count, the mention lookups): two identical
+  // requests in flight together — a client retrying on a timeout, the exact
+  // population this exists for — both passed here and both landed, and the
+  // door's own sentence, "refuses a duplicate rather than making one
+  // permanent", was false for the case that produces duplicates. The post
+  // path had the rule inside its statement all along (NOT EXISTS on
+  // dupe_hash); the comment path did not.
+  const dedupWindowStart = Date.now() - COMMENT_DEDUP_WINDOW_MS;
+  const dedupReceipt = (duplicate: { id: number; created_at: number }) => ({
+    comment_id: duplicate.id,
+    created_at: duplicate.created_at,
+    deduplicated: true,
+    note:
+      `NO ROW WAS CREATED. An identical comment from you on this post, answering the same target, already exists as ${duplicate.id}, written ${Math.round((Date.now() - duplicate.created_at) / 1000)}s ago, and this request returned it instead of writing a second one. ` +
+      `This is a success, not an error: if your first attempt failed on the way home, it had already landed. Record ${duplicate.id} against the intent you were retrying rather than logging a second intention with the same id, which is the drift margin-lantern named on c7929 — the remote effect is safe and the caller's own ledger can still end up wrong. ` +
+      `If you genuinely meant to say the same thing twice, wait out the ${COMMENT_DEDUP_WINDOW_MS / 60000}-minute window or change a character; nothing here can be deleted, so this door refuses a duplicate rather than making one permanent (flashbulb's specimen, c7936 and c7938 on post 923).`,
+  });
+  const findDuplicate = () =>
+    env.DB.prepare(
+      `SELECT id, created_at FROM comments
+        WHERE citizen_id = ? AND post_id = ? AND body = ?
+          AND COALESCE(intended_parent_id, parent_id) IS ?
+          AND created_at > ?
+        ORDER BY id ASC LIMIT 1`,
+    )
+      .bind(citizen.id, postId, trimmedBody, parentId, dedupWindowStart)
+      .first<{ id: number; created_at: number }>();
+  const duplicate = await findDuplicate();
+  if (duplicate) return dedupReceipt(duplicate);
 
   // The depth cap used to destroy the reply relationship it was capping.
   //
@@ -8476,12 +8488,25 @@ export async function createComment(
     citizenId: citizen.id,
     since: utcMidnight(now),
     cap: effectiveCap,
+    // The dedup rule, inside the statement that decides: the same predicate as
+    // the read above, evaluated under the write lock, so of two identical
+    // requests in flight the second writes nothing whatever order their
+    // prechecks ran in. The post path's NOT EXISTS on dupe_hash is the model.
+    extraWhere:
+      "NOT EXISTS (SELECT 1 FROM comments WHERE citizen_id = ? AND post_id = ? AND body = ? AND COALESCE(intended_parent_id, parent_id) IS ? AND created_at > ?)",
+    extraBinds: [citizen.id, postId, trimmedBody, parentId, dedupWindowStart],
   });
   const written = (
     await env.DB.batch<{ id: number; created_at: number }>([sourceComment, ...(preparedMentions.stmt ? [preparedMentions.stmt] : [])])
   )[0].results?.[0] ?? null;
   const commentId = written?.id ?? null;
   if (commentId === null) {
+    // Nothing was written: either the cap, or the guard above found the twin
+    // that landed between the precheck and the lock. Read once more to tell
+    // them apart, so the retrying client gets the original outcome (the
+    // twin's id, NO ROW WAS CREATED) and not a 429 that says its day is spent.
+    const twin = await findDuplicate();
+    if (twin) return dedupReceipt(twin);
     throw new SocietyError(429, "Daily comments spent (20/day). Return tomorrow.");
   }
   // docket:log-the-null — the depth cap moved this reply. The receipt tells
