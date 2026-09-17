@@ -47,11 +47,21 @@
 -- A TABLE REBUILD DROPS TRIGGERS. Any migration that rebuilds one of these five
 -- tables must re-create its triggers here, or its total silently stops moving.
 
-INSERT OR REPLACE INTO table_counts (name, n) SELECT 'citizens', COUNT(*) FROM citizens;
-INSERT OR REPLACE INTO table_counts (name, n) SELECT 'posts', COUNT(*) FROM posts;
-INSERT OR REPLACE INTO table_counts (name, n) SELECT 'comments', COUNT(*) FROM comments;
-INSERT OR REPLACE INTO table_counts (name, n) SELECT 'votes', COUNT(*) FROM votes;
-INSERT OR REPLACE INTO table_counts (name, n) SELECT 'seals', COUNT(*) FROM seals;
+-- ORDER: table, then triggers, then seeds. With the triggers in place first, a
+-- write landing while this file runs cannot be lost: before the seed, the counter
+-- UPDATE is a no-op (no row yet) and the seed then counts the row from the table;
+-- after it, the trigger counts it. The activity seed recomputes each citizen's
+-- latest from the tables and INSERT OR REPLACE overwrites whatever a trigger wrote.
+-- Seeds first would miss a write landing between seed and trigger, for good, if
+-- D1 did not run this file as one transaction. Suggested by the pre-deploy
+-- auditor, 2026-09-17.
+
+CREATE TABLE IF NOT EXISTS citizen_activity (
+  citizen_id     INTEGER PRIMARY KEY,
+  last_active_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_citizen_activity_last ON citizen_activity(last_active_at);
 
 CREATE TRIGGER IF NOT EXISTS citizens_count_insert AFTER INSERT ON citizens
 BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'citizens'; END;
@@ -73,20 +83,6 @@ CREATE TRIGGER IF NOT EXISTS seals_count_insert AFTER INSERT ON seals
 BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'seals'; END;
 CREATE TRIGGER IF NOT EXISTS seals_count_delete AFTER DELETE ON seals
 BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'seals'; END;
-
-CREATE TABLE IF NOT EXISTS citizen_activity (
-  citizen_id     INTEGER PRIMARY KEY,
-  last_active_at INTEGER NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_citizen_activity_last ON citizen_activity(last_active_at);
-
-INSERT OR REPLACE INTO citizen_activity (citizen_id, last_active_at)
-  SELECT citizen_id, MAX(created_at) FROM (
-    SELECT citizen_id, created_at FROM posts
-    UNION ALL SELECT citizen_id, created_at FROM comments
-    UNION ALL SELECT citizen_id, created_at FROM votes
-  ) GROUP BY citizen_id;
-
 CREATE TRIGGER IF NOT EXISTS posts_activity_insert AFTER INSERT ON posts
 BEGIN
   INSERT INTO citizen_activity (citizen_id, last_active_at) VALUES (NEW.citizen_id, NEW.created_at)
@@ -107,3 +103,15 @@ BEGIN
   INSERT INTO citizen_activity (citizen_id, last_active_at) VALUES (NEW.citizen_id, NEW.created_at)
     ON CONFLICT (citizen_id) DO UPDATE SET last_active_at = MAX(last_active_at, excluded.last_active_at);
 END;
+
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'citizens', COUNT(*) FROM citizens;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'posts', COUNT(*) FROM posts;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'comments', COUNT(*) FROM comments;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'votes', COUNT(*) FROM votes;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'seals', COUNT(*) FROM seals;
+INSERT OR REPLACE INTO citizen_activity (citizen_id, last_active_at)
+  SELECT citizen_id, MAX(created_at) FROM (
+    SELECT citizen_id, created_at FROM posts
+    UNION ALL SELECT citizen_id, created_at FROM comments
+    UNION ALL SELECT citizen_id, created_at FROM votes
+  ) GROUP BY citizen_id;
