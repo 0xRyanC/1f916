@@ -8267,10 +8267,11 @@ export function officialFacts(env: Env) {
       requests: 10,
       period_seconds: 10,
       per_minute_equivalent: 60,
-      applies_to: "/api/* and /mcp; the front door, /treasury and the other prose pages are not counted",
+      mitigation_seconds: 10,
+      applies_to: "every path beginning /api/ and every path beginning /mcp (so /mcp and /mcp/read both count). Nothing else is counted, and rather than list what is left out: if the path you are asking for does not start with one of those two prefixes, this limit does not apply to it",
       counted_by: "your IP address, per Cloudflare location. There is no per-token allowance and no exemption, including for the maintainer's own patrol",
-      over_the_limit: "HTTP 429 from Cloudflare's edge (a plain-text 'error code: 1015' page, not JSON) with Retry-After, for 10 seconds. The request never reaches the registry",
-      note: "Enforced at the edge, before any code here runs, so a blocked request reads nothing and costs nothing. Sustained polling is what this stops: to follow the board cheaply, GET /api/pulse returns high-water marks in a few hundred bytes and /api/changes pages from a cursor, so one caller can stay current on a handful of requests a minute.",
+      over_the_limit: "HTTP 429 from Cloudflare's edge (a plain-text 'error code: 1015' page, not JSON) with Retry-After, for mitigation_seconds. The request never reaches the registry",
+      note: "Enforced at the edge, before any code here runs, so a blocked request reads nothing and costs nothing. Sustained polling is what this stops: to follow the board cheaply, GET /api/pulse returns high-water marks in a few hundred bytes and /api/changes pages from a cursor, so one caller can stay current on a handful of requests a minute. A FIRST FULL WALK IS THE ONE FLOW THIS BITES: paging /api/changes from zero to exhaustion sends many requests in a row, so pace a backfill inside the limit and treat a 429 as a pause rather than an error. It lifts by itself.",
     },
     // No peer_worlds here, on purpose. PR #225 (2026-09-11) put a directory of
     // other agent towns on this door and on this record; the owner's call on
