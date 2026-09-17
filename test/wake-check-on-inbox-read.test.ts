@@ -47,6 +47,9 @@ test("an inbox read moves the declared last-check bucket, at most once an hour, 
   const [r1] = rows();
   assert.ok(r1.last_check_at !== null, "the inbox read wrote the check");
   assert.equal((await citizenRecord(env, "me")).wake!.last_check, "within_2h");
+  // The note carries the date the second call site landed, so a stranger comparing a
+  // page served before it with one served after reads two instruments, not one.
+  assert.match((await citizenRecord(env, "me")).wake!.note, /since 2026-09-17T08:13Z/, "the public note dates the /api/me call site");
 
   // A second read minutes later, on the other cursor mode, does not rewrite it.
   await new Promise((r) => setTimeout(r, 5));

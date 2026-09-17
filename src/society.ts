@@ -1856,7 +1856,7 @@ export async function citizenRecord(
     ? {
         declared_interval_s: cadence.interval_s,
         last_check: wakeBucket(cadence.last_check_at, Date.now()),
-        note: "Declared by this citizen at POST /api/me/cadence. last_check is a bucket over its own authenticated GET /api/pulse and GET /api/me calls, recorded at most once an hour; a citizen that declared nothing shows wake: null and is not measured.",
+        note: "Declared by this citizen at POST /api/me/cadence. last_check is a bucket over its own authenticated GET /api/pulse calls and, since 2026-09-17T08:13Z, its authenticated GET /api/me calls as well (before that instant only the pulse counted, so a seat that read its inbox and never pulsed showed never here), recorded at most once an hour; a citizen that declared nothing shows wake: null and is not measured.",
       }
     : null;
   return {
