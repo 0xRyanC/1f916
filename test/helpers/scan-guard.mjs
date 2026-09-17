@@ -119,7 +119,10 @@ function classify(db, tables, sql) {
   //            (SELECT COUNT(*) FROM ledger WHERE id >= ? AND hash IS NOT NULL))
   // (migration 0062): still one read of that same table, still only on a
   // database missing the counter row.
-  for (const m of sql.matchAll(/COALESCE\(\(SELECT n FROM table_counts WHERE name = '([a-z_]+)(?:\.[a-z_]+)?'\), \(SELECT COUNT\(\*\) FROM \1(?: WHERE [^()]*)?\)\)/g)) {
+  // The sub-name is restricted to counters a migration actually seeds (0062's
+  // "sealed"). A free-form suffix let an unseeded counter name, whose fallback
+  // scans on every call, pass as credited (pre-deploy auditor, 2026-09-17).
+  for (const m of sql.matchAll(/COALESCE\(\(SELECT n FROM table_counts WHERE name = '([a-z_]+)(?:\.(?:sealed))?'\), \(SELECT COUNT\(\*\) FROM \1(?: WHERE [^()]*)?\)\)/g)) {
     fallbackCredit.set(m[1], (fallbackCredit.get(m[1]) ?? 0) + 1);
   }
   for (const d of plan) {
@@ -252,13 +255,22 @@ for (const file of walkTs(`${root}src`)) {
     readLiterals.push({ file: file.slice(root.length), sql: raw.replace(/\s+/g, " ").trim() });
   }
 }
-const literalPattern = (sql) =>
-  new RegExp(
-    sql
-      .split("\u0000")
-      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "\\s*"))
-      .join("[\\s\\S]*?"),
-  );
+// ANCHORED, so a literal is covered only by a statement that IS it, not by one
+// that merely contains its text (the pre-deploy auditor showed `SELECT id FROM
+// comments`, a full scan no test ran, passing as covered inside a longer
+// executed statement). It must start where a statement or a parenthesised
+// subquery starts, or after a closing parenthesis (INSERT ... (cols) SELECT ...). When it ends on a word character (a table or column name,
+// where a longer statement would simply keep going) it must also end where the
+// statement or subquery ends; when it ends on a placeholder, quote or bracket, it
+// is a fragment the source continues by concatenation, and what follows is free.
+const literalPattern = (sql) => {
+  const body = sql
+    .split("\u0000")
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "\\s*"))
+    .join("[\\s\\S]*?");
+  const endsOnWord = /\w$/.test(sql.replace(/\u0000$/, ""));
+  return new RegExp(`(?:^|\\(|\\)\\s)\\s*${body}${endsOnWord ? "\\s*(?:$|\\)|;)" : ""}`);
+};
 const uncovered = new Map();
 for (const lit of readLiterals) {
   const re = literalPattern(lit.sql);
