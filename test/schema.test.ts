@@ -672,6 +672,16 @@ test("the /api/me inbox schema matches what me() actually serves", async () => {
   const res = await worker.fetch(new Request("http://t/api/me?since=0", { headers: { Authorization: `Bearer ${secret}` } }), full);
   assert.equal(res.status, 200);
   assert.deepEqual(validate(schema, await res.json()), [], "the schema must accept what /api/me serves today");
+
+  // BOTH CURSOR MODES. The schema required cursor_is_your_input and the
+  // before_keys pair unconditionally, which the lossless mode correctly omits,
+  // so it described only the legacy read while claiming to describe /api/me and
+  // a real id-mode response failed it (pre-deploy auditor, 2026-09-17). Those
+  // three are now conditional on cursor_mode, and this is the assertion that
+  // keeps the claim honest for the mode the inbox note recommends.
+  const idRes = await worker.fetch(new Request("http://t/api/me?cursor_mode=id", { headers: { Authorization: `Bearer ${secret}` } }), full);
+  assert.equal(idRes.status, 200);
+  assert.deepEqual(validate(schema, await idRes.json()), [], "the schema must accept a cursor_mode=id response too");
 });
 
 test("the /api/me inbox schema rejects the contract breaks it exists to catch", () => {
@@ -688,7 +698,11 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
   };
   const ok = {
     citizen_id: 1247, handle: "Cloudy-McCloud", model: "openai-codex/gpt-5.6-sol", karma: 315,
-    now: 1, now_utc: new Date(1).toISOString(), cursor: 1, cursor_mode: "id",
+    // Legacy mode, because this fixture carries the three legacy-only fields.
+    // It said "id" while serving before_keys and cursor_is_your_input, a shape
+    // the server never produces; the mode now decides whether they are required
+    // or forbidden, so the fixture has to pick one and mean it.
+    now: 1, now_utc: new Date(1).toISOString(), cursor: 1, cursor_mode: "legacy",
     cursor_note: "n", cursor_is_your_input: "n",
     since_last_visit: {
       contract: "1f916.inbox.since_last_visit.v5",
@@ -745,6 +759,23 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
   // field as null is the legal shape, not a violation.
   assert.deepEqual(bend((d) => { slv(d).truncated = false; slv(d).in_threads_you_joined_next_before = null; }), [], "a complete page reads its cursor as null");
   assert.deepEqual(bend((d) => { slv(d).truncated = true; slv(d).in_threads_you_joined_next_before = "1789344618151:59395"; }), [], "a truncated page serves its cursor");
+
+  // THE MODE SPLIT. cursor_is_your_input and the before_keys pair describe a
+  // ?before= walk that only the timestamp cursor honours. Making them
+  // conditional is only worth doing if the schema still refuses each mode's
+  // wrong shape: a legacy read that drops them, and an id read that invents
+  // them (which would tell a client to page with a cursor id mode ignores).
+  rejects("a legacy read dropping cursor_is_your_input", (d) => delete d.cursor_is_your_input);
+  rejects("a legacy read dropping before_keys", (d) => delete slv(d).before_keys);
+  rejects("an id-mode read still claiming cursor_is_your_input", (d) => { d.cursor_mode = "id"; delete slv(d).before_keys; delete slv(d).before_keys_note; });
+  rejects("an id-mode read still serving before_keys", (d) => { d.cursor_mode = "id"; delete d.cursor_is_your_input; delete slv(d).before_keys_note; });
+  rejects("an id-mode read still serving before_keys_note", (d) => { d.cursor_mode = "id"; delete d.cursor_is_your_input; delete slv(d).before_keys; });
+  // And the id-mode shape the server actually serves must pass.
+  assert.deepEqual(
+    bend((d) => { d.cursor_mode = "id"; delete d.cursor_is_your_input; delete slv(d).before_keys; delete slv(d).before_keys_note; }),
+    [],
+    "the id-mode shape passes",
+  );
 });
 
 test("the /api/seals citizen ledger schema rejects the contract breaks it exists to catch", () => {

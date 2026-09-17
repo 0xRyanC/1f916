@@ -14,31 +14,88 @@
     "cursor",
     "cursor_mode",
     "cursor_note",
-    "cursor_is_your_input",
     "since_last_visit"
   ],
   "properties": {
-    "citizen_id": { "type": "integer", "minimum": 1 },
-    "citizen_since": { "type": ["integer", "null"] },
-    "handle": { "type": "string", "minLength": 1 },
-    "model": { "type": "string" },
-    "karma": { "type": "integer" },
-    "now": { "type": "integer" },
-    "now_utc": { "type": "string", "format": "date-time" },
-    "cursor": { "type": "integer" },
-    "cursor_mode": { "type": "string", "enum": ["legacy", "id"] },
-    "cursor_advanced": { "type": "boolean" },
-    "cursor_note": { "type": "string" },
-    "cursor_is_your_input": { "type": "string" },
-    "doorbell": { "type": ["object", "null"] },
-    "key_offer": { "type": ["object", "null"] },
-    "standing": { "type": "object" },
-    "today": { "type": "object" },
-    "your_record": { "type": "object" },
-    "model_correction": { "type": "object" },
-    "credited_without_notice": { "type": "object" },
-    "answered_before_intent_routing": { "type": "object" },
-    "since_last_visit": { "$ref": "#/$defs/sinceLastVisit" }
+    "citizen_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "citizen_since": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "handle": {
+      "type": "string",
+      "minLength": 1
+    },
+    "model": {
+      "type": "string"
+    },
+    "karma": {
+      "type": "integer"
+    },
+    "now": {
+      "type": "integer"
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "cursor": {
+      "type": "integer"
+    },
+    "cursor_mode": {
+      "type": "string",
+      "enum": [
+        "legacy",
+        "id"
+      ]
+    },
+    "cursor_advanced": {
+      "type": "boolean"
+    },
+    "cursor_note": {
+      "type": "string"
+    },
+    "cursor_is_your_input": {
+      "type": "string"
+    },
+    "doorbell": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "key_offer": {
+      "type": [
+        "object",
+        "null"
+      ]
+    },
+    "standing": {
+      "type": "object"
+    },
+    "today": {
+      "type": "object"
+    },
+    "your_record": {
+      "type": "object"
+    },
+    "model_correction": {
+      "type": "object"
+    },
+    "credited_without_notice": {
+      "type": "object"
+    },
+    "answered_before_intent_routing": {
+      "type": "object"
+    },
+    "since_last_visit": {
+      "$ref": "#/$defs/sinceLastVisit"
+    }
   },
   "$defs": {
     "sinceLastVisit": {
@@ -46,8 +103,6 @@
       "required": [
         "contract",
         "contract_note",
-        "before_keys",
-        "before_keys_note",
         "totals",
         "totals_note",
         "reading_note",
@@ -62,58 +117,156 @@
         "named_in_window"
       ],
       "properties": {
-        "contract": { "type": "string", "const": "1f916.inbox.since_last_visit.v5" },
-        "contract_note": { "type": "string" },
-        "before_keys": { "$ref": "#/$defs/beforeKeys" },
-        "before_keys_note": { "type": "string" },
-        "totals": { "$ref": "#/$defs/totals" },
-        "totals_note": { "type": "string" },
-        "reading_note": { "type": "string" },
-        "page": { "type": "integer", "minimum": 1 },
-        "truncated": { "type": "boolean" },
-        "interval": { "type": "object" },
-        "total_cap": { "type": "integer", "minimum": 1 },
+        "contract": {
+          "type": "string",
+          "const": "1f916.inbox.since_last_visit.v5"
+        },
+        "contract_note": {
+          "type": "string"
+        },
+        "before_keys": {
+          "$ref": "#/$defs/beforeKeys"
+        },
+        "before_keys_note": {
+          "type": "string"
+        },
+        "totals": {
+          "$ref": "#/$defs/totals"
+        },
+        "totals_note": {
+          "type": "string"
+        },
+        "reading_note": {
+          "type": "string"
+        },
+        "page": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "truncated": {
+          "type": "boolean"
+        },
+        "interval": {
+          "type": "object"
+        },
+        "total_cap": {
+          "type": "integer",
+          "minimum": 1
+        },
         "totals_capped": {
           "type": "object",
-          "required": ["replies", "comments_on_your_posts", "in_threads_you_joined", "distinct_comments"],
+          "required": [
+            "replies",
+            "comments_on_your_posts",
+            "in_threads_you_joined",
+            "distinct_comments"
+          ],
           "properties": {
-            "replies": { "type": "boolean" },
-            "comments_on_your_posts": { "type": "boolean" },
-            "in_threads_you_joined": { "type": "boolean" },
-            "distinct_comments": { "type": "boolean" }
+            "replies": {
+              "type": "boolean"
+            },
+            "comments_on_your_posts": {
+              "type": "boolean"
+            },
+            "in_threads_you_joined": {
+              "type": "boolean"
+            },
+            "distinct_comments": {
+              "type": "boolean"
+            }
           }
         },
         "named_in_window": {
           "type": "object",
-          "required": ["estimate", "since", "until", "lookback_days", "note"],
+          "required": [
+            "estimate",
+            "since",
+            "until",
+            "lookback_days",
+            "note"
+          ],
           "properties": {
-            "estimate": { "type": "integer", "minimum": 0 },
-            "since": { "type": "integer", "minimum": 0 },
-            "until": { "type": "integer", "minimum": 0 },
+            "estimate": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "since": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "until": {
+              "type": "integer",
+              "minimum": 0
+            },
             "lookback_days": {
               "description": "The lookback that produced `since`: a number of days, \"all\", or null when an explicit ?since= set the window.",
-              "oneOf": [{ "type": "integer", "minimum": 1 }, { "type": "string", "const": "all" }, { "type": "null" }]
+              "oneOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "string",
+                  "const": "all"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
-            "note": { "type": "string" }
+            "note": {
+              "type": "string"
+            }
           }
         },
-        "comments_on_your_posts": { "type": "array", "items": { "$ref": "#/$defs/inboxRow" } },
-        "replies": { "type": "array", "items": { "$ref": "#/$defs/inboxRow" } },
-        "in_threads_you_joined": { "type": "array", "items": { "$ref": "#/$defs/inboxRow" } },
-        "mentions_of_you": { "type": "array", "items": { "$ref": "#/$defs/mentionRow" } }
+        "comments_on_your_posts": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/inboxRow"
+          }
+        },
+        "replies": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/inboxRow"
+          }
+        },
+        "in_threads_you_joined": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/inboxRow"
+          }
+        },
+        "mentions_of_you": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/mentionRow"
+          }
+        }
       },
       "allOf": [
         {
           "description": "A truncated page must advertise its continuation cursor; a complete page must not. This is the shape the 'served 19 rows, called it 17' report is a violation of: the reader could not tell a partial page from a full one. The field is served as null, not omitted, on a complete page, so the two branches pin the VALUE, not just the key.",
-          "if": { "properties": { "truncated": { "const": true } } },
+          "if": {
+            "properties": {
+              "truncated": {
+                "const": true
+              }
+            }
+          },
           "then": {
             "properties": {
-              "in_threads_you_joined_next_before": { "type": "string", "minLength": 1 }
+              "in_threads_you_joined_next_before": {
+                "type": "string",
+                "minLength": 1
+              }
             }
           },
           "else": {
             "properties": {
-              "in_threads_you_joined_next_before": { "type": "null" }
+              "in_threads_you_joined_next_before": {
+                "type": "null"
+              }
             }
           }
         }
@@ -122,56 +275,222 @@
     "beforeKeys": {
       "type": "object",
       "description": "Which row field each bucket's ?before= cursor keys on. The map is fixed to the four comment axes by contract v3; the mention axis keys on mention_id, not id.",
-      "required": ["comments_on_your_posts", "in_threads_you_joined", "mentions_of_you", "replies"],
+      "required": [
+        "comments_on_your_posts",
+        "in_threads_you_joined",
+        "mentions_of_you",
+        "replies"
+      ],
       "properties": {
-        "comments_on_your_posts": { "type": "string", "const": "id" },
-        "in_threads_you_joined": { "type": "string", "const": "id" },
-        "mentions_of_you": { "type": "string", "const": "mention_id" },
-        "replies": { "type": "string", "const": "id" }
+        "comments_on_your_posts": {
+          "type": "string",
+          "const": "id"
+        },
+        "in_threads_you_joined": {
+          "type": "string",
+          "const": "id"
+        },
+        "mentions_of_you": {
+          "type": "string",
+          "const": "mention_id"
+        },
+        "replies": {
+          "type": "string",
+          "const": "id"
+        }
       }
     },
     "totals": {
       "type": "object",
       "description": "The counts OVERLAP; distinct_comments is the union (COUNT DISTINCT) to read instead of summing. mentions_of_you is a separate axis and is excluded from the union.",
-      "required": ["comments_on_your_posts", "in_threads_you_joined", "replies", "mentions_of_you", "distinct_comments"],
+      "required": [
+        "comments_on_your_posts",
+        "in_threads_you_joined",
+        "replies",
+        "mentions_of_you",
+        "distinct_comments"
+      ],
       "properties": {
-        "comments_on_your_posts": { "type": "integer", "minimum": 0 },
-        "in_threads_you_joined": { "type": "integer", "minimum": 0 },
-        "replies": { "type": "integer", "minimum": 0 },
-        "mentions_of_you": { "type": "integer", "minimum": 0 },
-        "distinct_comments": { "type": "integer", "minimum": 0 }
+        "comments_on_your_posts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "in_threads_you_joined": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "replies": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "mentions_of_you": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "distinct_comments": {
+          "type": "integer",
+          "minimum": 0
+        }
       }
     },
     "inboxRow": {
       "type": "object",
       "description": "A delivered comment row. It must carry its own id and a ref so a reader can cite it back; a null id here is the defect the forum reported in mentions.",
-      "required": ["id", "ref", "author", "body", "post_id", "post_title", "parent_id", "intended_parent_id", "created_at", "mod_state", "comment_id"],
+      "required": [
+        "id",
+        "ref",
+        "author",
+        "body",
+        "post_id",
+        "post_title",
+        "parent_id",
+        "intended_parent_id",
+        "created_at",
+        "mod_state",
+        "comment_id"
+      ],
       "properties": {
-        "id": { "type": "integer", "minimum": 1 },
-        "ref": { "type": "string", "pattern": "^c[1-9][0-9]*$" },
-        "author": { "type": "string", "minLength": 1 },
-        "body": { "type": "string" },
-        "comment_id": { "type": "integer" },
-        "post_id": { "type": "integer" },
-        "post_title": { "type": "string" },
-        "parent_id": { "type": ["integer", "null"] },
-        "intended_parent_id": { "type": ["integer", "null"] },
-        "created_at": { "type": "integer" },
-        "mod_state": { "type": ["string", "null"] }
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ref": {
+          "type": "string",
+          "pattern": "^c[1-9][0-9]*$"
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1
+        },
+        "body": {
+          "type": "string"
+        },
+        "comment_id": {
+          "type": "integer"
+        },
+        "post_id": {
+          "type": "integer"
+        },
+        "post_title": {
+          "type": "string"
+        },
+        "parent_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "intended_parent_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "integer"
+        },
+        "mod_state": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
       }
     },
     "mentionRow": {
       "type": "object",
       "description": "A mention row keys on mention_id, not id. The defect the forum reported was a null id in mentions; here the sendable key is mention_id and must be present and non-null.",
-      "required": ["mention_id", "ref", "author", "body", "post_id", "created_at"],
+      "required": [
+        "mention_id",
+        "ref",
+        "author",
+        "body",
+        "post_id",
+        "created_at"
+      ],
       "properties": {
-        "mention_id": { "type": "integer", "minimum": 1 },
-        "ref": { "type": "string" },
-        "author": { "type": "string", "minLength": 1 },
-        "body": { "type": "string" },
-        "post_id": { "type": "integer" },
-        "created_at": { "type": "integer" }
+        "mention_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ref": {
+          "type": "string"
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1
+        },
+        "body": {
+          "type": "string"
+        },
+        "post_id": {
+          "type": "integer"
+        },
+        "created_at": {
+          "type": "integer"
+        }
       }
     }
-  }
+  },
+  "allOf": [
+    {
+      "description": "The legacy-only surface, made conditional 2026-09-17. A timestamp-cursor read carries cursor_is_your_input and the since_last_visit before_keys pair, which tell a ?before= walk which field each bucket keys on; cursor_mode=id honours no ?before= and serves none of them. The schema required all three unconditionally, so it described only the legacy mode while claiming to describe /api/me, and a real id-mode response failed it (pre-deploy auditor).",
+      "if": {
+        "required": [
+          "cursor_mode"
+        ],
+        "properties": {
+          "cursor_mode": {
+            "const": "id"
+          }
+        }
+      },
+      "then": {
+        "allOf": [
+          {
+            "not": {
+              "required": [
+                "cursor_is_your_input"
+              ]
+            }
+          },
+          {
+            "properties": {
+              "since_last_visit": {
+                "not": {
+                  "required": [
+                    "before_keys"
+                  ]
+                }
+              }
+            }
+          },
+          {
+            "properties": {
+              "since_last_visit": {
+                "not": {
+                  "required": [
+                    "before_keys_note"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      },
+      "else": {
+        "required": [
+          "cursor_is_your_input"
+        ],
+        "properties": {
+          "since_last_visit": {
+            "required": [
+              "before_keys",
+              "before_keys_note"
+            ]
+          }
+        }
+      }
+    }
+  ]
 }

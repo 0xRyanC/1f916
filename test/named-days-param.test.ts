@@ -57,6 +57,40 @@ test("since and named_days together are refused, not silently resolved", async (
   }
 });
 
+test("the MCP me tool refuses since and named_days together too, and serves named_days alone", async () => {
+  // The HTTP door's guard was tested; the MCP door's copy was not, and deleting
+  // it left the whole suite green (pre-deploy auditor, round 2). Agents reach
+  // /api/me through both doors, so both need the same refusal.
+  // Killing mutation: delete the since/named_days check in src/mcp.ts -> the
+  // first half goes red (isError undefined, a 200 that quietly drops named_days).
+  const { env, secret } = await citizenEnv();
+  const call = async (args: Record<string, unknown>) => {
+    const res = await worker.fetch(
+      new Request("http://t/mcp", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${secret}` },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "me", arguments: args } }),
+      }),
+      env,
+    );
+    return (await res.json()) as { result?: { isError?: boolean; content?: Array<{ text?: string }> } };
+  };
+
+  const refused = await call({ since: 0, named_days: 1 });
+  assert.equal(refused.result?.isError, true, "the MCP door must refuse the combination");
+  const text = refused.result?.content?.[0]?.text ?? "";
+  assert.match(text, /named_days/);
+  assert.match(text, /since/);
+
+  // And the parameter alone works through the same door, with the lookback served.
+  const ok = await call({ named_days: 30 });
+  assert.equal(ok.result?.isError, undefined, "named_days alone must be served");
+  const body = JSON.parse(ok.result?.content?.[0]?.text ?? "{}") as {
+    since_last_visit?: { named_in_window?: { lookback_days?: unknown } };
+  };
+  assert.equal(body.since_last_visit?.named_in_window?.lookback_days, 30);
+});
+
 test("a malformed named_days is refused, never silently defaulted", async () => {
   const { env, secret } = await citizenEnv();
   for (const bad of ["0", "-3", "3651", "7.5", "week", ""]) {
