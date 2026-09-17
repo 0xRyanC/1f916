@@ -7,7 +7,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { consistencyProof, inclusionProof, merkleRoot, verifyConsistency, verifyInclusion } from "../src/merkle.ts";
+import { MerkleTree, consistencyProof, inclusionProof, merkleRoot, verifyConsistency, verifyInclusion } from "../src/merkle.ts";
 
 // RFC 6962 defines MTH over byte strings; our leaves are strings fed as
 // UTF-8. The canonical empty-tree vector must hold regardless.
@@ -43,6 +43,58 @@ test("every consistency proof verifies, for every (m, n) pair up to 33", async (
       assert.equal(await verifyConsistency(m, n, roots[m], roots[n], proof), true, `consistency (${m}, ${n})`);
     }
   }
+});
+
+// MerkleTree is the pure functions with a memo. The contract is byte equality:
+// every proof and every root it produces must be exactly what inclusionProof,
+// consistencyProof and merkleRoot produce, for every (index, size) and every
+// (m, n) — the memo may only change the cost, never the bytes.
+test("MerkleTree produces the same proofs and roots as the pure functions, for every pair up to 48 leaves", async () => {
+  const leaves = Array.from({ length: 48 }, (_, i) => `event-hash-${i}`);
+  const tree = new MerkleTree(leaves);
+  for (let size = 0; size <= leaves.length; size++) {
+    assert.equal(await tree.root(size), await merkleRoot(leaves.slice(0, size)), `root at size ${size}`);
+    for (let index = 0; index < size; index++) {
+      assert.deepEqual(await tree.inclusionProof(index, size), await inclusionProof(leaves, index, size), `inclusion (${index}, ${size})`);
+    }
+    for (let m = 1; m <= size; m++) {
+      assert.deepEqual(await tree.consistencyProof(m, size), await consistencyProof(leaves.slice(0, size), m, size), `consistency (${m}, ${size})`);
+    }
+  }
+  assert.equal(await tree.root(), await merkleRoot(leaves), "default size is the whole leaf set");
+});
+
+// The reason the class exists. GET /api/record/:handle proves a page of up to
+// 200 events against one checkpoint; through the pure function that was ~2n
+// digests per event (0.4 s each at the live n of 13,000). Over one tree the
+// whole page must cost about one tree's worth of digests: n leaf hashes and
+// n - 1 node hashes to build every subtree once, then nothing per proof but
+// the lookups. The bound below is 3n for 200 proofs where the pure function
+// spends ~400n; a memo that silently stopped working would trip it by 100x.
+test("200 inclusion proofs over one MerkleTree cost about one tree of digests, not 200", async () => {
+  const n = 4096;
+  const leaves = Array.from({ length: n }, (_, i) => `leaf-${i}`);
+  const subtle = globalThis.crypto.subtle;
+  const original = subtle.digest;
+  let digests = 0;
+  subtle.digest = function (this: SubtleCrypto, ...args: Parameters<SubtleCrypto["digest"]>) {
+    digests++;
+    return original.apply(this, args);
+  } as SubtleCrypto["digest"];
+  try {
+    const tree = new MerkleTree(leaves);
+    const root = await tree.root();
+    for (let i = 0; i < 200; i++) {
+      const index = (i * 97) % n;
+      const proof = await tree.inclusionProof(index, n);
+      assert.equal(await verifyInclusion(leaves[index], index, n, proof, root), true, `proof ${index} verifies`);
+    }
+  } finally {
+    subtle.digest = original;
+  }
+  // verifyInclusion itself spends log2(n) + 1 digests per proof; those are
+  // the verifier's, counted here too, and still leave the total far under 3n.
+  assert.ok(digests < 3 * n, `200 proofs over ${n} leaves took ${digests} digests; the memo is not working if this is near ${400 * n}`);
 });
 
 test("a rewritten history cannot produce a passing consistency proof", async () => {
