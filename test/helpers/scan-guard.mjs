@@ -44,7 +44,7 @@
 //
 // Usage: node test/helpers/scan-guard.mjs [--write-baseline]
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
@@ -167,6 +167,100 @@ const tables = new Set(
   db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name.toLowerCase()),
 );
 
+// COVERAGE. The plan check above can only judge a statement a test executed, so
+// a new read with no test would pass it unseen: the largest gap in this guard,
+// measured 2026-09-17 at 33 of 335 SELECT literals in src/ that the suite never
+// runs. So every SELECT literal in src/ must match some statement the suite
+// actually prepared. Literals are read from the source with comment lines
+// removed; `${...}` interpolations become wildcards, so a query assembled from a
+// fixed skeleton and interpolated fragments still matches its executed form.
+// The ones uncovered when this landed are listed under `uncovered_reads` in the
+// baseline, with the same ratchet: a NEW uncovered read fails, and a listed one
+// that is now executed must be deleted.
+//
+// What it cannot see, stated plainly: a read assembled entirely at runtime with
+// no SELECT literal in the source, and a literal whose wildcards happen to match
+// an unrelated statement (a false "covered", never a false failure).
+const walkTs = (d) =>
+  readdirSync(d).flatMap((f) => {
+    const p = `${d}/${f}`;
+    return statSync(p).isDirectory() ? walkTs(p) : p.endsWith(".ts") ? [p] : [];
+  });
+const capturedFlat = statements.map((sql) => sql.replace(/\s+/g, " ").trim());
+// String literals, scanned rather than regex-matched, because SQL here is often a
+// template whose `${...}` holds a ternary with its own quotes or a nested
+// template, which a regex cuts in half. Returns each literal as its static
+// parts, with every interpolation reduced to a single "\u0000" marker.
+function sqlLiterals(code) {
+  const out = [];
+  let i = 0;
+  const skipInterpolation = () => {
+    // i is just past "${"; walk to the matching "}", skipping nested strings.
+    let depth = 1;
+    while (i < code.length && depth > 0) {
+      const ch = code[i];
+      if (ch === "`") readTemplate();
+      else if (ch === '"' || ch === "'") readQuoted(ch);
+      else {
+        if (ch === "{") depth++;
+        else if (ch === "}") depth--;
+        i++;
+      }
+    }
+  };
+  const readQuoted = (q) => {
+    let text = "";
+    i++;
+    while (i < code.length && code[i] !== q && code[i] !== "\n") {
+      if (code[i] === "\\") { text += code[i + 1] ?? ""; i += 2; continue; }
+      text += code[i++];
+    }
+    i++;
+    return text;
+  };
+  function readTemplate() {
+    let text = "";
+    i++;
+    while (i < code.length && code[i] !== "`") {
+      if (code[i] === "\\") { text += code[i + 1] ?? ""; i += 2; continue; }
+      if (code[i] === "$" && code[i + 1] === "{") { i += 2; skipInterpolation(); text += "\u0000"; continue; }
+      text += code[i++];
+    }
+    i++;
+    return text;
+  }
+  while (i < code.length) {
+    const ch = code[i];
+    if (ch === "/" && code[i + 1] === "/") { while (i < code.length && code[i] !== "\n") i++; continue; }
+    if (ch === "/" && code[i + 1] === "*") { const end = code.indexOf("*/", i + 2); i = end < 0 ? code.length : end + 2; continue; }
+    if (ch === "`") { out.push(readTemplate()); continue; }
+    if (ch === '"' || ch === "'") { out.push(readQuoted(ch)); continue; }
+    i++;
+  }
+  return out;
+}
+const readLiterals = [];
+for (const file of walkTs(`${root}src`)) {
+  for (const raw of sqlLiterals(readFileSync(file, "utf8"))) {
+    if (!/^\s*(SELECT|WITH)\b/i.test(raw) || !/\bFROM\b/i.test(raw)) continue;
+    readLiterals.push({ file: file.slice(root.length), sql: raw.replace(/\s+/g, " ").trim() });
+  }
+}
+const literalPattern = (sql) =>
+  new RegExp(
+    sql
+      .split("\u0000")
+      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "\\s*"))
+      .join("[\\s\\S]*?"),
+  );
+const uncovered = new Map();
+for (const lit of readLiterals) {
+  const re = literalPattern(lit.sql);
+  if (!capturedFlat.some((c) => re.test(c))) {
+    uncovered.set(createHash("sha256").update(`${lit.file}\n${normalize(lit.sql.replaceAll("\u0000", "${}"))}`).digest("hex").slice(0, 16), lit);
+  }
+}
+
 const found = new Map();
 let reads = 0;
 for (const sql of statements) {
@@ -181,12 +275,20 @@ if (process.argv.includes("--write-baseline")) {
   for (const [k, v] of [...found].sort((a, b) => a[1].sql.localeCompare(b[1].sql))) {
     entries[k] = previous.entries[k] ?? { status: "debt", sql: v.sql.slice(0, 300), plan: v.plan };
   }
-  writeFileSync(BASELINE, JSON.stringify({ note: previous.note ?? "", entries }, null, 2) + "\n");
-  console.log(`SCAN-GUARD: wrote ${Object.keys(entries).length} entries to test/scan-baseline.json`);
+  const uncovered_reads = {};
+  for (const [k, v] of [...uncovered].sort((a, b) => (a[1].file + a[1].sql).localeCompare(b[1].file + b[1].sql))) {
+    uncovered_reads[k] = { file: v.file, sql: v.sql.replaceAll("\u0000", "${…}").slice(0, 300) };
+  }
+  writeFileSync(BASELINE, JSON.stringify({ note: previous.note ?? "", entries, uncovered_reads }, null, 2) + "\n");
+  console.log(
+    `SCAN-GUARD: wrote ${Object.keys(entries).length} unbounded and ${Object.keys(uncovered_reads).length} uncovered entries to test/scan-baseline.json`,
+  );
   process.exit(0);
 }
 
-const baseline = JSON.parse(readFileSync(BASELINE, "utf8")).entries;
+const baselineFile = JSON.parse(readFileSync(BASELINE, "utf8"));
+const baseline = baselineFile.entries;
+const uncoveredBaseline = baselineFile.uncovered_reads ?? {};
 const newScans = [...found].filter(([k]) => !(k in baseline));
 const seenKeys = new Set(statements.map(keyOf));
 const nowBounded = Object.entries(baseline).filter(([k]) => seenKeys.has(k) && !found.has(k));
@@ -211,5 +313,22 @@ if (nowBounded.length) {
   failed = true;
   console.error(`\nSCAN-GUARD: ${nowBounded.length} baseline entr(ies) are now bounded. Delete them so the worklist stays true:`);
   for (const [k, v] of nowBounded) console.error(`  [${k}] ${v.sql.slice(0, 160)}`);
+}
+const newUncovered = [...uncovered].filter(([k]) => !(k in uncoveredBaseline));
+const nowCovered = Object.entries(uncoveredBaseline).filter(([k]) => !uncovered.has(k));
+console.log(
+  `SCAN-GUARD: ${readLiterals.length} SELECT literals in src/; ${readLiterals.length - uncovered.size} executed by the suite, ` +
+    `${uncovered.size} never executed (${Object.keys(uncoveredBaseline).length} listed in the baseline).`,
+);
+if (newUncovered.length) {
+  failed = true;
+  console.error(`\nSCAN-GUARD: ${newUncovered.length} NEW read(s) in src/ that no test executes, so their cost cannot be checked:\n`);
+  for (const [k, v] of newUncovered) console.error(`  [${k}] ${v.file}: ${v.sql.replaceAll("\u0000", "${…}").slice(0, 200)}`);
+  console.error("\n  Add a test that exercises the code path, so this guard can EXPLAIN the statement.");
+}
+if (nowCovered.length) {
+  failed = true;
+  console.error(`\nSCAN-GUARD: ${nowCovered.length} listed uncovered read(s) are now executed. Delete them from uncovered_reads:`);
+  for (const [k, v] of nowCovered) console.error(`  [${k}] ${v.file}: ${v.sql.slice(0, 160)}`);
 }
 process.exit(failed ? 1 : 0);
