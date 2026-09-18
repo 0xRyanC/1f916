@@ -604,6 +604,13 @@
         "screen_notices: SCAN s USING INDEX idx_screen_notices_created"
       ]
     },
+    "3726ff6275be4d8d": {
+      "status": "debt",
+      "sql": "SELECT SUM(CASE WHEN tx IS NOT NULL AND tx <> '' THEN N ELSE N END) AS total, SUM(CASE WHEN tx IS NOT NULL AND tx <> '' AND hash IS NOT NULL AND lower(description) LIKE '%' || lower(tx) || '%' THEN N ELSE N END) AS covered FROM ledger",
+      "plan": [
+        "ledger: SCAN ledger"
+      ]
+    },
     "f7ebe5e8bb188654": {
       "status": "debt",
       "sql": "SELECT tag, COUNT(*) AS uses, COUNT(DISTINCT citizen_id) AS taggers, COUNT(DISTINCT post_id) AS posts FROM tags GROUP BY tag ORDER BY tag ASC LIMIT N",
@@ -642,11 +649,11 @@
     },
     "d8b9dfa75d01ae94": {
       "file": "src/society.ts",
-      "sql": "SELECT ${\u2026}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.id = ?"
+      "sql": "SELECT ${…}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.id = ?"
     },
     "79e9f4db1e67e5a1": {
       "file": "src/society.ts",
-      "sql": "SELECT ${\u2026}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.target_attestation_id = ? ORDER BY a.id ASC"
+      "sql": "SELECT ${…}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.target_attestation_id = ? ORDER BY a.id ASC"
     },
     "64aec8bce46b06b8": {
       "file": "src/society.ts",
@@ -654,7 +661,7 @@
     },
     "4fe02d0c63b10071": {
       "file": "src/society.ts",
-      "sql": "SELECT c.handle FROM flags f JOIN citizens c ON c.id = f.citizen_id WHERE f.target_type = ? AND f.target_id = ? ORDER BY f.created_at ASC LIMIT ${\u2026}"
+      "sql": "SELECT c.handle FROM flags f JOIN citizens c ON c.id = f.citizen_id WHERE f.target_type = ? AND f.target_id = ? ORDER BY f.created_at ASC LIMIT ${…}"
     },
     "394244a49218be45": {
       "file": "src/society.ts",
@@ -662,7 +669,7 @@
     },
     "cd4015808315391b": {
       "file": "src/society.ts",
-      "sql": "SELECT COUNT(*) AS count, COALESCE(SUM(MIN(1.0, MAX(${\u2026}, (? - c.created_at) / ${\u2026}.0))), 0) AS weighted FROM flags f JOIN citizens c ON c.id = f.citizen_id WHERE f.target_type = ? AND f.target_id = ?"
+      "sql": "SELECT COUNT(*) AS count, COALESCE(SUM(MIN(1.0, MAX(${…}, (? - c.created_at) / ${…}.0))), 0) AS weighted FROM flags f JOIN citizens c ON c.id = f.citizen_id WHERE f.target_type = ? AND f.target_id = ?"
     },
     "d36a1c7cf4bc1a03": {
       "file": "src/society.ts",
@@ -718,7 +725,7 @@
     },
     "bb4f0cfc31efae60": {
       "file": "src/society.ts",
-      "sql": "SELECT mod_state FROM ${\u2026} WHERE id = ?"
+      "sql": "SELECT mod_state FROM ${…} WHERE id = ?"
     },
     "c5caa8373a03e566": {
       "file": "src/society.ts",
