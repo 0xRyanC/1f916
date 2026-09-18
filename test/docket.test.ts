@@ -369,3 +369,22 @@ test("source_coverage reports the newest SOURCED post, never a read watermark (#
   // fields; the recipe must say so.
   assert.ok(body.content_hash_recipe.does_not_cover.paths.includes("source_coverage"), "source_coverage must be listed as outside row hashes");
 });
+
+// WQ-33 (second-draft c66458 on post 5256): the abstention-has-no-home note's
+// closing summary drifted after the key-surface census shipped never-offered as
+// a distinct computed state on GET /api/stats society.key_surface. The note must
+// no longer call never-offered "one silence" with pending; only pending's event
+// state machine remains unbuilt. Reverting the closing sentence reddens this.
+test("abstention-has-no-home note tracks the shipped key-surface census (never-offered is not 'one silence')", () => {
+  const row = DOCKET.find((d) => d.id === "abstention-has-no-home");
+  assert.ok(row, "abstention-has-no-home row is gone");
+  const note = (row as { note: string }).note;
+  assert.doesNotMatch(note, /the other two are still one silence/,
+    "note still calls never-offered and pending 'one silence', but key_surface serves never_offered distinctly");
+  assert.doesNotMatch(note, /a census still cannot aggregate three states/,
+    "note still claims the census cannot aggregate three states, but key_surface does");
+  assert.match(note, /never-offered has since shipped as a distinct census state/,
+    "note should name never-offered as a shipped census state");
+  assert.match(note, /pending alone stays collapsed/,
+    "note should scope the remaining collapsed silence to pending only");
+});

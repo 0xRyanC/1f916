@@ -563,6 +563,23 @@ export interface TableAttestation extends ChainReport {
   // against genesis because nothing is committed there, so a false
   // expect_matches carries no information about tampering either way.
   anchor_below_sealed_from_id?: boolean;
+  // Ledger only (identity_events has no tx column): the two figures a reader
+  // used to have to compute by hand to know how much of the "check tx against
+  // the description" cross-check actually reaches a row. Absolute, never
+  // windowed — a property of the whole ledger, like sealed_entries_total.
+  // #126 point 3: the ledger does not hash tx (it is outside the preimage), so
+  // the mitigation is only as good as the rows it can reach; publish the count
+  // rather than asserting it in prose.
+  tx_rows_total?: number;
+  /** Rows that carry a tx AND are sealed (hash set) AND name that tx in their
+   *  chained description — the rows the cross-check actually works on. A
+   *  sealed row with a tx the description does not name (the legacy outflows
+   *  14 and 15) is in the total but NOT here. */
+  tx_rows_chain_covered?: number;
+  /** The scoped mitigation sentence, generated from the two figures above so
+   *  the count and the promise cannot drift apart: it carries the very "N of
+   *  M" it is qualifying. Ledger only. */
+  tx_coverage_note?: string;
   /** The legacy prefix's witness, always present and never windowed: whether a
    * manifest row is sealed over the rows below sealed_from_id, and — when one
    * is — whether those rows STILL hash to what it committed, recomputed on
@@ -626,11 +643,56 @@ async function attestTable(
   const sealedEntriesTotal =
     tip.sealed_from_id === null
       ? 0
-      : ((await db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE id >= ? AND hash IS NOT NULL`).bind(tip.sealed_from_id).first<{ n: number }>())?.n ?? 0);
+      : ((
+          await db
+            // Maintained by trigger (migration 0062). sealed_from_id is MIN(id)
+            // over sealed rows, so every sealed row has id >= it and this count
+            // is exactly the number of sealed rows. The exact old statement is
+            // the COALESCE fallback for a database missing the counter row.
+            // Was 16,505 rows per call. No hash or row is touched.
+            .prepare(
+              `SELECT COALESCE((SELECT n FROM table_counts WHERE name = '${table}.sealed'), (SELECT COUNT(*) FROM ${table} WHERE id >= ? AND hash IS NOT NULL)) AS n`,
+            )
+            .bind(tip.sealed_from_id)
+            .first<{ n: number }>()
+        )?.n ?? 0);
   const legacyPrefixTotal =
     tip.sealed_from_id === null
       ? tip.total_rows
       : ((await db.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE id < ?`).bind(tip.sealed_from_id).first<{ n: number }>())?.n ?? 0);
+
+  // Ledger only (identity_events has no tx column): how much of the "check tx
+  // against the description" mitigation actually reaches a row. The chain does
+  // not hash tx — it is outside the preimage — so the cross-check works on a
+  // row only when that row is sealed (hash set) AND names the tx inside its
+  // chained description. A sealed row carrying a tx the description never
+  // names (the legacy outflows 14 and 15) counts toward the total but NOT the
+  // covered figure. Both numbers are computed from the rows, not asserted in
+  // prose, and they are the same two figures the served note is generated from
+  // — so the count and the mitigation sentence cannot drift apart. Absolute,
+  // never windowed: a property of the whole ledger, like sealed_entries_total
+  // (#126 point 3).
+  let txRowsTotal = 0;
+  let txRowsChainCovered = 0;
+  if (table === "ledger") {
+    const txRows = await db
+      .prepare(
+        // `instr(...) > 0`, not LIKE: a 66-character tx built into a per-row
+        // LIKE pattern exceeds D1's SQLITE_MAX_LIKE_PATTERN_LENGTH, so
+        // lower(description) LIKE '%'||lower(tx)||'%' throws SQLITE_ERROR in
+        // production (the 1f916 D1 enforces a low limit; node:sqlite does not,
+        // so the offline lane cannot catch it). instr is the same predicate
+        // with no pattern and no limit.
+        `SELECT
+           SUM(CASE WHEN tx IS NOT NULL AND tx <> '' THEN 1 ELSE 0 END) AS total,
+           SUM(CASE WHEN tx IS NOT NULL AND tx <> '' AND hash IS NOT NULL
+                AND instr(lower(description), lower(tx)) > 0 THEN 1 ELSE 0 END) AS covered
+         FROM ledger`,
+      )
+      .first<{ total: number | null; covered: number | null }>();
+    txRowsTotal = txRows?.total ?? 0;
+    txRowsChainCovered = txRows?.covered ?? 0;
+  }
 
   // The anchor lookup is `WHERE id <= ?`, so ANY `from` past the end silently
   // resolves to the chain tip. A caller asking about position 9999 of a 50-row
@@ -799,6 +861,24 @@ async function attestTable(
     // and it is recomputed against the live prefix on every call so a reused
     // answer cannot pass itself off as a fresh look.
     legacy_manifest: legacyManifest,
+    // Ledger only (identity_events has no tx column). Absolute, never windowed
+    // — deliberately NOT in query_dependence, for the same reason as
+    // legacy_prefix_total: it is a property of the whole ledger, not of the
+    // caller's anchor. The two figures and the note that qualifies them are
+    // emitted together, generated from the same two numbers, so a coverage
+    // figure can never sit beside a sentence that does not match it (#126
+    // point 3). A reader who checks tx against the description is not trusting
+    // us — on these rows.
+    ...(table === "ledger"
+      ? {
+          tx_rows_total: txRowsTotal,
+          tx_rows_chain_covered: txRowsChainCovered,
+          tx_coverage_note:
+            txRowsTotal === 0
+              ? "no ledger row carries a tx, so the tx cross-check has nothing to reach."
+              : `the tx cross-check is available on ${txRowsChainCovered} of ${txRowsTotal} rows: a row counts as chain-covered only when it is sealed and names the tx in its description, and a row that carries a tx the description never names is in the total but not in the figure above. This figure moves when the rows do; re-derive it from ledger rows with tx set, hash set, and the tx inside description.`,
+        }
+      : {}),
     ...(belowSeal ? { anchor_below_sealed_from_id: true } : {}),
     ...(reason ? { reason } : {}),
     // Resume from the last row actually hashed. If nothing was hashed, resume

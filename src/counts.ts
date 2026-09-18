@@ -6,7 +6,7 @@
 // among the most-called statements on the board, each priced by the size of the
 // society. The triggers in 0059 keep the answers current as rows are written.
 
-export type MaintainedTable = "citizens" | "posts" | "comments" | "votes" | "seals";
+export type MaintainedTable = "citizens" | "posts" | "comments" | "votes" | "seals" | "identity_events" | "ledger";
 
 // A scalar SQL expression for a table's total. It reads the maintained counter
 // and falls back to a real COUNT(*) only when the counter row is ABSENT (a

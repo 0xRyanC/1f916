@@ -110,7 +110,7 @@ test("the naming estimate carries its own window instead of borrowing the bucket
   // so the number still travels with the interval it was actually taken over.
   assert.ok(/since: namedSince/.test(block) && /until: now/.test(block), "and its own declared window, so the number travels with the interval it was taken over");
   assert.match(src, /\.bind\(namedSince, citizen\.id, citizen\.handle, namedSince, citizen\.id, citizen\.handle\)/, "the scan binds the window it serves");
-  assert.match(src, /const namedSince = replay \? cursor : Math\.max\(cursor, now - NAMED_DEFAULT_LOOKBACK_MS\);/, "an explicit ?since= is honoured in full; only the default is bounded");
+  assert.match(src, /const namedSince = replay \|\| namedLookback === "all" \? cursor : Math\.max\(cursor, now - namedLookback \* 86_400_000\);/, "an explicit ?since= or named_days=all is honoured in full; otherwise the lookback bounds it");
   // The comparison that inverted the finding must be warned against in-band.
   assert.ok(/must not be compared against mentions_of_you unless both were taken over the same window/.test(src));
 });

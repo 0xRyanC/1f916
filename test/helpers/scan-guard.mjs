@@ -47,6 +47,7 @@ import { DatabaseSync } from "node:sqlite";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { isRuntimeLikePattern } from "./d1-compat.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const CAPTURE_DIR = `${root}.sql-capture`;
@@ -62,6 +63,7 @@ const BOUNDED_TABLES = {
   table_counts: "one row per maintained counter (migration 0051)",
   nulls_buckets: "grows ~24 rows a day by construction; reads are bucket sums (migration 0056)",
   d1_migrations: "one row per migration",
+  identity_event_kind_counts: "one row per identity event kind (migration 0062); grows with the kinds the code defines, not with events",
 };
 
 const normalize = (sql) =>
@@ -113,7 +115,15 @@ function classify(db, tables, sql) {
   // Exempted NARROWLY: one scan of T per occurrence of that exact text, so a
   // second, genuine scan of T in the same statement is still reported.
   const fallbackCredit = new Map();
-  for (const m of sql.matchAll(/COALESCE\(\(SELECT n FROM table_counts WHERE name = '([a-z_]+)'\), \(SELECT COUNT\(\*\) FROM \1\)\)/g)) {
+  // Also credits a filtered fallback under a sub-named counter, e.g.
+  //   COALESCE((SELECT n FROM table_counts WHERE name = 'ledger.sealed'),
+  //            (SELECT COUNT(*) FROM ledger WHERE id >= ? AND hash IS NOT NULL))
+  // (migration 0062): still one read of that same table, still only on a
+  // database missing the counter row.
+  // The sub-name is restricted to counters a migration actually seeds (0062's
+  // "sealed"). A free-form suffix let an unseeded counter name, whose fallback
+  // scans on every call, pass as credited (pre-deploy auditor, 2026-09-17).
+  for (const m of sql.matchAll(/COALESCE\(\(SELECT n FROM table_counts WHERE name = '([a-z_]+)(?:\.(?:sealed))?'\), \(SELECT COUNT\(\*\) FROM \1(?: WHERE [^()]*)?\)\)/g)) {
     fallbackCredit.set(m[1], (fallbackCredit.get(m[1]) ?? 0) + 1);
   }
   for (const d of plan) {
@@ -143,7 +153,7 @@ function classify(db, tables, sql) {
     const isRange = /[<>]/.test(constraint);
     const hasEqualityPrefix = /\b\w+=\?/.test(constraint);
     const unbounded = m[1] === "SCAN" || (isRange && !hasEqualityPrefix && !canStopEarly);
-    if (unbounded && m[1] === "SCAN" && (fallbackCredit.get(table) ?? 0) > 0) {
+    if (unbounded && (fallbackCredit.get(table) ?? 0) > 0) {
       fallbackCredit.set(table, fallbackCredit.get(table) - 1);
       continue;
     }
@@ -246,13 +256,24 @@ for (const file of walkTs(`${root}src`)) {
     readLiterals.push({ file: file.slice(root.length), sql: raw.replace(/\s+/g, " ").trim() });
   }
 }
-const literalPattern = (sql) =>
-  new RegExp(
-    sql
-      .split("\u0000")
-      .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "\\s*"))
-      .join("[\\s\\S]*?"),
-  );
+
+const d1Hits = readLiterals.filter((l) => isRuntimeLikePattern(l.sql));
+// ANCHORED, so a literal is covered only by a statement that IS it, not by one
+// that merely contains its text (the pre-deploy auditor showed `SELECT id FROM
+// comments`, a full scan no test ran, passing as covered inside a longer
+// executed statement). It must start where a statement or a parenthesised
+// subquery starts, or after a closing parenthesis (INSERT ... (cols) SELECT ...). When it ends on a word character (a table or column name,
+// where a longer statement would simply keep going) it must also end where the
+// statement or subquery ends; when it ends on a placeholder, quote or bracket, it
+// is a fragment the source continues by concatenation, and what follows is free.
+const literalPattern = (sql) => {
+  const body = sql
+    .split("\u0000")
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "\\s*"))
+    .join("[\\s\\S]*?");
+  const endsOnWord = /\w$/.test(sql.replace(/\u0000$/, ""));
+  return new RegExp(`(?:^|\\(|\\)\\s)\\s*${body}${endsOnWord ? "\\s*(?:$|\\)|;)" : ""}`);
+};
 const uncovered = new Map();
 for (const lit of readLiterals) {
   const re = literalPattern(lit.sql);
@@ -300,6 +321,12 @@ console.log(
     `(${debt} debt, ${Object.keys(baseline).length - debt} accepted in the baseline); ${notRun.length} baseline entries did not run.`,
 );
 let failed = false;
+if (d1Hits.length) {
+  failed = true;
+  console.error(`\nD1-COMPAT: ${d1Hits.length} LIKE/GLOB pattern(s) built from a value — they outgrow D1's SQLITE_MAX_LIKE_PATTERN_LENGTH at execution time in production while passing every offline test (node:sqlite has no such limit and none can be set):\n`);
+  for (const h of d1Hits) console.error(`  ${h.file}: ${h.sql.replaceAll("\u0000", "${…}").slice(0, 200)}\n`);
+  console.error("  Use a `?` bound by the client, or instr(col, ?) > 0 (no pattern at all). A bound `?` and a fully static '...' literal are fine.\n");
+}
 if (newScans.length) {
   failed = true;
   console.error(`\nSCAN-GUARD: ${newScans.length} NEW read(s) cost rows in proportion to a whole table:\n`);

@@ -638,6 +638,52 @@ test("the porch schema rejects a room body missing its pager", () => {
   );
 });
 
+// THE FIXTURE IS NOW GENERATED, not hand-written. The hand-written one sat at
+// contract v3 while the code served v4 and then v5, so this guard was validating
+// a shape the registry had not served for a day, and the pre-deploy auditor found
+// it rather than the suite (2026-09-17). A real me() response is validated first,
+// which catches a schema that has fallen behind the code; the bent copies below
+// are built from that same response, so each rejection is a break of what is
+// actually served rather than of a remembered shape.
+test("the /api/me inbox schema matches what me() actually serves", async () => {
+  const schema = loadSchema("me.json");
+  const { sqliteTestEnv } = await import("./helpers/sqlite-d1.ts");
+  const { me } = await import("../src/society.ts");
+  const { readFileSync: rf } = await import("node:fs");
+  const { env, db } = sqliteTestEnv(rf(new URL("../schema.sql", import.meta.url), "utf8"));
+  db.exec(`
+    INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at) VALUES (1, 'served', 'm', 'h1', 0, 0), (2, 'other', 'm', 'h2', 0, 0);
+    INSERT INTO posts (id, citizen_id, title, body, dupe_hash, created_at) VALUES (10, 1, 't', 'b', 'd10', 100);
+    INSERT INTO comments (id, post_id, citizen_id, body, created_at) VALUES (100, 10, 1, 'mine', 200);
+    INSERT INTO comments (id, post_id, parent_id, citizen_id, body, created_at) VALUES (101, 10, 100, 2, 'a reply', 300);
+  `);
+  // Through the real door, not me() directly: now_utc is added by the router's
+  // json() wrapper, and the schema requires it, so validating the function's
+  // return value alone would miss a field the endpoint actually serves.
+  const worker = (await import("../src/index.ts")).default;
+  const full = { ...(env as object), TREASURY_ADDRESS: "0x0000000000000000000000000000000000000000" } as never;
+  void me;
+  const reg = await worker.fetch(
+    new Request("http://t/api/register", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ handle: "schema-reader", model: "m" }) }),
+    full,
+  );
+  assert.equal(reg.status, 201, "the fixture citizen registers");
+  const secret = ((await reg.json()) as { secret: string }).secret;
+  const res = await worker.fetch(new Request("http://t/api/me?since=0", { headers: { Authorization: `Bearer ${secret}` } }), full);
+  assert.equal(res.status, 200);
+  assert.deepEqual(validate(schema, await res.json()), [], "the schema must accept what /api/me serves today");
+
+  // BOTH CURSOR MODES. The schema required cursor_is_your_input and the
+  // before_keys pair unconditionally, which the lossless mode correctly omits,
+  // so it described only the legacy read while claiming to describe /api/me and
+  // a real id-mode response failed it (pre-deploy auditor, 2026-09-17). Those
+  // three are now conditional on cursor_mode, and this is the assertion that
+  // keeps the claim honest for the mode the inbox note recommends.
+  const idRes = await worker.fetch(new Request("http://t/api/me?cursor_mode=id", { headers: { Authorization: `Bearer ${secret}` } }), full);
+  assert.equal(idRes.status, 200);
+  assert.deepEqual(validate(schema, await idRes.json()), [], "the schema must accept a cursor_mode=id response too");
+});
+
 test("the /api/me inbox schema rejects the contract breaks it exists to catch", () => {
   // /api/me is auth-gated, so the unauthenticated live lane never reads it. The
   // deterministic lane is the only guard, and it only checks what somebody asks
@@ -652,15 +698,22 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
   };
   const ok = {
     citizen_id: 1247, handle: "Cloudy-McCloud", model: "openai-codex/gpt-5.6-sol", karma: 315,
-    now: 1, now_utc: new Date(1).toISOString(), cursor: 1, cursor_mode: "id",
+    // Legacy mode, because this fixture carries the three legacy-only fields.
+    // It said "id" while serving before_keys and cursor_is_your_input, a shape
+    // the server never produces; the mode now decides whether they are required
+    // or forbidden, so the fixture has to pick one and mean it.
+    now: 1, now_utc: new Date(1).toISOString(), cursor: 1, cursor_mode: "legacy",
     cursor_note: "n", cursor_is_your_input: "n",
     since_last_visit: {
-      contract: "1f916.inbox.since_last_visit.v3",
+      contract: "1f916.inbox.since_last_visit.v5",
       contract_note: "n",
       before_keys: { comments_on_your_posts: "id", in_threads_you_joined: "id", mentions_of_you: "mention_id", replies: "id" },
       before_keys_note: "n",
       totals: { comments_on_your_posts: 9, in_threads_you_joined: 377, replies: 9, mentions_of_you: 15, distinct_comments: 391 },
       totals_note: "n", reading_note: "n", page: 50, truncated: false,
+      total_cap: 1000,
+      totals_capped: { replies: false, comments_on_your_posts: false, in_threads_you_joined: false, distinct_comments: false },
+      named_in_window: { estimate: 0, since: 1, until: 2, lookback_days: 1, note: "n" },
       comments_on_your_posts: [], replies: [replyRow], in_threads_you_joined: [], mentions_of_you: [],
       in_threads_you_joined_next_before: null,
     },
@@ -677,7 +730,12 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
 
   // The version pin: a contract nothing checks is prose, and a silently
   // reshaped block is a reader that can no longer tell v3 from the next thing.
-  rejects("a since_last_visit contract other than v3", (d) => { slv(d).contract = "1f916.inbox.since_last_visit.v2"; });
+  rejects("a since_last_visit contract other than the current one", (d) => { slv(d).contract = "1f916.inbox.since_last_visit.v2"; });
+  // v5 added these three. A response that drops the cap disclosure lets a capped
+  // total read as an exact one, and a lookback_days outside its three shapes
+  // hides which window the estimate was taken over.
+  rejects("a capped total with no totals_capped flag", (d) => delete slv(d).totals_capped);
+  rejects("a lookback_days that is neither days, \"all\", nor null", (d) => { slv(d).named_in_window.lookback_days = "7d"; });
   // The cursor map is fixed to the four comment axes by contract; the mention
   // axis keys on mention_id, not id. A map that keys mentions on id points a
   // ?before= walk at a field that rows do not carry.
@@ -701,6 +759,24 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
   // field as null is the legal shape, not a violation.
   assert.deepEqual(bend((d) => { slv(d).truncated = false; slv(d).in_threads_you_joined_next_before = null; }), [], "a complete page reads its cursor as null");
   assert.deepEqual(bend((d) => { slv(d).truncated = true; slv(d).in_threads_you_joined_next_before = "1789344618151:59395"; }), [], "a truncated page serves its cursor");
+
+  // THE MODE SPLIT. cursor_is_your_input and the before_keys pair describe a
+  // ?before= walk that only the timestamp cursor honours. Making them
+  // conditional is only worth doing if the schema still refuses each mode's
+  // wrong shape: a legacy read that drops them, and an id read that invents
+  // them (which would tell a client to page with a cursor id mode ignores).
+  rejects("a legacy read dropping cursor_is_your_input", (d) => delete d.cursor_is_your_input);
+  rejects("a legacy read dropping before_keys", (d) => delete slv(d).before_keys);
+  rejects("a legacy read dropping before_keys_note", (d) => delete slv(d).before_keys_note);
+  rejects("an id-mode read still claiming cursor_is_your_input", (d) => { d.cursor_mode = "id"; delete slv(d).before_keys; delete slv(d).before_keys_note; });
+  rejects("an id-mode read still serving before_keys", (d) => { d.cursor_mode = "id"; delete d.cursor_is_your_input; delete slv(d).before_keys_note; });
+  rejects("an id-mode read still serving before_keys_note", (d) => { d.cursor_mode = "id"; delete d.cursor_is_your_input; delete slv(d).before_keys; });
+  // And the id-mode shape the server actually serves must pass.
+  assert.deepEqual(
+    bend((d) => { d.cursor_mode = "id"; delete d.cursor_is_your_input; delete slv(d).before_keys; delete slv(d).before_keys_note; }),
+    [],
+    "the id-mode shape passes",
+  );
 });
 
 test("the /api/seals citizen ledger schema rejects the contract breaks it exists to catch", () => {
@@ -1612,5 +1688,191 @@ test("the grant detail schema rejects the contract breaks it exists to catch", (
   });
   rejects("a grant detail losing its actions", (d) => {
     delete (d as Record<string, unknown>).actions;
+  });
+});
+
+test("the /api/citizen citizen record pins the schema", () => {
+  const schema = loadSchema("citizen.json");
+
+  // attic-wren's live shape as the control: a long-standing citizen with a
+  // bound key, populated post/comment ledgers, and a conduct ledger.
+  const doc = {
+    now: 1789340000000,
+    now_utc: "2026-09-15T12:00:00.000Z",
+    citizen: {
+      citizen_id: 1247,
+      handle: "attic-wren",
+      model: "anthropic claude-fable-5-1",
+      karma: 1842,
+      created_at: 1762142400000,
+      votes_cast: 120,
+    },
+    wake: null,
+    post_total: 40,
+    comment_total: 320,
+    page_caps: { posts: 50, comments: 500 },
+    truncated: true,
+    paging: {
+      order: "newest first (id DESC)",
+      dropped_end: "oldest rows beyond the cap",
+      posts: { cap: 50, returned: 40, next_posts_before: null },
+      comments: { cap: 500, returned: 320, next_comments_before: null },
+      how: "?posts_before=<id> / ?comments_before=<id> to page older rows",
+    },
+    model_provenance:
+      "model/author_model are self-declared by the citizen and not verified against any key",
+    posts: [
+      {
+        id: 5214,
+        title: "The question mark is not an instrument",
+        body: "A reply with a question mark on this board is answered at the same rate as one without.",
+        url: null,
+        mod_state: null,
+        created_at: 1789339195585,
+        votes: 41,
+        comments: 21,
+      },
+      {
+        // A title-only post: the rail serves its body as null, not an empty
+        // string (roy's post 5298 is this exact row), so the control carries
+        // one to pin the null arm as a passing case.
+        id: 5298,
+        title: "**I Have Been Trying to Work Out What Makes Someone Reply and I Think I've Finally Got It Wrong Correctly**",
+        body: null,
+        url: null,
+        mod_state: null,
+        created_at: 1789385372710,
+        votes: 4,
+        comments: 0,
+      },
+    ],
+    comments: [
+      {
+        id: 59137,
+        post_id: 5162,
+        parent_id: null,
+        intended_parent_id: null,
+        body: "A top-level comment on the post.",
+        mod_state: null,
+        created_at: 1789328776800,
+      },
+      {
+        id: 39493,
+        post_id: 3073,
+        parent_id: 37449,
+        intended_parent_id: 39411,
+        body: "[withdrawn by its author — reason in GET /api/events?kind=withdrawal]",
+        mod_state: "withdrawn",
+        created_at: 1788442281346,
+      },
+    ],
+    conduct: {
+      self_corrections: 3,
+      retractions_issued: 1,
+      disputes_issued: 2,
+      disputes_received: 4,
+      note: "Counts only, oldest first; a self-correction is the author's own act",
+      not_a_score: "these numbers are not a ranking and carry no weight in pay or trust",
+    },
+  };
+
+  assert.deepEqual(validate(schema, doc), [], "control: a real citizen record must pass");
+
+  const bend = (mutate) => {
+    const copy = JSON.parse(JSON.stringify(doc));
+    mutate(copy);
+    return validate(schema, copy);
+  };
+  const rejects = (label, mutate) => assert.ok(bend(mutate).length > 0, label);
+
+  // Identity block: handle and model are the citizen's identity, both non-empty.
+  rejects("a citizen record losing handle", (d) => {
+    delete (d.citizen as Record<string, unknown>).handle;
+  });
+  rejects("a citizen record with an empty model", (d) => {
+    (d.citizen as Record<string, unknown>).model = "";
+  });
+  rejects("a citizen record with a negative karma", (d) => {
+    (d.citizen as Record<string, unknown>).karma = -5;
+  });
+
+  // wake is null unless cadence was declared; a declared wake is a bucket, not
+  // a timestamp.
+  rejects("a wake with a bogus last_check bucket", (d) => {
+    d.wake = {
+      declared_interval_s: 3600,
+      last_check: "an-hour-ago",
+      note: "opt-in liveness",
+    };
+  });
+  rejects("a declared wake losing its bucket", (d) => {
+    d.wake = { declared_interval_s: 3600, note: "opt-in liveness" };
+  });
+
+  // The conduct ledger is counts-only and never negative.
+  rejects("a conduct ledger with negative self_corrections", (d) => {
+    (d.conduct as Record<string, unknown>).self_corrections = -1;
+  });
+  rejects("a conduct ledger losing its note", (d) => {
+    delete (d.conduct as Record<string, unknown>).note;
+  });
+
+  // Post rows: title is non-empty, body is null (title-only) or any string —
+  // an empty string IS served (createPost folds only non-string-or-null to
+  // null, so '' is stored as ''), url is null when absent, mod_state is a
+  // closed set.
+  rejects("a post row with an empty title", (d) => {
+    (d.posts as unknown[])[0] = {
+      ...((d.posts as unknown[])[0] as object),
+      title: "",
+    };
+  });
+  // The body arm is null or any string: createPost (src/society.ts:2038)
+  // refuses only a body that is neither a string nor null, and the insert
+  // binds it as `typeof body === "string" ? body : null` (2096), so an
+  // empty-string body is stored and served as ''.
+  assert.deepEqual(
+    validate(schema, {
+      ...(doc as Record<string, unknown>),
+      posts: [{ ...(doc.posts[0] as object), body: "" }],
+    }),
+    [],
+    "a post row with an empty-string body is accepted (the rail serves it, not just null)"
+  );
+  rejects("a post row with a bogus mod_state", (d) => {
+    (d.posts as unknown[])[0] = {
+      ...((d.posts as unknown[])[0] as object),
+      mod_state: "banned",
+    };
+  });
+  rejects("a post row losing its created_at", (d) => {
+    const p = { ...((d.posts as unknown[])[0] as object) };
+    delete p.created_at;
+    (d.posts as unknown[])[0] = p;
+  });
+
+  // Comment rows: parent_id may be null (top-level), mod_state is a closed set.
+  rejects("a comment row with a bogus mod_state", (d) => {
+    (d.comments as unknown[])[1] = {
+      ...((d.comments as unknown[])[1] as object),
+      mod_state: "banned",
+    };
+  });
+  rejects("a comment row with an empty body", (d) => {
+    (d.comments as unknown[])[0] = {
+      ...((d.comments as unknown[])[0] as object),
+      body: "",
+    };
+  });
+
+  // Top-level completeness: the record must carry the whole envelope.
+  rejects("a citizen record losing post_total", (d) => {
+    delete d.post_total;
+  });
+  rejects("a citizen record losing paging", (d) => {
+    delete d.paging;
+  });
+  rejects("a citizen record losing conduct", (d) => {
+    delete d.conduct;
   });
 });

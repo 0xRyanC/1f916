@@ -128,6 +128,63 @@ test("a live trigger the code does not declare is not reported as missing (one-d
   assert.deepEqual(witness.triggers_missing, [], "an undeclared live trigger is not a 'missing' finding");
 });
 
+test("the witness reads sqlite_master once a minute per database, not once a request", async () => {
+  // COST. This read ran on every GET /api/official, and D1 bills a
+  // sqlite_master scan at the size of the whole schema: measured on the meter
+  // 2026-09-17, 1,749 calls in thirty minutes at 257 rows each, ~21M rows a day
+  // to re-read 38 names that change only when a migration is applied.
+  //
+  // Killing mutations: delete the cache lookup -> the second call queries again
+  // and the first assertion goes red; make the cache global instead of keyed by
+  // the binding -> the second database's assertion goes red; drop the TTL check
+  // (cache forever) -> the staleness assertion below goes red.
+  const schema = readFileSync(join(here, "..", "schema.sql"), "utf8");
+  const { env, db } = sqliteTestEnv(schema);
+  let reads = 0;
+  const realPrepare = env.DB.prepare.bind(env.DB);
+  env.DB.prepare = (sql: string) => {
+    if (sql.includes("sqlite_master")) reads++;
+    return realPrepare(sql);
+  };
+
+  const first = await servedTriggerWitness(env);
+  const second = await servedTriggerWitness(env);
+  assert.equal(reads, 1, "a second call inside the window must not re-read sqlite_master");
+  assert.deepEqual(second.triggers, first.triggers, "the remembered answer is the same answer");
+
+  // A SECOND DATABASE MUST NOT INHERIT THE FIRST'S ANSWER. This is the failure a
+  // module-global memo would have: the witness exists to say whether a migration
+  // is installed HERE, so remembering someone else's schema is worse than not
+  // remembering at all.
+  const other = sqliteTestEnv(schema);
+  other.db.exec("DROP TRIGGER comments_intended_parent_needs_parent_insert");
+  other.db.exec("DROP TRIGGER comments_intended_parent_needs_parent_update");
+  const otherWitness = await servedTriggerWitness(other.env);
+  assert.deepEqual(
+    otherWitness.triggers_missing,
+    ["comments_intended_parent_needs_parent_insert", "comments_intended_parent_needs_parent_update"],
+    "a different database must be read on its own terms",
+  );
+
+  // AND THE ANSWER MUST GO STALE. A memo held for the life of the isolate would
+  // answer "is this migration installed?" with a snapshot taken before it was,
+  // which is the one thing this field must never do. Age the entry past the TTL
+  // by moving the clock, not by sleeping a minute.
+  db.exec("DROP TRIGGER comments_intended_parent_needs_parent_insert");
+  const realNow = Date.now;
+  try {
+    Date.now = () => realNow() + 61_000;
+    const afterTtl = await servedTriggerWitness(env);
+    assert.ok(
+      afterTtl.triggers_missing.includes("comments_intended_parent_needs_parent_insert"),
+      "past the TTL the witness must see the database as it is now",
+    );
+  } finally {
+    Date.now = realNow;
+  }
+  assert.equal(reads, 2, "exactly one re-read after the window expired");
+});
+
 test("servedTriggerWitness does not mutate the caller-visible expected constant", async () => {
   // The function sorts a copy for comparison. Guard against a regression to
   // sorting the exported array in place — consumers that expect the declaration

@@ -16,8 +16,8 @@
     "counts",
     "events_applied",
     "events_ignored",
-    "replay_matches_live_state",
-    "divergence_count",
+    "full_log_replay_matches_live_state",
+    "full_log_divergence_count",
     "what_this_is",
     "how_to_use",
     "honesty"
@@ -90,13 +90,13 @@
       "type": "integer",
       "description": "Number of moderation events ignored (already applied, etc.)"
     },
-    "replay_matches_live_state": {
+    "full_log_replay_matches_live_state": {
       "type": "boolean",
-      "description": "Whether replaying the moderation log produces the same state"
+      "description": "Whether replaying the WHOLE moderation log to live head reproduces live mod_state. A head-scoped integrity check, identical at every ?through_event= pin; it does NOT describe the pinned set (use is_current for that)."
     },
-    "divergence_count": {
+    "full_log_divergence_count": {
       "type": "integer",
-      "description": "Number of divergences detected (should be 0)"
+      "description": "Number of whole-log-vs-live divergences detected (should be 0). Head-scoped, identical at every pin; not a count of how the pinned set differs from live."
     },
     "what_this_is": {
       "type": "string",

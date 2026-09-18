@@ -125,6 +125,10 @@ const EXPECTED_SCANS: string[] = [
   // lacked idx_citizens_secret_hash, which production has had since migration
   // 0032, so the test database genuinely had no index to seek. schema.sql now
   // carries it and the lookup seeks here as it does in production.)
+  // One row per identity event KIND (tens of rows), read in place of a GROUP BY
+  // over every identity event (migration 0062). Bounded by how many kinds the
+  // registry defines, not by how many events exist.
+  "identity_event_kind_counts :: SELECT kind, n FROM identity_event_kind_counts WHERE n > 0 ORDER BY kind",
   "sqlite_master :: SELECT name FROM sqlite_master WHERE type = 'trigger' ORDER BY name",
 ];
 

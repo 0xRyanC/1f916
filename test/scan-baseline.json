@@ -118,13 +118,6 @@
         "comments: SEARCH comments USING INTEGER PRIMARY KEY (rowid<?)"
       ]
     },
-    "3bf7f0d210365157": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM identity_events",
-      "plan": [
-        "identity_events: SCAN identity_events USING COVERING INDEX idx_identity_events"
-      ]
-    },
     "c402a3a1e8ae4515": {
       "status": "debt",
       "sql": "SELECT COUNT(*) AS n FROM identity_events WHERE id < ?",
@@ -132,25 +125,11 @@
         "identity_events: SEARCH identity_events USING INTEGER PRIMARY KEY (rowid<?)"
       ]
     },
-    "b8c8d859184c88ed": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM identity_events WHERE id >= ? AND hash IS NOT NULL",
-      "plan": [
-        "identity_events: SEARCH identity_events USING INTEGER PRIMARY KEY (rowid>?)"
-      ]
-    },
     "167363edac02de39": {
       "status": "debt",
       "sql": "SELECT COUNT(*) AS n FROM ledger WHERE id < ?",
       "plan": [
         "ledger: SEARCH ledger USING INTEGER PRIMARY KEY (rowid<?)"
-      ]
-    },
-    "bd2a00f9f710c38b": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM ledger WHERE id >= ? AND hash IS NOT NULL",
-      "plan": [
-        "ledger: SEARCH ledger USING INTEGER PRIMARY KEY (rowid>?)"
       ]
     },
     "ed13bfe58b9fa1c0": {
@@ -638,6 +617,21 @@
       "plan": [
         "witnesses: SCAN w"
       ]
+    },
+    "12f239d36b175ff3": {
+      "status": "debt",
+      "sql": "SELECT SUM(CASE WHEN tx IS NOT NULL AND tx <> '' THEN N ELSE N END) AS total, SUM(CASE WHEN tx IS NOT NULL AND tx <> '' AND hash IS NOT NULL AND instr(lower(description), lower(tx)) > N THEN N ELSE N END) AS covered FROM ledger",
+      "plan": [
+        "ledger: SCAN ledger"
+      ]
+    },
+    "b45eb4ee91e538d0": {
+      "status": "accepted",
+      "sql": "SELECT o.*, c.handle FROM offers o JOIN citizens c ON c.id = o.citizen_id WHERE o.mod_state IS NULL ORDER BY o.id DESC LIMIT N",
+      "plan": [
+        "offers: SCAN o"
+      ],
+      "reason": "GET /api/offers?include_closed=1 (migrations/0064): the archive view, which by definition wants rows the live index range excludes -- withdrawn and expired offers. It is the only read of `offers` that scans, it is capped at 200 rows, and the DEFAULT read beside it (open offers) is index-driven on idx_offers_expiry(expiry, id) precisely so the common path never pays for this. The table is bounded in practice by the five-per-citizen-per-day cap, and if it ever stops being small the fix is a cursor on id, not an index, because this query deliberately has no selective predicate."
     }
   },
   "uncovered_reads": {
@@ -663,11 +657,11 @@
     },
     "d8b9dfa75d01ae94": {
       "file": "src/society.ts",
-      "sql": "SELECT ${…}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.id = ?"
+      "sql": "SELECT ${\u2026}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.id = ?"
     },
     "79e9f4db1e67e5a1": {
       "file": "src/society.ts",
-      "sql": "SELECT ${…}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.target_attestation_id = ? ORDER BY a.id ASC"
+      "sql": "SELECT ${\u2026}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.target_attestation_id = ? ORDER BY a.id ASC"
     },
     "64aec8bce46b06b8": {
       "file": "src/society.ts",
@@ -675,7 +669,7 @@
     },
     "4fe02d0c63b10071": {
       "file": "src/society.ts",
-      "sql": "SELECT c.handle FROM flags f JOIN citizens c ON c.id = f.citizen_id WHERE f.target_type = ? AND f.target_id = ? ORDER BY f.created_at ASC LIMIT ${…}"
+      "sql": "SELECT c.handle FROM flags f JOIN citizens c ON c.id = f.citizen_id WHERE f.target_type = ? AND f.target_id = ? ORDER BY f.created_at ASC LIMIT ${\u2026}"
     },
     "394244a49218be45": {
       "file": "src/society.ts",
@@ -683,7 +677,7 @@
     },
     "cd4015808315391b": {
       "file": "src/society.ts",
-      "sql": "SELECT COUNT(*) AS count, COALESCE(SUM(MIN(1.0, MAX(${…}, (? - c.created_at) / ${…}.0))), 0) AS weighted FROM flags f JOIN citizens c ON c.id = f.citizen_id WHERE f.target_type = ? AND f.target_id = ?"
+      "sql": "SELECT COUNT(*) AS count, COALESCE(SUM(MIN(1.0, MAX(${\u2026}, (? - c.created_at) / ${\u2026}.0))), 0) AS weighted FROM flags f JOIN citizens c ON c.id = f.citizen_id WHERE f.target_type = ? AND f.target_id = ?"
     },
     "d36a1c7cf4bc1a03": {
       "file": "src/society.ts",
@@ -708,10 +702,6 @@
     "d9986808055a69c7": {
       "file": "src/society.ts",
       "sql": "SELECT id FROM ledger WHERE id = ?"
-    },
-    "4948bfa2fda2db4f": {
-      "file": "src/society.ts",
-      "sql": "SELECT id FROM payout_receipts WHERE tx_hash = ? AND transfer_log_index = ?"
     },
     "bbc0a3b6f4333eb2": {
       "file": "src/society.ts",
@@ -743,7 +733,7 @@
     },
     "bb4f0cfc31efae60": {
       "file": "src/society.ts",
-      "sql": "SELECT mod_state FROM ${…} WHERE id = ?"
+      "sql": "SELECT mod_state FROM ${\u2026} WHERE id = ?"
     },
     "c5caa8373a03e566": {
       "file": "src/society.ts",
