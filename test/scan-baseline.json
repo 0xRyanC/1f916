@@ -1,12 +1,13 @@
 {
   "note": "",
   "entries": {
-    "267c4c9a6c753124": {
-      "status": "debt",
-      "sql": "SELECT (SELECT COALESCE(MAX(id), N) FROM posts) AS current_max, (SELECT COUNT(*) FROM posts WHERE id <= ?) AS board_total",
+    "56e2b8a8d7e19924": {
+      "status": "accepted",
+      "sql": "SELECT (SELECT COALESCE(MAX(id), N) FROM posts) AS current_max, COALESCE((SELECT n FROM table_counts WHERE name = 'posts'), (SELECT COUNT(*) FROM posts)) - (SELECT COUNT(*) FROM posts WHERE id > ?) AS board_total",
       "plan": [
-        "posts: SEARCH posts USING INTEGER PRIMARY KEY (rowid<?)"
-      ]
+        "posts: SEARCH posts USING INTEGER PRIMARY KEY (rowid>?)"
+      ],
+      "reason": "/api/new continuation denominator (2026-09-17): the maintained posts total minus `COUNT(*) FROM posts WHERE id > ?`, a rowid seek over only the posts written since the walk's snapshot. Its size is the board's growth during one walk, not the board. The scan the plan also lists is the maintainedTotalSql fallback, credited separately."
     },
     "0ecb828fd7c40e09": {
       "status": "debt",
@@ -14,13 +15,6 @@
       "plan": [
         "comments: SEARCH comments USING INDEX idx_comments_created_id (created_at>?)",
         "posts: SEARCH posts USING INDEX idx_posts_created (created_at>?)"
-      ]
-    },
-    "84020aa9ca11b3e4": {
-      "status": "debt",
-      "sql": "SELECT (SELECT MAX(id) FROM posts) AS latest_post_id, (SELECT MAX(id) FROM comments) AS latest_comment_id, (SELECT MAX(id) FROM identity_events) AS latest_event_id, (SELECT MAX(id) FROM nulls) AS latest_null_id, (SELECT COUNT(*) FROM citizens) AS citizens",
-      "plan": [
-        "citizens: SCAN citizens USING COVERING INDEX idx_citizens_secret_hash"
       ]
     },
     "12178640e74ee942": {
@@ -56,13 +50,6 @@
       "sql": "SELECT COALESCE(client, '(none)') AS client, COUNT(*) AS clients, COALESCE(SUM(authed = N), N) AS anon, COALESCE(SUM(registered_at IS NOT NULL), N) AS registered FROM mcp_probe WHERE first_seen >= ? GROUP BY N ORDER BY clients DESC LIMIT N",
       "plan": [
         "mcp_probe: SEARCH mcp_probe USING INDEX idx_mcp_probe_first_seen (first_seen>?)"
-      ]
-    },
-    "a4dfa6c7251529af": {
-      "status": "debt",
-      "sql": "SELECT COALESCE(MAX(id), N) AS snapshot_id, COUNT(*) AS board_total FROM posts",
-      "plan": [
-        "posts: SCAN posts USING COVERING INDEX idx_posts_created"
       ]
     },
     "208200622ea781df": {
@@ -107,12 +94,13 @@
         "tags: SCAN tags USING COVERING INDEX idx_tags_tag"
       ]
     },
-    "e73f78e494215e93": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM citizens",
+    "f69637702696e831": {
+      "status": "accepted",
+      "sql": "SELECT COUNT(*) AS n FROM citizen_activity WHERE last_active_at > ?N",
       "plan": [
-        "citizens: SCAN citizens USING COVERING INDEX idx_citizens_secret_hash"
-      ]
+        "citizen_activity: SEARCH citizen_activity USING COVERING INDEX idx_citizen_activity_last (last_active_at>?)"
+      ],
+      "reason": "Reads one index entry per citizen active in the window (migration 0059), so its cost is the size of the answer, not of the society. It replaced a UNION over posts, comments and votes that read ~205,000 rows per call on 2026-09-17."
     },
     "a71d6b8285da0fe5": {
       "status": "debt",
@@ -120,13 +108,6 @@
       "plan": [
         "citizens: SCAN c USING COVERING INDEX idx_citizens_secret_hash",
         "identity_events: SEARCH e USING COVERING INDEX idx_identity_events_citizen_kind (citizen_id=? AND kind=? AND id>?)"
-      ]
-    },
-    "d09fd99d8f559a66": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM comments",
-      "plan": [
-        "comments: SCAN comments USING COVERING INDEX idx_comments_citizen_day"
       ]
     },
     "f72c915d57068b05": {
@@ -137,13 +118,6 @@
         "comments: SEARCH comments USING INTEGER PRIMARY KEY (rowid<?)"
       ]
     },
-    "3bf7f0d210365157": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM identity_events",
-      "plan": [
-        "identity_events: SCAN identity_events USING COVERING INDEX idx_identity_events"
-      ]
-    },
     "c402a3a1e8ae4515": {
       "status": "debt",
       "sql": "SELECT COUNT(*) AS n FROM identity_events WHERE id < ?",
@@ -151,39 +125,11 @@
         "identity_events: SEARCH identity_events USING INTEGER PRIMARY KEY (rowid<?)"
       ]
     },
-    "b8c8d859184c88ed": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM identity_events WHERE id >= ? AND hash IS NOT NULL",
-      "plan": [
-        "identity_events: SEARCH identity_events USING INTEGER PRIMARY KEY (rowid>?)"
-      ]
-    },
-    "d22c0fae8f61da17": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM identity_events WHERE kind = ?",
-      "plan": [
-        "identity_events: SCAN identity_events USING COVERING INDEX idx_identity_events_citizen_kind"
-      ]
-    },
-    "5f7c06c0b40070e9": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM ledger",
-      "plan": [
-        "ledger: SCAN ledger USING COVERING INDEX idx_ledger_hash"
-      ]
-    },
     "167363edac02de39": {
       "status": "debt",
       "sql": "SELECT COUNT(*) AS n FROM ledger WHERE id < ?",
       "plan": [
         "ledger: SEARCH ledger USING INTEGER PRIMARY KEY (rowid<?)"
-      ]
-    },
-    "bd2a00f9f710c38b": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM ledger WHERE id >= ? AND hash IS NOT NULL",
-      "plan": [
-        "ledger: SEARCH ledger USING INTEGER PRIMARY KEY (rowid>?)"
       ]
     },
     "ed13bfe58b9fa1c0": {
@@ -212,13 +158,6 @@
       "sql": "SELECT COUNT(*) AS n FROM nulls WHERE created_at > ?N AND id > ?N",
       "plan": [
         "nulls: SEARCH nulls USING COVERING INDEX idx_nulls_created (created_at>?)"
-      ]
-    },
-    "227ddc41d8415af6": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM posts",
-      "plan": [
-        "posts: SCAN posts USING COVERING INDEX idx_posts_created"
       ]
     },
     "76aed3e38673d15b": {
@@ -250,20 +189,6 @@
         "screen_notices: SCAN s"
       ]
     },
-    "e21c0583cc9598f2": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM seals",
-      "plan": [
-        "seals: SCAN seals USING COVERING INDEX idx_seals_citizen_label"
-      ]
-    },
-    "965b9daa8724dd67": {
-      "status": "debt",
-      "sql": "SELECT COUNT(*) AS n FROM votes",
-      "plan": [
-        "votes: SCAN votes USING COVERING INDEX idx_votes_citizen_day"
-      ]
-    },
     "8ab206d7d9f3dd4b": {
       "status": "debt",
       "sql": "SELECT COUNT(*) AS n FROM witnesses",
@@ -284,15 +209,6 @@
       "plan": [
         "citizens: SCAN c",
         "identity_events: SEARCH e EXISTS USING COVERING INDEX idx_identity_events_citizen_kind (citizen_id=? AND kind=? AND id>?)"
-      ]
-    },
-    "f6c02fa8ca103ef0": {
-      "status": "debt",
-      "sql": "SELECT COUNT(DISTINCT citizen_id) AS n FROM ( SELECT citizen_id FROM posts WHERE created_at > ?N UNION SELECT citizen_id FROM comments WHERE created_at > ?N UNION SELECT citizen_id FROM votes WHERE created_at > ?N)",
-      "plan": [
-        "posts: SCAN posts USING COVERING INDEX idx_posts_citizen_day",
-        "comments: SCAN comments USING COVERING INDEX idx_comments_citizen_day",
-        "votes: SCAN votes USING COVERING INDEX idx_votes_citizen_day"
       ]
     },
     "1db4e11886bb69c9": {
@@ -322,20 +238,6 @@
       "sql": "SELECT e.id, e.citizen_id, e.kind, e.detail, e.created_at, e.prev_hash, e.hash, c.handle AS citizen FROM identity_events e JOIN citizens c ON c.id = e.citizen_id ORDER BY e.created_at DESC LIMIT N",
       "plan": [
         "identity_events: SCAN e USING INDEX idx_identity_events"
-      ]
-    },
-    "793e02e8530134c1": {
-      "status": "debt",
-      "sql": "SELECT e.id, e.citizen_id, e.kind, e.detail, e.created_at, e.prev_hash, e.hash, c.handle AS citizen FROM identity_events e JOIN citizens c ON c.id = e.citizen_id WHERE e.kind = ? ORDER BY e.created_at DESC LIMIT N",
-      "plan": [
-        "identity_events: SCAN e USING INDEX idx_identity_events"
-      ]
-    },
-    "9dd433da10b219c0": {
-      "status": "debt",
-      "sql": "SELECT e.id, e.kind, e.detail, e.created_at, e.hash, c.handle FROM identity_events e JOIN citizens c ON c.id = e.citizen_id WHERE e.kind IN ('grant', 'grant-proposal') AND e.detail LIKE ? ORDER BY e.id ASC",
-      "plan": [
-        "identity_events: SCAN e"
       ]
     },
     "8d01c4d3a1709457": {
@@ -401,16 +303,16 @@
         "ledger: SCAN ledger"
       ]
     },
-    "3b2b5fb9bf733a2e": {
+    "e59b678086438b65": {
       "status": "debt",
-      "sql": "SELECT id AS citizen_id, handle, model, karma, (SELECT COUNT(*) FROM votes v WHERE v.citizen_id = citizens.id) AS votes_cast, created_at FROM citizens ORDER BY created_at ASC LIMIT ?",
+      "sql": "SELECT id AS citizen_id, handle, model, karma, COALESCE((SELECT n FROM citizen_vote_counts WHERE citizen_id = citizens.id), (SELECT COUNT(*) FROM votes v WHERE v.citizen_id = citizens.id)) AS votes_cast, created_at FROM citizens ORDER BY created_at ASC LIMIT ?",
       "plan": [
         "citizens: SCAN citizens"
       ]
     },
-    "93ec8ce78e434a01": {
+    "3df0141193914f38": {
       "status": "debt",
-      "sql": "SELECT id AS citizen_id, handle, model, karma, (SELECT COUNT(*) FROM votes v WHERE v.citizen_id = citizens.id) AS votes_cast, created_at FROM citizens WHERE created_at > ? ORDER BY created_at ASC LIMIT ?",
+      "sql": "SELECT id AS citizen_id, handle, model, karma, COALESCE((SELECT n FROM citizen_vote_counts WHERE citizen_id = citizens.id), (SELECT COUNT(*) FROM votes v WHERE v.citizen_id = citizens.id)) AS votes_cast, created_at FROM citizens WHERE created_at > ? ORDER BY created_at ASC LIMIT ?",
       "plan": [
         "citizens: SCAN citizens"
       ]
@@ -443,13 +345,6 @@
         "ledger: SCAN ledger"
       ]
     },
-    "caf797c19f9a9e2b": {
-      "status": "debt",
-      "sql": "SELECT id, detail AS payload, created_at FROM identity_events WHERE kind = 'legacy.manifest' AND hash IS NOT NULL ORDER BY id ASC",
-      "plan": [
-        "identity_events: SCAN identity_events"
-      ]
-    },
     "a0c701c15e153e8e": {
       "status": "debt",
       "sql": "SELECT id, entry_date, description, amount_cents, created_at, tx, source FROM ledger WHERE id < ? ORDER BY id ASC",
@@ -476,13 +371,6 @@
       "sql": "SELECT id, hash FROM ledger WHERE hash IS NOT NULL ORDER BY id DESC LIMIT N",
       "plan": [
         "ledger: SCAN ledger"
-      ]
-    },
-    "77bcfd168d2d8014": {
-      "status": "debt",
-      "sql": "SELECT id, kind, detail, created_at, prev_hash, hash FROM identity_events WHERE (kind = 'witness-register' AND instr(detail, ?) = N) OR (kind = 'witness-rotate' AND instr(detail, ?) = N) ORDER BY id ASC LIMIT N",
-      "plan": [
-        "identity_events: SCAN identity_events"
       ]
     },
     "bc90994553e9d5df": {
@@ -548,13 +436,6 @@
         "observed_transfers: SCAN observed_transfers"
       ]
     },
-    "c411665003172b2f": {
-      "status": "debt",
-      "sql": "SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.intended_parent_id, m.created_at, m.body, m.mod_state, c.handle AS author, p.title AS post_title FROM comments m JOIN citizens c ON c.id = m.citizen_id JOIN posts p ON p.id = m.post_id WHERE m.intended_parent_id IS NOT NULL AND m.intended_pa",
-      "plan": [
-        "comments: SCAN m"
-      ]
-    },
     "dff371d4d2e6b609": {
       "status": "debt",
       "sql": "SELECT n.id, n.target_type, n.target_id, n.payload, n.created_at, c.handle AS author FROM payload_notices n JOIN citizens c ON c.id = n.citizen_id ORDER BY n.created_at DESC, n.id DESC LIMIT ?",
@@ -598,6 +479,13 @@
       ]
     },
     "2e285f2d3ebc6355": {
+      "status": "debt",
+      "sql": "SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinned, p.created_at, c.handle AS author, COALESCE(p.author_model, c.model) AS author_model, (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'post' AND v.target_id = p.id) AS votes, (SELECT COALESCE(SUM(MIN(N.N, MAX(N.N, (? - vc.created_",
+      "plan": [
+        "posts: SEARCH p USING INTEGER PRIMARY KEY (rowid<?)"
+      ]
+    },
+    "01f2e1f9ad6cb702": {
       "status": "debt",
       "sql": "SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinned, p.created_at, c.handle AS author, COALESCE(p.author_model, c.model) AS author_model, (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'post' AND v.target_id = p.id) AS votes, (SELECT COALESCE(SUM(MIN(N.N, MAX(N.N, (? - vc.created_",
       "plan": [
@@ -729,6 +617,131 @@
       "plan": [
         "witnesses: SCAN w"
       ]
+    },
+    "12f239d36b175ff3": {
+      "status": "debt",
+      "sql": "SELECT SUM(CASE WHEN tx IS NOT NULL AND tx <> '' THEN N ELSE N END) AS total, SUM(CASE WHEN tx IS NOT NULL AND tx <> '' AND hash IS NOT NULL AND instr(lower(description), lower(tx)) > N THEN N ELSE N END) AS covered FROM ledger",
+      "plan": [
+        "ledger: SCAN ledger"
+      ]
+    },
+    "b45eb4ee91e538d0": {
+      "status": "accepted",
+      "sql": "SELECT o.*, c.handle FROM offers o JOIN citizens c ON c.id = o.citizen_id WHERE o.mod_state IS NULL ORDER BY o.id DESC LIMIT N",
+      "plan": [
+        "offers: SCAN o"
+      ],
+      "reason": "GET /api/offers?include_closed=1 (migrations/0064): the archive view, which by definition wants rows the live index range excludes -- withdrawn and expired offers. It is the only read of `offers` that scans, it is capped at 200 rows, and the DEFAULT read beside it (open offers) is index-driven on idx_offers_expiry(expiry, id) precisely so the common path never pays for this. The table is bounded in practice by the five-per-citizen-per-day cap, and if it ever stops being small the fix is a cursor on id, not an index, because this query deliberately has no selective predicate."
+    }
+  },
+  "uncovered_reads": {
+    "5536dd5aa7ed6e82": {
+      "file": "src/bindings.ts",
+      "sql": "SELECT COUNT(*) AS n FROM bindings WHERE citizen_id = ?"
+    },
+    "70d9a6a8b617deb9": {
+      "file": "src/checkpoint.ts",
+      "sql": "SELECT id, tree_size, root, sig, created_at FROM checkpoints WHERE log = ? AND tree_size >= ? ORDER BY tree_size ASC LIMIT 1"
+    },
+    "92d27d97b5340508": {
+      "file": "src/index.ts",
+      "sql": "SELECT c.created_at, (SELECT COUNT(*) FROM keys k WHERE k.citizen_id = c.id AND k.status = 'active') AS active_keys, (SELECT COUNT(*) FROM keys k WHERE k.citizen_id = c.id) AS total_keys, (SELECT COUNT(*) FROM seals s WHERE s.citizen_id = c.id) AS seals FROM citizens c WHERE c.handle = ?"
+    },
+    "a80fa010cb49339d": {
+      "file": "src/index.ts",
+      "sql": "SELECT MAX(id) AS id FROM listings WHERE withdrawn_at IS NULL"
+    },
+    "670ceb2af79551f7": {
+      "file": "src/record.ts",
+      "sql": "SELECT hash FROM identity_events WHERE hash IS NOT NULL ORDER BY id ASC"
+    },
+    "d8b9dfa75d01ae94": {
+      "file": "src/society.ts",
+      "sql": "SELECT ${\u2026}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.id = ?"
+    },
+    "79e9f4db1e67e5a1": {
+      "file": "src/society.ts",
+      "sql": "SELECT ${\u2026}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.target_attestation_id = ? ORDER BY a.id ASC"
+    },
+    "64aec8bce46b06b8": {
+      "file": "src/society.ts",
+      "sql": "SELECT b.id, b.citizen_id, b.domain, b.checked_at, c.handle FROM bindings b JOIN citizens c ON c.id = b.citizen_id WHERE b.status = 'verified' AND b.checked_at < ? ORDER BY b.checked_at ASC LIMIT ?"
+    },
+    "4fe02d0c63b10071": {
+      "file": "src/society.ts",
+      "sql": "SELECT c.handle FROM flags f JOIN citizens c ON c.id = f.citizen_id WHERE f.target_type = ? AND f.target_id = ? ORDER BY f.created_at ASC LIMIT ${\u2026}"
+    },
+    "394244a49218be45": {
+      "file": "src/society.ts",
+      "sql": "SELECT citizen_id FROM bindings WHERE domain = ?"
+    },
+    "cd4015808315391b": {
+      "file": "src/society.ts",
+      "sql": "SELECT COUNT(*) AS count, COALESCE(SUM(MIN(1.0, MAX(${\u2026}, (? - c.created_at) / ${\u2026}.0))), 0) AS weighted FROM flags f JOIN citizens c ON c.id = f.citizen_id WHERE f.target_type = ? AND f.target_id = ?"
+    },
+    "d36a1c7cf4bc1a03": {
+      "file": "src/society.ts",
+      "sql": "SELECT COUNT(*) AS n FROM payout_receipts pr JOIN payout_bindings pb ON pb.id = pr.binding_id WHERE pb.docket_id = ?"
+    },
+    "c1a9ee959ca48668": {
+      "file": "src/society.ts",
+      "sql": "SELECT COUNT(*) AS n FROM seal_checks WHERE citizen_id = ? AND checked_at >= ?"
+    },
+    "7e2d27a7e003af31": {
+      "file": "src/society.ts",
+      "sql": "SELECT COUNT(*) AS n FROM seals WHERE citizen_id = ? AND sealed_at >= ?"
+    },
+    "129e0e7988a59c06": {
+      "file": "src/society.ts",
+      "sql": "SELECT COUNT(*) AS n FROM witnesses WHERE citizen_id = ?"
+    },
+    "35ddf48e37a79d4e": {
+      "file": "src/society.ts",
+      "sql": "SELECT id FROM identity_events WHERE kind = 'attestation' AND instr(detail, ?) > 0 LIMIT 1"
+    },
+    "d9986808055a69c7": {
+      "file": "src/society.ts",
+      "sql": "SELECT id FROM ledger WHERE id = ?"
+    },
+    "bbc0a3b6f4333eb2": {
+      "file": "src/society.ts",
+      "sql": "SELECT id, citizen_id, public_key, epoch FROM witnesses WHERE url = ?"
+    },
+    "dc3966a3193140c8": {
+      "file": "src/society.ts",
+      "sql": "SELECT id, detail, created_at FROM identity_events WHERE kind = 'moderation' ORDER BY id ASC"
+    },
+    "edb9a215dfaa500f": {
+      "file": "src/society.ts",
+      "sql": "SELECT id, hash FROM seals WHERE citizen_id = ? AND label = ? ORDER BY id DESC LIMIT 1"
+    },
+    "710aae22e2171090": {
+      "file": "src/society.ts",
+      "sql": "SELECT id, mod_state FROM comments WHERE mod_state IS NOT NULL"
+    },
+    "1aa07dc3d59d95cc": {
+      "file": "src/society.ts",
+      "sql": "SELECT id, mod_state FROM listings WHERE mod_state IS NOT NULL"
+    },
+    "ce97c931607bc029": {
+      "file": "src/society.ts",
+      "sql": "SELECT id, mod_state FROM posts WHERE mod_state IS NOT NULL"
+    },
+    "10ef20770ad88f48": {
+      "file": "src/society.ts",
+      "sql": "SELECT MAX(id) AS id FROM identity_events WHERE kind = 'moderation'"
+    },
+    "bb4f0cfc31efae60": {
+      "file": "src/society.ts",
+      "sql": "SELECT mod_state FROM ${\u2026} WHERE id = ?"
+    },
+    "c5caa8373a03e566": {
+      "file": "src/society.ts",
+      "sql": "SELECT url, status, challenge, verification_version FROM doorbells WHERE id = ?"
+    },
+    "2b6768fd192d880f": {
+      "file": "src/x402.ts",
+      "sql": "SELECT hash FROM ledger WHERE lower(tx) = ? ORDER BY id LIMIT 1"
     }
   }
 }

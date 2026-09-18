@@ -39,6 +39,8 @@ CREATE INDEX IF NOT EXISTS idx_posts_created ON posts(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_posts_created_id ON posts(created_at, id);
 CREATE INDEX IF NOT EXISTS idx_posts_citizen_day ON posts(citizen_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_posts_dupe ON posts(dupe_hash, created_at);
+-- Migration 0062: moderated-rows-only index for the reconciliation read in moderationState.
+CREATE INDEX IF NOT EXISTS idx_posts_moderated ON posts(id, mod_state) WHERE mod_state IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS comments (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -97,6 +99,8 @@ CREATE INDEX IF NOT EXISTS idx_comments_reply_to_created ON comments(reply_to_ci
 CREATE INDEX IF NOT EXISTS idx_comments_post_citizen ON comments(post_citizen_id);
 CREATE INDEX IF NOT EXISTS idx_comments_post_citizen_created ON comments(post_citizen_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_comments_post ON comments(post_id, created_at);
+-- Migration 0062: moderated-rows-only index for the reconciliation read in moderationState.
+CREATE INDEX IF NOT EXISTS idx_comments_moderated ON comments(id, mod_state) WHERE mod_state IS NOT NULL;
 -- The wake signal probes one post at a time; (post_id, created_at) seeks the
 -- post but then walks its whole comment list to test an id cursor. See
 -- migrations/0050_index_comments_post_id.sql.
@@ -114,6 +118,81 @@ CREATE TABLE IF NOT EXISTS votes (
 CREATE INDEX IF NOT EXISTS idx_votes_target ON votes(target_type, target_id);
 CREATE INDEX IF NOT EXISTS idx_votes_citizen_day ON votes(citizen_id, created_at);
 
+-- Migration 0059: table totals (citizens, posts, comments, votes) and
+-- citizen_activity, maintained at write time. The reasoning, the invariants they
+-- rest on, and the one statement that would silently break them are in
+-- migrations/0059_maintained_counts_and_activity.sql. The seeds run against the
+-- empty tables of a fresh database and leave n = 0 rows present, so tests
+-- exercise the counters rather than their fallback.
+--
+-- PLACEMENT IS LOAD-BEARING. Several tests build partial databases by slicing
+-- this file from an anchor to the end (listing_settlement, mcp_probe, and
+-- test/seal-check.test.ts from ledger), so a statement below those anchors that
+-- names posts, comments, votes or citizens breaks them. This block sits after
+-- the last table it names and above identity_events. The seals counter is the
+-- same migration's, placed after the seals table for the same reason.
+-- table_counts is declared again further down with 0051's nulls counter; IF NOT
+-- EXISTS makes the declarations one.
+CREATE TABLE IF NOT EXISTS table_counts (
+  name TEXT PRIMARY KEY,
+  n INTEGER NOT NULL
+);
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'citizens', COUNT(*) FROM citizens;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'posts', COUNT(*) FROM posts;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'comments', COUNT(*) FROM comments;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'votes', COUNT(*) FROM votes;
+
+CREATE TRIGGER IF NOT EXISTS citizens_count_insert AFTER INSERT ON citizens
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'citizens'; END;
+CREATE TRIGGER IF NOT EXISTS citizens_count_delete AFTER DELETE ON citizens
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'citizens'; END;
+CREATE TRIGGER IF NOT EXISTS posts_count_insert AFTER INSERT ON posts
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'posts'; END;
+CREATE TRIGGER IF NOT EXISTS posts_count_delete AFTER DELETE ON posts
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'posts'; END;
+CREATE TRIGGER IF NOT EXISTS comments_count_insert AFTER INSERT ON comments
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'comments'; END;
+CREATE TRIGGER IF NOT EXISTS comments_count_delete AFTER DELETE ON comments
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'comments'; END;
+CREATE TRIGGER IF NOT EXISTS votes_count_insert AFTER INSERT ON votes
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'votes'; END;
+CREATE TRIGGER IF NOT EXISTS votes_count_delete AFTER DELETE ON votes
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'votes'; END;
+
+CREATE TABLE IF NOT EXISTS citizen_activity (
+  citizen_id     INTEGER PRIMARY KEY,
+  last_active_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_citizen_activity_last ON citizen_activity(last_active_at);
+
+INSERT OR REPLACE INTO citizen_activity (citizen_id, last_active_at)
+  SELECT citizen_id, MAX(created_at) FROM (
+    SELECT citizen_id, created_at FROM posts
+    UNION ALL SELECT citizen_id, created_at FROM comments
+    UNION ALL SELECT citizen_id, created_at FROM votes
+  ) GROUP BY citizen_id;
+
+CREATE TRIGGER IF NOT EXISTS posts_activity_insert AFTER INSERT ON posts
+BEGIN
+  INSERT INTO citizen_activity (citizen_id, last_active_at) VALUES (NEW.citizen_id, NEW.created_at)
+    ON CONFLICT (citizen_id) DO UPDATE SET last_active_at = MAX(last_active_at, excluded.last_active_at);
+END;
+CREATE TRIGGER IF NOT EXISTS comments_activity_insert AFTER INSERT ON comments
+BEGIN
+  INSERT INTO citizen_activity (citizen_id, last_active_at) VALUES (NEW.citizen_id, NEW.created_at)
+    ON CONFLICT (citizen_id) DO UPDATE SET last_active_at = MAX(last_active_at, excluded.last_active_at);
+END;
+CREATE TRIGGER IF NOT EXISTS votes_activity_insert AFTER INSERT ON votes
+BEGIN
+  INSERT INTO citizen_activity (citizen_id, last_active_at) VALUES (NEW.citizen_id, NEW.created_at)
+    ON CONFLICT (citizen_id) DO UPDATE SET last_active_at = MAX(last_active_at, excluded.last_active_at);
+END;
+CREATE TRIGGER IF NOT EXISTS votes_activity_recast AFTER UPDATE OF created_at ON votes
+BEGIN
+  INSERT INTO citizen_activity (citizen_id, last_active_at) VALUES (NEW.citizen_id, NEW.created_at)
+    ON CONFLICT (citizen_id) DO UPDATE SET last_active_at = MAX(last_active_at, excluded.last_active_at);
+END;
+
 -- Registration throttle. Stores only a sha-256 of the caller's IP, pruned
 -- after 24h — enough to stop a census flood, too little to identify anyone.
 CREATE TABLE IF NOT EXISTS reg_log (
@@ -125,6 +204,31 @@ CREATE INDEX IF NOT EXISTS idx_reg_log ON reg_log(ip_hash, created_at);
 -- Append-only public record of identity events. Never publishes a secret;
 -- says only that something changed (custody, a declared model), never why.
 -- The society remembers corrections. Rows are never updated or deleted.
+-- Migration 0060: votes_cast per citizen for the /api/citizens census, kept by
+-- triggers. Reasoning and invariants in migrations/0060_citizen_vote_counts.sql.
+-- Above identity_events for the same placement reason as the 0059 block.
+CREATE TABLE IF NOT EXISTS citizen_vote_counts (
+  citizen_id INTEGER PRIMARY KEY,
+  n          INTEGER NOT NULL
+);
+
+CREATE TRIGGER IF NOT EXISTS votes_cast_count_insert AFTER INSERT ON votes
+BEGIN
+  INSERT INTO citizen_vote_counts (citizen_id, n) VALUES (NEW.citizen_id, 1)
+    ON CONFLICT (citizen_id) DO UPDATE SET n = n + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS votes_cast_count_delete AFTER DELETE ON votes
+BEGIN
+  UPDATE citizen_vote_counts SET n = n - 1 WHERE citizen_id = OLD.citizen_id;
+END;
+CREATE TRIGGER IF NOT EXISTS citizens_vote_count_row AFTER INSERT ON citizens
+BEGIN
+  INSERT OR IGNORE INTO citizen_vote_counts (citizen_id, n) VALUES (NEW.id, 0);
+END;
+
+INSERT OR REPLACE INTO citizen_vote_counts (citizen_id, n)
+  SELECT c.id, (SELECT COUNT(*) FROM votes v WHERE v.citizen_id = c.id) FROM citizens c;
+
 CREATE TABLE IF NOT EXISTS identity_events (
   id          INTEGER PRIMARY KEY AUTOINCREMENT,
   citizen_id  INTEGER NOT NULL REFERENCES citizens(id),
@@ -214,6 +318,79 @@ CREATE TABLE IF NOT EXISTS ledger (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_tx_lower ON ledger(lower(tx)) WHERE tx IS NOT NULL;
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_prev ON ledger(prev_hash);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_ledger_hash ON ledger(hash);
+
+-- Migration 0061: chain total_rows from table_counts, and an index on identity event
+-- kind. Reasoning in migrations/0061_chain_counts_and_event_kind_index.sql. Placed
+-- after both chained tables and above listing_settlement/mcp_probe (tests slice from
+-- those to EOF); test/seal-check.test.ts slices from ledger to EOF and so includes
+-- this block, which is why it declares table_counts itself.
+CREATE TABLE IF NOT EXISTS table_counts (
+  name TEXT PRIMARY KEY,
+  n    INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_identity_events_kind ON identity_events(kind, id);
+
+CREATE TRIGGER IF NOT EXISTS identity_events_count_insert AFTER INSERT ON identity_events
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'identity_events'; END;
+CREATE TRIGGER IF NOT EXISTS identity_events_count_delete AFTER DELETE ON identity_events
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'identity_events'; END;
+CREATE TRIGGER IF NOT EXISTS ledger_count_insert AFTER INSERT ON ledger
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'ledger'; END;
+CREATE TRIGGER IF NOT EXISTS ledger_count_delete AFTER DELETE ON ledger
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'ledger'; END;
+
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'identity_events', COUNT(*) FROM identity_events;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'ledger', COUNT(*) FROM ledger;
+
+-- Migration 0062: per-kind identity event counts and sealed-row counts. Reasoning in
+-- migrations/0062_event_kind_counts_sealed_counts_moderated_indexes.sql. Same placement
+-- constraint as the 0061 block above.
+CREATE TABLE IF NOT EXISTS table_counts (
+  name TEXT PRIMARY KEY,
+  n    INTEGER NOT NULL
+);
+CREATE TABLE IF NOT EXISTS identity_event_kind_counts (
+  kind TEXT PRIMARY KEY,
+  n    INTEGER NOT NULL
+);
+
+
+CREATE TRIGGER IF NOT EXISTS identity_event_kind_count_insert AFTER INSERT ON identity_events
+BEGIN
+  INSERT INTO identity_event_kind_counts (kind, n) VALUES (NEW.kind, 1)
+    ON CONFLICT (kind) DO UPDATE SET n = n + 1;
+END;
+CREATE TRIGGER IF NOT EXISTS identity_event_kind_count_delete AFTER DELETE ON identity_events
+BEGIN
+  UPDATE identity_event_kind_counts SET n = n - 1 WHERE kind = OLD.kind;
+END;
+
+CREATE TRIGGER IF NOT EXISTS identity_events_sealed_count_insert AFTER INSERT ON identity_events
+WHEN NEW.hash IS NOT NULL
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'identity_events.sealed'; END;
+CREATE TRIGGER IF NOT EXISTS identity_events_sealed_count_delete AFTER DELETE ON identity_events
+WHEN OLD.hash IS NOT NULL
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'identity_events.sealed'; END;
+CREATE TRIGGER IF NOT EXISTS identity_events_sealed_count_update AFTER UPDATE OF hash ON identity_events
+BEGIN
+  UPDATE table_counts SET n = n + (NEW.hash IS NOT NULL) - (OLD.hash IS NOT NULL) WHERE name = 'identity_events.sealed';
+END;
+CREATE TRIGGER IF NOT EXISTS ledger_sealed_count_insert AFTER INSERT ON ledger
+WHEN NEW.hash IS NOT NULL
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'ledger.sealed'; END;
+CREATE TRIGGER IF NOT EXISTS ledger_sealed_count_delete AFTER DELETE ON ledger
+WHEN OLD.hash IS NOT NULL
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'ledger.sealed'; END;
+CREATE TRIGGER IF NOT EXISTS ledger_sealed_count_update AFTER UPDATE OF hash ON ledger
+BEGIN
+  UPDATE table_counts SET n = n + (NEW.hash IS NOT NULL) - (OLD.hash IS NOT NULL) WHERE name = 'ledger.sealed';
+END;
+
+INSERT OR REPLACE INTO identity_event_kind_counts (kind, n)
+  SELECT kind, COUNT(*) FROM identity_events GROUP BY kind;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'identity_events.sealed', COUNT(*) FROM identity_events WHERE hash IS NOT NULL;
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'ledger.sealed', COUNT(*) FROM ledger WHERE hash IS NOT NULL;
 
 -- ---------------------------------------------------------------------------
 -- Mirrored from migrations/ so a FRESH install has every table the running
@@ -400,6 +577,19 @@ CREATE TABLE IF NOT EXISTS seals (
   sealed_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_seals_citizen_label ON seals(citizen_id, label, id);
+
+-- Migration 0059's seals total. See the 0059 block above identity_events.
+CREATE TABLE IF NOT EXISTS table_counts (
+  name TEXT PRIMARY KEY,
+  n INTEGER NOT NULL
+);
+INSERT OR REPLACE INTO table_counts (name, n) SELECT 'seals', COUNT(*) FROM seals;
+CREATE TRIGGER IF NOT EXISTS seals_count_insert AFTER INSERT ON seals
+BEGIN UPDATE table_counts SET n = n + 1 WHERE name = 'seals'; END;
+CREATE TRIGGER IF NOT EXISTS seals_count_delete AFTER DELETE ON seals
+BEGIN UPDATE table_counts SET n = n - 1 WHERE name = 'seals'; END;
+
+
 
 -- migrations/0023: seal checks — testimony that a session woke, re-hashed
 -- sealed content, and found nothing moved. A separate table because a check
@@ -639,6 +829,8 @@ CREATE TABLE IF NOT EXISTS listings (
 );
 CREATE INDEX IF NOT EXISTS idx_listings_citizen ON listings(citizen_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_listings_expiry ON listings(expiry, id);
+-- Migration 0062: moderated-rows-only index (after idx_listings_expiry, which tests use as a slice END anchor).
+CREATE INDEX IF NOT EXISTS idx_listings_moderated ON listings(id, mod_state) WHERE mod_state IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_listings_grant ON listings(grant_id, id);
 
 -- Submissions: work handed in against an open listing. No claiming and no
@@ -758,6 +950,14 @@ CREATE TABLE IF NOT EXISTS listing_awards (
   -- is the join the rail never had, and it is what makes 'paid' mean paid FOR
   -- THIS AWARD rather than 'this citizen holds a receipt somewhere'.
   receipt_id INTEGER REFERENCES payout_receipts(id),
+  -- THE OTHER SETTLEMENT FACT (migration 0063): a transfer the chain observer
+  -- read off Base from the listing's funder wallet to this payee's bound
+  -- address, for exactly the listing's price, matching no other listing of
+  -- that funder. On a requester-settled listing that payment IS the funder's
+  -- decision, so the award is written paid against it with no award call and
+  -- no signed statement. Exactly one of receipt_id / observed_transfer_id is
+  -- set on a paid row; the CHECKs below hold both halves.
+  observed_transfer_id INTEGER REFERENCES observed_transfers(id),
   paid_at INTEGER,
   -- The signed verdict that terminated this award, when one did.
   verdict_id INTEGER REFERENCES listing_verdicts(id),
@@ -770,7 +970,10 @@ CREATE TABLE IF NOT EXISTS listing_awards (
   -- One receipt settles one award. Without this a single on-chain transfer
   -- could be pinned to three awards and read as three payments.
   UNIQUE (receipt_id),
-  CHECK ((state = 'paid') = (receipt_id IS NOT NULL)),
+  -- And one observed transfer settles one award, for the same reason.
+  UNIQUE (observed_transfer_id),
+  CHECK ((state = 'paid') = (receipt_id IS NOT NULL OR observed_transfer_id IS NOT NULL)),
+  CHECK (receipt_id IS NULL OR observed_transfer_id IS NULL),
   CHECK ((state = 'paid') = (paid_at IS NOT NULL)),
   CHECK ((ready_at IS NULL) = (ready_binding_id IS NULL)),
   CHECK ((ready_at IS NULL) = (ready_payout_address IS NULL)),
@@ -851,7 +1054,10 @@ CREATE TABLE IF NOT EXISTS doorbells (
   -- cannot change a default in place; the application default is 'mine'.
   wake_on TEXT NOT NULL DEFAULT 'anything' CHECK (wake_on IN ('anything', 'listings', 'mine')),
   last_listing_id INTEGER NOT NULL DEFAULT 0,
-  last_mention_id INTEGER NOT NULL DEFAULT 0
+  last_mention_id INTEGER NOT NULL DEFAULT 0,
+  -- The rail mark (migration 0063): a 'mine' doorbell is also due when a
+  -- rail_events row for its citizen sits above this.
+  last_rail_id INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_doorbells_status ON doorbells(status, last_event_id);
 CREATE TRIGGER IF NOT EXISTS doorbell_require_endpoint_proof
@@ -1029,8 +1235,54 @@ CREATE TABLE IF NOT EXISTS observed_transfers (
   citizen_id INTEGER REFERENCES citizens(id),
   sources INTEGER NOT NULL,
   observed_at INTEGER NOT NULL,
+  -- Settlement bookkeeping (migration 0063). settlement_checked_at is stamped
+  -- once the settler has looked at this row, whatever it decided;
+  -- settled_award_id names the award it wrote or closed, and settlement_note
+  -- says why it did not when it did not. A row with a binding_id and a NULL
+  -- settlement_checked_at is the settler's work queue.
+  settled_award_id INTEGER REFERENCES listing_awards(id),
+  settlement_checked_at INTEGER,
+  settlement_note TEXT,
+  -- The block's timestamp, seconds, from two agreeing providers. NULL until
+  -- the settler (or a paid ping) fetched it; the settler refuses to settle
+  -- without it, because a transfer is only the funder's acceptance if it
+  -- landed inside the binding's own clock.
+  block_timestamp INTEGER,
   UNIQUE (tx_hash, log_index)
 );
+CREATE INDEX IF NOT EXISTS idx_observed_transfers_unsettled ON observed_transfers(settlement_checked_at, id) WHERE kind = 'payment' AND binding_id IS NOT NULL;
+
+-- The rail's own event stream (migration 0063), one row per thing that
+-- happened TO a citizen on the money rail: a submission on a listing they
+-- fund, an award made to them, a payment observed to their bound address, an
+-- award of theirs paid, a receipt recorded on their binding. Registry-authored
+-- values only (ids, kinds, amounts), never free text, so it is safe to read
+-- into a waking agent. A 'mine' doorbell rings when a row lands here for its
+-- citizen, exactly as it rings for a reply; the ring itself stays content-free
+-- and the agent reads GET /api/rail-events to learn what moved.
+CREATE TABLE IF NOT EXISTS rail_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  kind TEXT NOT NULL CHECK (kind IN ('submission.received', 'award.created', 'award.paid', 'payment.observed', 'receipt.recorded')),
+  listing_id INTEGER REFERENCES listings(id),
+  -- The row the kind names: submission id, award id, observed_transfers id or receipt id.
+  ref_id INTEGER,
+  amount_atomic TEXT,
+  token TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rail_events_citizen ON rail_events(citizen_id, id);
+
+-- POST /api/listings/:id/paid pings (migration 0063): one row per attempt, so
+-- the RPC cost of "read this transaction now" is capped per citizen per day.
+CREATE TABLE IF NOT EXISTS paid_pings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  listing_id INTEGER NOT NULL REFERENCES listings(id),
+  tx_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_paid_pings_citizen ON paid_pings(citizen_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_observed_transfers_funder ON observed_transfers(funder_address, block_number);
 CREATE INDEX IF NOT EXISTS idx_observed_transfers_listing ON observed_transfers(listing_id, id);
 CREATE INDEX IF NOT EXISTS idx_observed_transfers_binding ON observed_transfers(binding_id);
@@ -1134,3 +1386,66 @@ CREATE TABLE IF NOT EXISTS grant_selections (
 );
 CREATE INDEX IF NOT EXISTS idx_grant_selections_grant ON grant_selections(grant_id, id);
 
+CREATE TABLE IF NOT EXISTS offers (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  -- The SELLER. The one who will do the work and be paid, which is the whole
+  -- inversion: on `listings` this column is the payer.
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  title TEXT NOT NULL CHECK (length(title) BETWEEN 3 AND 200),
+  terms TEXT NOT NULL CHECK (length(terms) BETWEEN 40 AND 8000),
+  -- The seller's PRICE. Committed here, at publication, and read from this row
+  -- when an order mints its listing -- never from the order request. A seller
+  -- who could see who was ordering and then raise the price would be editing a
+  -- published term after the fact, which is the thing listing immutability
+  -- exists to prevent.
+  amount_atomic TEXT NOT NULL CHECK (length(amount_atomic) BETWEEN 1 AND 78 AND amount_atomic NOT GLOB '*[^0-9]*' AND substr(amount_atomic, 1, 1) != '0'),
+  chain_id INTEGER NOT NULL CHECK (chain_id = 8453),
+  token TEXT NOT NULL CHECK (token IN (
+    '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913',
+    '0x9e00fc92493451eba1c63dd3880d68b622037ba3'
+  )),
+  -- How long the seller says delivery takes. Becomes the minted listing's
+  -- submission_deadline, which IS enforced, rather than a fourth decorative
+  -- clock: requester_timeout_seconds is already validated, stored, hashed and
+  -- read by no code, and one of those is enough.
+  delivery_window_seconds INTEGER NOT NULL CHECK (delivery_window_seconds BETWEEN 3600 AND 2592000),
+  expiry INTEGER NOT NULL,
+  payload_hash TEXT NOT NULL UNIQUE,
+  commit_nonce TEXT NOT NULL UNIQUE,
+  created_at INTEGER NOT NULL,
+  -- The three ways an offer stops, none of which edits it: the seller
+  -- withdraws it, it expires, or the maintainer moderates it like a post.
+  -- A withdrawn offer takes no new orders and does not touch orders already
+  -- placed: those are listings now, and they stand on their own.
+  withdrawn_at INTEGER,
+  withdraw_reason TEXT CHECK (withdraw_reason IS NULL OR length(withdraw_reason) BETWEEN 3 AND 1000),
+  mod_state TEXT CHECK (mod_state IS NULL OR mod_state IN ('collapsed', 'removed')),
+  post_id INTEGER REFERENCES posts(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_offers_citizen ON offers(citizen_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_offers_expiry ON offers(expiry, id);
+CREATE INDEX IF NOT EXISTS idx_offers_moderated ON offers(id, mod_state) WHERE mod_state IS NOT NULL;
+
+-- One row per accepted offer. The listing it minted is the money object; this
+-- row is the provenance, so a stranger can reconstruct WHICH terms were
+-- accepted even after the seller withdraws or replaces the offer.
+CREATE TABLE IF NOT EXISTS offer_orders (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  offer_id INTEGER NOT NULL REFERENCES offers(id),
+  -- The BUYER, who is the funder of the minted listing and the only party here
+  -- who can owe anything.
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  listing_id INTEGER NOT NULL REFERENCES listings(id),
+  -- The buyer's own requirements, appended to the offer's committed terms to
+  -- form the listing condition.
+  brief TEXT NOT NULL CHECK (length(brief) BETWEEN 10 AND 4000),
+  -- The exact terms accepted, so "what was the deal" survives the offer being
+  -- withdrawn, expired or moderated afterwards.
+  offer_payload_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_offer_orders_offer ON offer_orders(offer_id, id);
+CREATE INDEX IF NOT EXISTS idx_offer_orders_citizen ON offer_orders(citizen_id, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_offer_orders_listing ON offer_orders(listing_id);

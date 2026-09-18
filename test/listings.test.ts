@@ -15,6 +15,7 @@ import { payoutFunderStatement } from "../src/payouts.ts";
 import { DOCKET } from "../src/docket.ts";
 import { CITIZEN_CONTENT_EXAMPLES } from "../src/mcp.ts";
 import { SURFACE } from "../src/surface.ts";
+import * as society from '../src/society.ts';
 
 // GUARD, audit ledger class 13. Any response that publishes a
 // payload_hash_recipe is promising that a stranger can follow it against THAT
@@ -874,7 +875,7 @@ test("the guide cannot change without its version changing", async () => {
   const digest = createHash("sha256").update(JSON.stringify({ guide: rest, security: secRest })).digest("hex");
   assert.deepEqual(
     { version: GUIDE_VERSION, digest },
-    { version: "2026-09-17.1", digest: "ead66926fb58ab8712452425f04146392356f6bb8f4d16666a5452782782fb3f" },
+    { version: "2026-09-18.1", digest: "4f60f17a722ca4b8f2157028d9a27590754a915966a440d5f48d4e7a156dfdec" },
     "the served guide changed, or its version did not move with it. Bump GUIDE_VERSION and GUIDE_CHANGED_AT together, then update BOTH values here. " +
       "Shipping changed rules under an unchanged version breaks what the guide's poll field promises every agent.",
   );
@@ -1873,4 +1874,56 @@ test("a binding recorded in the wrong asset publishes the disagreement and canno
   assert.equal(docketView.state, "no_listing_asset");
   assert.equal(docketView.payable, true);
   assert.doesNotMatch(docketView.note, /DO NOT PAY/);
+});
+
+// The shape of listing 24 on 2026-09-18: one seat, requester-settled, and more
+// bound submitters than seats.
+const SEAT_KEY = generateKeyPairSync('ed25519');
+const SEAT_JWK = 'jwk';
+const SEAT_PUBLIC = (SEAT_KEY.publicKey.export({ format: SEAT_JWK }) as { x: string }).x;
+const SEAT_TITLE = 'One seat';
+const SEAT_PRICE = '1000000';
+const SEAT_ROW = 'listing-1';
+const SEAT_PROMISE = 'promise';
+const SEAT_REQUESTER = 'requester';
+const SEAT_ARTIFACT_A = 'https://example.invalid/pr/1';
+const SEAT_ARTIFACT_B = 'https://example.invalid/pr/2';
+const SEAT_READY = 'ready';
+const SEAT_BLOCKED = 'blocked';
+const SEAT_TERMS = { title: SEAT_TITLE, condition: CONDITION, amount_atomic: SEAT_PRICE, expiry: NOW + 7 * 86400, max_awards: 1, funding_mode: SEAT_PROMISE, settlement_mode: SEAT_REQUESTER };
+
+test('a listing whose award seats are all taken does not advertise a settlement the settler will decline', async () => {
+  const { env } = makeEnv(SEAT_PUBLIC);
+  type Ladder = { handle: string; next_actions: { step: number; state: string; blocked_by: string | null }[] };
+  type Served = { economics: { available_award_capacity: number }; submissions: Ladder[] };
+  await createListing(env, FUNDER as never, SEAT_TERMS);
+  const winner = await createSubmission(env, VERIFIER as never, 1, { artifact: SEAT_ARTIFACT_A }) as { id: number };
+  await createSubmission(env, PAYEE as never, 1, { artifact: SEAT_ARTIFACT_B });
+  await createPayoutBinding(env, VERIFIER as never, (await payeeBinding(SEAT_ROW, SEAT_PRICE, SEAT_KEY, VERIFIER)).body);
+  await createPayoutBinding(env, PAYEE as never, (await payeeBinding(SEAT_ROW, SEAT_PRICE, SEAT_KEY, PAYEE)).body);
+
+  // With a seat free, a bound row reads ready.
+  const before = (await getListing(env, 1)) as unknown as Served;
+  const bound = before.submissions.find((s) => s.handle === PAYEE.handle)!;
+  assert.equal(bound.next_actions.find((a) => a.step === 4)!.state, SEAT_READY);
+
+  // The funder accepts the other submission: the only seat is consumed.
+  await society.createAward(env, FUNDER as never, 1, { submission_id: winner.id });
+
+  const after = (await getListing(env, 1)) as unknown as Served;
+  assert.equal(after.economics.available_award_capacity, 0);
+  const unseated = after.submissions.find((s) => s.handle === PAYEE.handle)!;
+  // src/society.ts settleObservedPayments declines the transfer as paid, not
+  // awarded once the seat guard in its INSERT fails, and createAward refuses
+  // it as exhausted, so ready here tells a funder a payment will settle when
+  // this same response already prints the capacity that says it will not.
+  assert.equal(unseated.next_actions.find((a) => a.step === 4)!.state, SEAT_BLOCKED);
+  assert.equal(unseated.next_actions.find((a) => a.step === 5)!.state, SEAT_BLOCKED);
+  assert.match(String(unseated.next_actions.find((a) => a.step === 4)!.blocked_by), /seat/i);
+  assert.match(String(unseated.next_actions.find((a) => a.step === 5)!.blocked_by), /paid, not awarded/);
+
+  // The citizen holding the seat keeps their ladder: a payment to them closes
+  // their own award rather than opening a new one.
+  const seated = after.submissions.find((s) => s.handle === VERIFIER.handle)!;
+  assert.equal(seated.next_actions.find((a) => a.step === 4)!.state, SEAT_READY);
 });

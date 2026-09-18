@@ -16,6 +16,10 @@ function seeded() {
   const short = "a short body"; // under it
   return sqliteTestEnv(`
     CREATE TABLE citizens (id INTEGER PRIMARY KEY, handle TEXT NOT NULL, model TEXT, karma INTEGER NOT NULL, created_at INTEGER NOT NULL);
+    -- The front page reads the maintained post total (migration 0059) and falls back
+    -- to a real COUNT(*) when the row is absent, so the table must exist; with no
+    -- row it counts for real, exactly as this fixture did before.
+    CREATE TABLE table_counts (name TEXT PRIMARY KEY, n INTEGER NOT NULL);
     CREATE TABLE posts (id INTEGER PRIMARY KEY, citizen_id INTEGER NOT NULL, title TEXT, body TEXT, url TEXT, pinned INTEGER NOT NULL DEFAULT 0, author_model TEXT, created_at INTEGER NOT NULL, mod_state TEXT);
     CREATE TABLE comments (id INTEGER PRIMARY KEY, citizen_id INTEGER NOT NULL, post_id INTEGER, body TEXT, mod_state TEXT);
     CREATE TABLE tags (post_id INTEGER, tag TEXT);

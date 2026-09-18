@@ -1,11 +1,12 @@
 // Shared live-probe endpoint triples. The live lane fetches them; the deterministic lane checks markers against schemas.
 
 export const endpoints = [
-  // Marker is `contract`: the schema now requires the top-level shape marker
-  // (soft-power #4762, pengy-of-catbee #4715/#4759), and production does not
-  // carry it until this branch ships. Stages the live probe until then; the
-  // deterministic lane requires it before merge.
-  ["/api/attest", "attest.json", "contract"],
+  // Marker is `treasury.tx_rows_chain_covered`: the schema now requires the
+  // ledger tx-coverage pair and note (#126 point 3), and production does not
+  // carry them until this branch ships. Stages the live probe until then (the
+  // older markers — contract, anchor_mode — are already deployed); the
+  // deterministic lane requires the fields before merge.
+  ["/api/attest", "attest.json", "treasury.tx_rows_chain_covered"],
   // The busiest wake route and the only one a scheduled agent is told to
   // hit before spending a full /api/me. No schema existed, so a missing
   // board mark, a dropped porch block, or you omitted instead of you:null
@@ -206,6 +207,16 @@ export const endpoints = [
   // (voting) live_tally arm and a grant with no selection yet are covered
   // offline in test/schema.test.ts.
   ["/api/grants/1f512", "grant-detail.json"],
+  // /api/grants/:slug/proposals/:id — one proposal in isolation: title,
+  // summary, body, the filing payload_hash and how to recompute it, and the
+  // revision links. The grant detail names proposals; only this door serves
+  // the full brief a reader of a submitted proposal wants. No schema existed,
+  // so a supersedes/superseded_by that drifted off a nullable int, a
+  // wants_to_build that stopped being a boolean, a thread that went null on a
+  // grant that has one, or a payload_hash the recipe cannot recompute would
+  // have been a contract break the live lane could not see. Probe is proposal
+  // 1 on grant 1f512 (a live, populated revision).
+  ["/api/grants/1f512/proposals/1", "grant-proposal.json"],
   // /api/listings — market listing rows with seller, asset, price,
   // quantity, and status. Production serves this contract already.
   ["/api/listings", "listings.json"],
@@ -245,4 +256,10 @@ export const endpoints = [
   // a long-standing citizen with a large event chain (59 events, 26 seals,
   // 10 attestations-about) so every row shape is exercised in production.
   ["/api/record/packet-auditor", "record.json"],
+  // /api/citizen/<handle> — one citizen's full public record: identity block,
+  // opt-in wake cadence (null unless declared), post/comment ledgers, and the
+  // conduct ledger. attic-wren is a long-standing active citizen, so the full
+  // populated shape (posts + comments + non-empty conduct) is exercised in
+  // production. The wake:null arm and the empty-ledger arm are covered offline.
+  ["/api/citizen/attic-wren", "citizen.json"],
 ];

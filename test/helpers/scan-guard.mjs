@@ -44,9 +44,10 @@
 //
 // Usage: node test/helpers/scan-guard.mjs [--write-baseline]
 import { DatabaseSync } from "node:sqlite";
-import { existsSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { isRuntimeLikePattern } from "./d1-compat.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const CAPTURE_DIR = `${root}.sql-capture`;
@@ -62,6 +63,7 @@ const BOUNDED_TABLES = {
   table_counts: "one row per maintained counter (migration 0051)",
   nulls_buckets: "grows ~24 rows a day by construction; reads are bucket sums (migration 0056)",
   d1_migrations: "one row per migration",
+  identity_event_kind_counts: "one row per identity event kind (migration 0062); grows with the kinds the code defines, not with events",
 };
 
 const normalize = (sql) =>
@@ -106,6 +108,24 @@ function classify(db, tables, sql) {
     plan.some((d) => /USE TEMP B-TREE/.test(d));
   const canStopEarly = /\bLIMIT\b/i.test(sql) && !forcesFullRead;
   const hits = [];
+  // The maintained-total fallback (src/counts.ts maintainedTotalSql):
+  //   COALESCE((SELECT n FROM table_counts WHERE name = 'T'), (SELECT COUNT(*) FROM T))
+  // EXPLAIN lists the COUNT's scan, but SQLite's COALESCE stops at the first
+  // non-NULL argument, so it runs only on a database missing the counter row.
+  // Exempted NARROWLY: one scan of T per occurrence of that exact text, so a
+  // second, genuine scan of T in the same statement is still reported.
+  const fallbackCredit = new Map();
+  // Also credits a filtered fallback under a sub-named counter, e.g.
+  //   COALESCE((SELECT n FROM table_counts WHERE name = 'ledger.sealed'),
+  //            (SELECT COUNT(*) FROM ledger WHERE id >= ? AND hash IS NOT NULL))
+  // (migration 0062): still one read of that same table, still only on a
+  // database missing the counter row.
+  // The sub-name is restricted to counters a migration actually seeds (0062's
+  // "sealed"). A free-form suffix let an unseeded counter name, whose fallback
+  // scans on every call, pass as credited (pre-deploy auditor, 2026-09-17).
+  for (const m of sql.matchAll(/COALESCE\(\(SELECT n FROM table_counts WHERE name = '([a-z_]+)(?:\.(?:sealed))?'\), \(SELECT COUNT\(\*\) FROM \1(?: WHERE [^()]*)?\)\)/g)) {
+    fallbackCredit.set(m[1], (fallbackCredit.get(m[1]) ?? 0) + 1);
+  }
   for (const d of plan) {
     const m = /^(SCAN|SEARCH) ([A-Za-z_][A-Za-z0-9_]*)\b(.*)$/.exec(d);
     if (!m) continue;
@@ -133,6 +153,10 @@ function classify(db, tables, sql) {
     const isRange = /[<>]/.test(constraint);
     const hasEqualityPrefix = /\b\w+=\?/.test(constraint);
     const unbounded = m[1] === "SCAN" || (isRange && !hasEqualityPrefix && !canStopEarly);
+    if (unbounded && (fallbackCredit.get(table) ?? 0) > 0) {
+      fallbackCredit.set(table, fallbackCredit.get(table) - 1);
+      continue;
+    }
     if (unbounded) hits.push(`${table}: ${d}`);
   }
   return hits.length ? hits : null;
@@ -153,6 +177,111 @@ const tables = new Set(
   db.prepare("SELECT name FROM sqlite_master WHERE type = 'table'").all().map((r) => r.name.toLowerCase()),
 );
 
+// COVERAGE. The plan check above can only judge a statement a test executed, so
+// a new read with no test would pass it unseen: the largest gap in this guard,
+// measured 2026-09-17 at 33 of 335 SELECT literals in src/ that the suite never
+// runs. So every SELECT literal in src/ must match some statement the suite
+// actually prepared. Literals are read from the source with comment lines
+// removed; `${...}` interpolations become wildcards, so a query assembled from a
+// fixed skeleton and interpolated fragments still matches its executed form.
+// The ones uncovered when this landed are listed under `uncovered_reads` in the
+// baseline, with the same ratchet: a NEW uncovered read fails, and a listed one
+// that is now executed must be deleted.
+//
+// What it cannot see, stated plainly: a read assembled entirely at runtime with
+// no SELECT literal in the source, and a literal whose wildcards happen to match
+// an unrelated statement (a false "covered", never a false failure).
+const walkTs = (d) =>
+  readdirSync(d).flatMap((f) => {
+    const p = `${d}/${f}`;
+    return statSync(p).isDirectory() ? walkTs(p) : p.endsWith(".ts") ? [p] : [];
+  });
+const capturedFlat = statements.map((sql) => sql.replace(/\s+/g, " ").trim());
+// String literals, scanned rather than regex-matched, because SQL here is often a
+// template whose `${...}` holds a ternary with its own quotes or a nested
+// template, which a regex cuts in half. Returns each literal as its static
+// parts, with every interpolation reduced to a single "\u0000" marker.
+function sqlLiterals(code) {
+  const out = [];
+  let i = 0;
+  const skipInterpolation = () => {
+    // i is just past "${"; walk to the matching "}", skipping nested strings.
+    let depth = 1;
+    while (i < code.length && depth > 0) {
+      const ch = code[i];
+      if (ch === "`") readTemplate();
+      else if (ch === '"' || ch === "'") readQuoted(ch);
+      else {
+        if (ch === "{") depth++;
+        else if (ch === "}") depth--;
+        i++;
+      }
+    }
+  };
+  const readQuoted = (q) => {
+    let text = "";
+    i++;
+    while (i < code.length && code[i] !== q && code[i] !== "\n") {
+      if (code[i] === "\\") { text += code[i + 1] ?? ""; i += 2; continue; }
+      text += code[i++];
+    }
+    i++;
+    return text;
+  };
+  function readTemplate() {
+    let text = "";
+    i++;
+    while (i < code.length && code[i] !== "`") {
+      if (code[i] === "\\") { text += code[i + 1] ?? ""; i += 2; continue; }
+      if (code[i] === "$" && code[i + 1] === "{") { i += 2; skipInterpolation(); text += "\u0000"; continue; }
+      text += code[i++];
+    }
+    i++;
+    return text;
+  }
+  while (i < code.length) {
+    const ch = code[i];
+    if (ch === "/" && code[i + 1] === "/") { while (i < code.length && code[i] !== "\n") i++; continue; }
+    if (ch === "/" && code[i + 1] === "*") { const end = code.indexOf("*/", i + 2); i = end < 0 ? code.length : end + 2; continue; }
+    if (ch === "`") { out.push(readTemplate()); continue; }
+    if (ch === '"' || ch === "'") { out.push(readQuoted(ch)); continue; }
+    i++;
+  }
+  return out;
+}
+const readLiterals = [];
+for (const file of walkTs(`${root}src`)) {
+  for (const raw of sqlLiterals(readFileSync(file, "utf8"))) {
+    if (!/^\s*(SELECT|WITH)\b/i.test(raw) || !/\bFROM\b/i.test(raw)) continue;
+    readLiterals.push({ file: file.slice(root.length), sql: raw.replace(/\s+/g, " ").trim() });
+  }
+}
+
+const d1Hits = readLiterals.filter((l) => isRuntimeLikePattern(l.sql));
+// ANCHORED, so a literal is covered only by a statement that IS it, not by one
+// that merely contains its text (the pre-deploy auditor showed `SELECT id FROM
+// comments`, a full scan no test ran, passing as covered inside a longer
+// executed statement). It must start where a statement or a parenthesised
+// subquery starts, or after a closing parenthesis (INSERT ... (cols) SELECT ...). When it ends on a word character (a table or column name,
+// where a longer statement would simply keep going) it must also end where the
+// statement or subquery ends; when it ends on a placeholder, quote or bracket, it
+// is a fragment the source continues by concatenation, and what follows is free.
+const literalPattern = (sql) => {
+  const body = sql
+    .split("\u0000")
+    .map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/ /g, "\\s*"))
+    .join("[\\s\\S]*?");
+  const endsOnWord = /\w$/.test(sql.replace(/\u0000$/, ""));
+  return new RegExp(`(?:^|\\(|\\)\\s)\\s*${body}${endsOnWord ? "\\s*(?:$|\\)|;)" : ""}`);
+};
+const uncovered = new Map();
+for (const lit of readLiterals) {
+  const re = literalPattern(lit.sql);
+  if (!capturedFlat.some((c) => re.test(c))) {
+    uncovered.set(createHash("sha256").update(`${lit.file}\n${normalize(lit.sql.replaceAll("\u0000", "${}"))}`).digest("hex").slice(0, 16), lit);
+  }
+}
+
 const found = new Map();
 let reads = 0;
 for (const sql of statements) {
@@ -167,12 +296,20 @@ if (process.argv.includes("--write-baseline")) {
   for (const [k, v] of [...found].sort((a, b) => a[1].sql.localeCompare(b[1].sql))) {
     entries[k] = previous.entries[k] ?? { status: "debt", sql: v.sql.slice(0, 300), plan: v.plan };
   }
-  writeFileSync(BASELINE, JSON.stringify({ note: previous.note ?? "", entries }, null, 2) + "\n");
-  console.log(`SCAN-GUARD: wrote ${Object.keys(entries).length} entries to test/scan-baseline.json`);
+  const uncovered_reads = {};
+  for (const [k, v] of [...uncovered].sort((a, b) => (a[1].file + a[1].sql).localeCompare(b[1].file + b[1].sql))) {
+    uncovered_reads[k] = { file: v.file, sql: v.sql.replaceAll("\u0000", "${…}").slice(0, 300) };
+  }
+  writeFileSync(BASELINE, JSON.stringify({ note: previous.note ?? "", entries, uncovered_reads }, null, 2) + "\n");
+  console.log(
+    `SCAN-GUARD: wrote ${Object.keys(entries).length} unbounded and ${Object.keys(uncovered_reads).length} uncovered entries to test/scan-baseline.json`,
+  );
   process.exit(0);
 }
 
-const baseline = JSON.parse(readFileSync(BASELINE, "utf8")).entries;
+const baselineFile = JSON.parse(readFileSync(BASELINE, "utf8"));
+const baseline = baselineFile.entries;
+const uncoveredBaseline = baselineFile.uncovered_reads ?? {};
 const newScans = [...found].filter(([k]) => !(k in baseline));
 const seenKeys = new Set(statements.map(keyOf));
 const nowBounded = Object.entries(baseline).filter(([k]) => seenKeys.has(k) && !found.has(k));
@@ -184,6 +321,12 @@ console.log(
     `(${debt} debt, ${Object.keys(baseline).length - debt} accepted in the baseline); ${notRun.length} baseline entries did not run.`,
 );
 let failed = false;
+if (d1Hits.length) {
+  failed = true;
+  console.error(`\nD1-COMPAT: ${d1Hits.length} LIKE/GLOB pattern(s) built from a value — they outgrow D1's SQLITE_MAX_LIKE_PATTERN_LENGTH at execution time in production while passing every offline test (node:sqlite has no such limit and none can be set):\n`);
+  for (const h of d1Hits) console.error(`  ${h.file}: ${h.sql.replaceAll("\u0000", "${…}").slice(0, 200)}\n`);
+  console.error("  Use a `?` bound by the client, or instr(col, ?) > 0 (no pattern at all). A bound `?` and a fully static '...' literal are fine.\n");
+}
 if (newScans.length) {
   failed = true;
   console.error(`\nSCAN-GUARD: ${newScans.length} NEW read(s) cost rows in proportion to a whole table:\n`);
@@ -197,5 +340,22 @@ if (nowBounded.length) {
   failed = true;
   console.error(`\nSCAN-GUARD: ${nowBounded.length} baseline entr(ies) are now bounded. Delete them so the worklist stays true:`);
   for (const [k, v] of nowBounded) console.error(`  [${k}] ${v.sql.slice(0, 160)}`);
+}
+const newUncovered = [...uncovered].filter(([k]) => !(k in uncoveredBaseline));
+const nowCovered = Object.entries(uncoveredBaseline).filter(([k]) => !uncovered.has(k));
+console.log(
+  `SCAN-GUARD: ${readLiterals.length} SELECT literals in src/; ${readLiterals.length - uncovered.size} executed by the suite, ` +
+    `${uncovered.size} never executed (${Object.keys(uncoveredBaseline).length} listed in the baseline).`,
+);
+if (newUncovered.length) {
+  failed = true;
+  console.error(`\nSCAN-GUARD: ${newUncovered.length} NEW read(s) in src/ that no test executes, so their cost cannot be checked:\n`);
+  for (const [k, v] of newUncovered) console.error(`  [${k}] ${v.file}: ${v.sql.replaceAll("\u0000", "${…}").slice(0, 200)}`);
+  console.error("\n  Add a test that exercises the code path, so this guard can EXPLAIN the statement.");
+}
+if (nowCovered.length) {
+  failed = true;
+  console.error(`\nSCAN-GUARD: ${nowCovered.length} listed uncovered read(s) are now executed. Delete them from uncovered_reads:`);
+  for (const [k, v] of nowCovered) console.error(`  [${k}] ${v.file}: ${v.sql.slice(0, 160)}`);
 }
 process.exit(failed ? 1 : 0);

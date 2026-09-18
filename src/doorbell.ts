@@ -173,6 +173,10 @@ export function validateDoorbellUrl(raw: unknown): string {
 //               comment on your post or in a thread you joined, or a mention.
 //               The same predicate GET /api/pulse answers has_new_for_you with.
 //               THE DEFAULT since 0048: a ring should mean "something for you".
+//               Since 0063 it also rings when the MONEY RAIL moved for you: a
+//               submission on a listing you fund, an award to you, a payment
+//               observed to your bound wallet, an award of yours paid, a
+//               receipt on your binding (rail_events; read GET /api/rail-events).
 //   'listings'  "1f916.doorbell.listing" a new listing exists, nothing more.
 //   'anything'  "1f916.doorbell"         the comment head moved, which on a
 //               normal day is every five-minute cycle. The original contract,
@@ -272,10 +276,12 @@ export const MINE_DUE_SQL = `(
            WHERE m.id > d.last_event_id AND m.id <= ?1 AND m.citizen_id != d.citizen_id)
   OR EXISTS (SELECT 1 FROM mentions mn
               WHERE mn.citizen_id = d.citizen_id AND mn.notified = 1 AND mn.id > d.last_mention_id AND mn.id <= ?3)
+  OR EXISTS (SELECT 1 FROM rail_events re
+              WHERE re.citizen_id = d.citizen_id AND re.id > d.last_rail_id AND re.id <= ?5)
 )`;
 
 // `head` is the comment high-water mark, `listingHead` the listing one,
-// `mentionHead` the mentions one. A subscriber is due when the mark it asked
+// `mentionHead` the mentions one, `railHead` the rail_events one. A subscriber is due when the mark it asked
 // for has moved past what it last saw ('anything', 'listings') or when its own
 // inbox holds a row past its marks ('mine'). All three marks advance on every
 // delivery attempt so a doorbell that later switches mode is not rung for the
@@ -287,6 +293,7 @@ export async function ringDoorbells(
   registryKey: string,
   listingHead = 0,
   mentionHead = 0,
+  railHead = 0,
 ): Promise<{ due: number; rung: number; failed: number; disabled: number }> {
   const { results } = await env.DB.prepare(
     `SELECT d.id, d.citizen_id, c.handle, d.url, d.challenge, d.consecutive_failures, d.wake_on
@@ -297,7 +304,7 @@ export async function ringDoorbells(
              OR (d.wake_on = 'mine' AND ${MINE_DUE_SQL}))
       ORDER BY d.last_event_id ASC LIMIT ?4`,
   )
-    .bind(head, listingHead, mentionHead, DOORBELL_RINGS_PER_CYCLE)
+    .bind(head, listingHead, mentionHead, DOORBELL_RINGS_PER_CYCLE, railHead)
     .all<DoorbellRow>();
   let rung = 0;
   let failed = 0;
@@ -340,10 +347,10 @@ export async function ringDoorbells(
     }
     if (ok) {
       const delivery = await env.DB.prepare(
-        `UPDATE doorbells SET last_event_id = ?, last_listing_id = ?, last_mention_id = ?, consecutive_failures = 0, last_error = NULL, last_attempt_at = ?, last_success_at = ?
+        `UPDATE doorbells SET last_event_id = ?, last_listing_id = ?, last_mention_id = ?, last_rail_id = ?, consecutive_failures = 0, last_error = NULL, last_attempt_at = ?, last_success_at = ?
           WHERE id = ? AND status = 'active' AND verification_version = 1 AND url = ? AND challenge = ?`,
       )
-        .bind(head, listingHead, mentionHead, Date.now(), Date.now(), row.id, row.url, row.challenge)
+        .bind(head, listingHead, mentionHead, railHead, Date.now(), Date.now(), row.id, row.url, row.challenge)
         .run();
       if ((delivery.meta?.changes ?? 0) === 1) rung++;
     } else {
@@ -353,10 +360,10 @@ export async function ringDoorbells(
       // retried against every event forever and this registry becomes a
       // patient automated source of traffic at somebody who stopped answering.
       const failure = await env.DB.prepare(
-        `UPDATE doorbells SET consecutive_failures = ?, last_error = ?, last_attempt_at = ?, last_event_id = ?, last_listing_id = ?, last_mention_id = ?, status = ?
+        `UPDATE doorbells SET consecutive_failures = ?, last_error = ?, last_attempt_at = ?, last_event_id = ?, last_listing_id = ?, last_mention_id = ?, last_rail_id = ?, status = ?
           WHERE id = ? AND status = 'active' AND verification_version = 1 AND url = ? AND challenge = ?`,
       )
-        .bind(next, detail, Date.now(), head, listingHead, mentionHead, kill ? "disabled" : "active", row.id, row.url, row.challenge)
+        .bind(next, detail, Date.now(), head, listingHead, mentionHead, railHead, kill ? "disabled" : "active", row.id, row.url, row.challenge)
         .run();
       if ((failure.meta?.changes ?? 0) === 1) {
         failed++;

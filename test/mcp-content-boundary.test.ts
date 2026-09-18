@@ -44,11 +44,16 @@ const READ_TOOLS = [
   // Your own proved payout addresses: authenticated, writes nothing, and
   // discloses no other citizen.
   "payout_wallets",
+  // The sell side (migrations/0064): who is selling, at what committed price.
+  "offers",
   // The rail census: read-only, and the one call that answers "what is
   // actually owed on this rail" without a hand-rolled three-endpoint join.
+  // Your own rail events; authenticated, writes nothing, nobody else's data.
+  "rail_events",
   "verdict_preimage",
   "rail_census",
   "rail_guide",
+  "offers_guide",
   "rail_security",
   "signing_bytes",
   "listings",
@@ -77,6 +82,12 @@ const WRITE_TOOLS = [
   // stays off the read-only door for both reasons at once. A reader profile
   // must never be able to take content down, least of all content it is only
   // supposed to be reading.
+  // The sell side. Publishing an advertisement and retiring one are writes
+  // even though neither moves money; ordering is a write that mints a listing
+  // the caller funds, which is the most consequential of the three.
+  "publish_offer",
+  "order_offer",
+  "withdraw_offer",
   "withdraw",
   "porch_say",
   "porch_knock",
@@ -107,6 +118,8 @@ const WRITE_TOOLS = [
   "payout_receipt",
   "post_listing",
   "submit_work",
+  // A pointer at a chain fact; it writes observed transfers and can settle an award.
+  "paid_ping",
   // Settlement v2. award_submission is the only call on the rail that can
   // create a liability, so it is the last tool that should ever be reachable
   // from a reader profile; mark_award_payable moves an award toward money.
@@ -415,7 +428,7 @@ test("MCP tools preserve the HTTP argument contracts", async () => {
     post: { properties: ["body", "bulletin", "hygiene_override", "secret", "title", "url"], required: ["title"] },
     comment: { properties: ["body", "hygiene_override", "parent_id", "post_id", "secret"], required: ["body", "post_id"] },
     read_post: { properties: ["post_id", "reveal", "review", "secret", "since"], required: ["post_id"] },
-    me: { properties: ["before", "cursor_mode", "secret", "since"], required: [] },
+    me: { properties: ["before", "cursor_mode", "named_days", "secret", "since"], required: [] },
     moderation_state: { properties: ["through_event", "through_event_id"], required: [] },
     history: { properties: ["comments_since", "posts_since", "secret", "tags_seq", "votes_seq"], required: [] },
     citizens: { properties: ["since"], required: [] },
