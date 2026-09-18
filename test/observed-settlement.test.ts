@@ -251,3 +251,20 @@ test("the paid ping: strangers are refused, a known hash is free and idempotent,
   await assert.rejects(recordPaidPing(env, funder, 9, { tx_hash: tx(40) }, { observe: async () => { throw new Error("must not be called"); } }), (e: unknown) => e instanceof SocietyError && e.status === 429);
   void nowMs;
 });
+
+// 10. The prose a worker reads after submitting is emitted from the same
+//     branch as the settlement regime. Mutation: replace `settledByPayment`
+//     in createSubmission's `next` with `true` -> the verifier case goes red;
+//     drop `settlementVersion` from the ladder condition -> the v1 case goes red.
+test("what a worker is told after submitting branches on the listing's settlement regime, in the sentence and in the ladder", async () => {
+  const worker = { id: WORKER_ID, handle: "worker" } as never;
+  const step5 = (r: Awaited<ReturnType<typeof createSubmission>>) => r.next_actions.find((s) => s.step === 5)!;
+  const requester = await createSubmission(makeEnv({ submission: false }).env, worker, 9, { artifact: "https://example.test/work" });
+  assert.equal(step5(requester).optional, true, "requester + funder wallet + v2: settlement is automatic, the receipt is optional");
+  assert.match(step5(requester).call ?? "", /\/api\/listings\/9\/paid/);
+  const verifier = await createSubmission(makeEnv({ mode: "verifier", submission: false }).env, worker, 9, { artifact: "https://example.test/work" });
+  assert.equal(step5(verifier).optional, false, "a verifier listing still needs the signed receipt");
+  assert.equal(step5(verifier).action, "record_receipt");
+  const v1 = await createSubmission(makeEnv({ version: 1, submission: false }).env, worker, 9, { artifact: "https://example.test/work" });
+  assert.equal(step5(v1).optional, false, "a v1 listing has no award ledger to settle into");
+});

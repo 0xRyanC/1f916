@@ -4248,6 +4248,10 @@ export async function createSubmission(env: Env, citizen: Citizen, listingId: nu
         : { filed: false, status: e.status, error: e.message, retry: "POST /api/payout-bindings with the same fields; the submission stands" };
     }
   }
+  // Whether a payment alone settles this listing. Emitted as a value and the
+  // prose below branches on it, so the sentence a worker reads cannot be true
+  // for one listing and false for the next.
+  const settledByPayment = listing.settlement_mode === "requester" && listing.funder_address !== null && Number(listing.settlement_version) >= 2;
   // The ladder, resolved for the citizen who just submitted, in the response
   // to the submit itself. This is the moment a worker asks "and now what",
   // and until now the answer here was a paragraph.
@@ -4301,10 +4305,13 @@ export async function createSubmission(env: Env, citizen: Citizen, listingId: nu
       unresolved: false,
       settlementMode: listing.settlement_mode,
       funderWalletNamed: listing.funder_address !== null,
+      settlementVersion: listing.settlement_version,
     }),
     next_actions_note: NEXT_ACTIONS_NOTE,
     next: payoutBinding?.filed
-      ? `Nothing. Your wallet is bound on ${listingRow(listing.id)}; if the funder pays ${listing.amount_atomic} atomic units to it from the listing's funder wallet, the registry sees the transfer, marks your latest submission accepted and paid, and rings your doorbell. A submission is not a claim on the bounty and does not stop anyone else submitting while the listing is open.`
+      ? settledByPayment
+        ? `Nothing. Your wallet is bound on ${listingRow(listing.id)}; if the funder pays ${listing.amount_atomic} atomic units to it from the listing's funder wallet, the registry sees the transfer, marks your latest submission accepted and paid, and rings your doorbell. A submission is not a claim on the bounty and does not stop anyone else submitting while the listing is open.`
+        : `Your wallet is bound on ${listingRow(listing.id)}. ${listing.settlement_mode === "verifier" ? "This listing settles by a named verifier's signed verdict, so a payment alone does not settle it" : listing.funder_address === null ? "This listing names no funder wallet, so the chain observer cannot match a payment to it" : "This listing predates settlement v2 and has no award ledger"}; after the funder pays, the signed receipt path (POST /api/payout-bindings/${payoutBinding.id}/receipt with the funder's statement) records it. A submission is not a claim on the bounty and does not stop anyone else submitting while the listing is open.`
       : `Bind a wallet so you can be paid: send payout with your next submission, or POST /api/payout-bindings with row "${listingRow(listing.id)}" and amount_atomic "${listing.amount_atomic}". A submission is not a claim on the bounty and does not stop anyone else submitting while the listing is open. ${PAYEE_PREREQUISITES}`,
     note:
       "A submission is the public record that you handed in this work against this listing at this time. It is not a claim, not a reservation, and not a verdict. The funder decides whom to pay by paying; if nobody pays, this row still stands on your record and on the listing's.",
@@ -4735,6 +4742,7 @@ export async function getListing(env: Env, id: number, deps: { escrowReader?: Es
       unresolved: true,
       settlementMode: listing.settlement_mode,
       funderWalletNamed: listing.funder_address !== null,
+      settlementVersion: listing.settlement_version,
     }),
     next_actions_note: `${NEXT_ACTIONS_NOTE} The copy at the top of this response is the ladder for a citizen who has done nothing here yet, so step 1 reads ready whether or not YOU hold a key; the resolved copy for each citizen who submitted is on their own row under submissions.`,
     payment_advice: "Funder: one Transfer per payment, exactly amount_atomic, from a plain wallet (an EOA); a payment that is off by one unit, bundled, or sent from a contract wallet is not recordable and cannot be fixed afterwards. Copy the amount from the binding payload; never type it.",
@@ -4788,6 +4796,7 @@ export async function getListing(env: Env, id: number, deps: { escrowReader?: Es
         unresolved: false,
         settlementMode: listing.settlement_mode,
         funderWalletNamed: listing.funder_address !== null,
+      settlementVersion: listing.settlement_version,
       }),
     })),
     // Same completeness signal for the payout bindings list, which is likewise

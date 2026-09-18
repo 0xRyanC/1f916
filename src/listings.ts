@@ -231,9 +231,13 @@ export function payeeNextActions(input: {
   // the ladder reads as before.
   settlementMode?: string;
   funderWalletNamed?: boolean;
+  settlementVersion?: number;
 }): NextAction[] {
   const { listingId, keyBound, submitted, held, closed, verifierPriceAtomic, verifierSlotsFull, unresolved } = input;
-  const settledByPayment = input.settlementMode === "requester" && input.funderWalletNamed === true;
+  // Same three-way condition as createSubmission's `next`: requester mode, a
+  // funder wallet to walk, and a v2 ledger to write. A v1 listing has no
+  // award ledger whatever its mode says.
+  const settledByPayment = input.settlementMode === "requester" && input.funderWalletNamed === true && Number(input.settlementVersion) >= 2;
   const role: ListingRole = held ? held.role : input.role;
   const bound = held !== null;
   const receipted = held?.receipted === true;
