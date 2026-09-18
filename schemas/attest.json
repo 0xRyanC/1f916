@@ -195,7 +195,10 @@
         "anchor_resolved_id",
         "anchor_resolved_as_requested",
         "query_dependence",
-        "legacy_manifest"
+        "legacy_manifest",
+        "tx_rows_total",
+        "tx_rows_chain_covered",
+        "tx_coverage_note"
       ],
       "properties": {
         "ok": {
@@ -291,6 +294,20 @@
               "type": "string"
             }
           }
+        },
+        "tx_rows_total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Ledger rows carrying a tx (M). Ledger chain only; absolute, never windowed."
+        },
+        "tx_rows_chain_covered": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Of those, rows that are sealed AND name the tx in their description (N) — the rows the tx-against-description cross-check actually works on. Ledger chain only; absolute, never windowed."
+        },
+        "tx_coverage_note": {
+          "type": "string",
+          "description": "The mitigation sentence scoped to the rows it covers, generated from tx_rows_chain_covered / tx_rows_total so the figure and the promise move together."
         }
       }
     },
