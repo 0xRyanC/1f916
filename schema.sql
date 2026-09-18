@@ -1243,6 +1243,11 @@ CREATE TABLE IF NOT EXISTS observed_transfers (
   settled_award_id INTEGER REFERENCES listing_awards(id),
   settlement_checked_at INTEGER,
   settlement_note TEXT,
+  -- The block's timestamp, seconds, from two agreeing providers. NULL until
+  -- the settler (or a paid ping) fetched it; the settler refuses to settle
+  -- without it, because a transfer is only the funder's acceptance if it
+  -- landed inside the binding's own clock.
+  block_timestamp INTEGER,
   UNIQUE (tx_hash, log_index)
 );
 CREATE INDEX IF NOT EXISTS idx_observed_transfers_unsettled ON observed_transfers(settlement_checked_at, id) WHERE kind = 'payment' AND binding_id IS NOT NULL;

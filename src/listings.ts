@@ -232,12 +232,17 @@ export function payeeNextActions(input: {
   settlementMode?: string;
   funderWalletNamed?: boolean;
   settlementVersion?: number;
+  // How many OTHER listings of the same funder carry this citizen's address
+  // at this exact price. Above zero the observer cannot match a payment to
+  // one listing and step 5 is not automatic. Unknown reads as zero, and the
+  // general condition is stated in the step's own text.
+  sameAddressElsewhere?: number;
 }): NextAction[] {
   const { listingId, keyBound, submitted, held, closed, verifierPriceAtomic, verifierSlotsFull, unresolved } = input;
   // Same three-way condition as createSubmission's `next`: requester mode, a
   // funder wallet to walk, and a v2 ledger to write. A v1 listing has no
   // award ledger whatever its mode says.
-  const settledByPayment = input.settlementMode === "requester" && input.funderWalletNamed === true && Number(input.settlementVersion) >= 2;
+  const settledByPayment = input.settlementMode === "requester" && input.funderWalletNamed === true && Number(input.settlementVersion) >= 2 && !(Number(input.sameAddressElsewhere) > 0);
   const role: ListingRole = held ? held.role : input.role;
   const bound = held !== null;
   const receipted = held?.receipted === true;
@@ -319,7 +324,7 @@ export function payeeNextActions(input: {
     actor: settledByPayment ? "either" : "payee",
     action: settledByPayment ? "settle" : "record_receipt",
     call: settledByPayment
-      ? `automatic: the chain observer settles the payment within its cycle; to settle it now, either party POSTs /api/listings/${listingId}/paid with {tx_hash}, no signature. The signed receipt (${held === null ? "POST /api/payout-bindings/:id/receipt" : `POST /api/payout-bindings/${held.id}/receipt`}) still works and is the path when the observer declines`
+      ? `automatic, provided the bound address at this price matches no other listing of the same funder: the chain observer settles the payment on its next cycle; to settle it now, either party POSTs /api/listings/${listingId}/paid with {tx_hash}, no signature. The signed receipt (${held === null ? "POST /api/payout-bindings/:id/receipt" : `POST /api/payout-bindings/${held.id}/receipt`}) still works and is the path when the observer declines`
       : held === null ? "POST /api/payout-bindings/:id/receipt" : `POST /api/payout-bindings/${held.id}/receipt`,
     state: receipted ? "done" : settlementBlocked ? "blocked" : "ready",
     optional: settledByPayment,

@@ -688,10 +688,6 @@
       "file": "src/society.ts",
       "sql": "SELECT id FROM ledger WHERE id = ?"
     },
-    "4948bfa2fda2db4f": {
-      "file": "src/society.ts",
-      "sql": "SELECT id FROM payout_receipts WHERE tx_hash = ? AND transfer_log_index = ?"
-    },
     "bbc0a3b6f4333eb2": {
       "file": "src/society.ts",
       "sql": "SELECT id, citizen_id, public_key, epoch FROM witnesses WHERE url = ?"

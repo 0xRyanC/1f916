@@ -34,6 +34,9 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createSubmission, railEventsFor, railHead, recordPaidPing, settleObservedPayments, SocietyError, type Env } from "../src/society.ts";
 import { ringDoorbells } from "../src/doorbell.ts";
+import { payoutPreimage } from "../src/payouts.ts";
+import { createHash, generateKeyPairSync, sign as edSign } from "node:crypto";
+import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
 
 const SCHEMA = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
@@ -64,11 +67,14 @@ function makeEnv(opts: { mode?: "requester" | "verifier"; version?: number; maxA
   return { env, db, nowMs };
 }
 
-function observe(db: ReturnType<typeof makeEnv>["db"], n: number, amount = "500000", to = PAYEE, bindingId: number | null = 25, listingId: number | null = 9, citizenId: number | null = WORKER_ID) {
+// A transfer inside the binding's clock unless `at` says otherwise; `at: null`
+// leaves the timestamp for the settler to fetch.
+function observe(db: ReturnType<typeof makeEnv>["db"], n: number, amount = "500000", to = PAYEE, bindingId: number | null = 25, listingId: number | null = 9, citizenId: number | null = WORKER_ID, at: number | null | undefined = undefined) {
+  const ts = at === undefined ? Math.floor(Date.now() / 1000) - 60 : at;
   db.prepare(
-    `INSERT INTO observed_transfers (funder_address, to_address, token, amount_atomic, tx_hash, log_index, block_number, kind, binding_id, listing_id, citizen_id, sources, observed_at)
-     VALUES (?, ?, ?, ?, ?, 0, 50979500, 'payment', ?, ?, ?, 2, ?)`,
-  ).run(FUNDER, to, USDC, amount, tx(n), bindingId, listingId, citizenId, Date.now());
+    `INSERT INTO observed_transfers (funder_address, to_address, token, amount_atomic, tx_hash, log_index, block_number, kind, binding_id, listing_id, citizen_id, sources, observed_at, block_timestamp)
+     VALUES (?, ?, ?, ?, ?, 0, 50979500, 'payment', ?, ?, ?, 2, ?, ?)`,
+  ).run(FUNDER, to, USDC, amount, tx(n), bindingId, listingId, citizenId, Date.now(), ts);
   return Number((db.prepare("SELECT last_insert_rowid() AS id").get() as { id: number }).id);
 }
 
@@ -81,7 +87,7 @@ test("an exact observed payment on a requester-settled listing settles: award bo
   db.exec(`INSERT INTO listing_submissions (id, listing_id, citizen_id, artifact, note, payload_hash, commit_nonce, created_at) VALUES (71, 9, 2, 'https://example.test/fixed', NULL, 'sph71', 'sn71', ${nowMs - 600000});`);
   const otId = observe(db, 1);
   const out = await settleObservedPayments(env, nowMs);
-  assert.deepEqual(out, { checked: 1, settled: 1, created: 1, closed: 0, declined: 0 });
+  assert.deepEqual(out, { checked: 1, settled: 1, created: 1, closed: 0, declined: 0, deferred: 0 });
   const rows = award(db);
   assert.equal(rows.length, 1);
   assert.equal(rows[0]!.state, "paid");
@@ -101,7 +107,7 @@ test("an exact observed payment on a requester-settled listing settles: award bo
   const rail = await railEventsFor(env, { id: WORKER_ID, handle: "worker" } as never, 0);
   assert.deepEqual(rail.events.map((e) => e.kind), ["award.created", "award.paid", "payment.observed"]);
   // A second cycle finds nothing: the row is checked.
-  assert.deepEqual(await settleObservedPayments(env, nowMs + 1), { checked: 0, settled: 0, created: 0, closed: 0, declined: 0 });
+  assert.deepEqual(await settleObservedPayments(env, nowMs + 1), { checked: 0, settled: 0, created: 0, closed: 0, declined: 0, deferred: 0 });
 });
 
 test("a verifier-settled listing is never settled by payment; the row stays an observed payment with the reason", async () => {
@@ -136,7 +142,7 @@ test("an open award for the payee is closed by the observed transfer, not duplic
            VALUES (5, 9, 70, 2, '500000', 'payable', 'requester', 1, ${nowMs - 100000}, ${nowMs - 100000}, 'aph5', 'an5', ${nowMs - 100000});`);
   const otId = observe(db, 5);
   const out = await settleObservedPayments(env, nowMs);
-  assert.deepEqual(out, { checked: 1, settled: 1, created: 0, closed: 1, declined: 0 });
+  assert.deepEqual(out, { checked: 1, settled: 1, created: 0, closed: 1, declined: 0, deferred: 0 });
   const rows = award(db);
   assert.equal(rows.length, 1);
   assert.equal(rows[0]!.id, 5);
@@ -267,4 +273,118 @@ test("what a worker is told after submitting branches on the listing's settlemen
   assert.equal(step5(verifier).action, "record_receipt");
   const v1 = await createSubmission(makeEnv({ version: 1, submission: false }).env, worker, 9, { artifact: "https://example.test/work" });
   assert.equal(step5(v1).optional, false, "a v1 listing has no award ledger to settle into");
+});
+
+// 11. The binding's clock bounds settlement exactly as it bounds a receipt.
+//     Mutation: delete either timestamp refusal in settleOneObserved -> red.
+// 12. One transfer settles one award across both facts. Mutation: delete the
+//     payout_receipts lookup -> red.
+// 13. A citizen is paid once per listing. Mutation: delete the alreadyPaid
+//     refusal -> red.
+// 14. A row with no timestamp is deferred, never settled on a guess, and
+//     settles once two providers answer. Mutation: settle when the fetch
+//     throws (drop the `continue`) -> red.
+test("a transfer before the binding existed, or after it expired, is paid, not awarded", async () => {
+  const early = makeEnv();
+  const bindingCreatedS = Math.floor((early.nowMs - 1200000) / 1000);
+  const idEarly = observe(early.db, 13, "500000", PAYEE, 25, 9, WORKER_ID, bindingCreatedS - 3600);
+  await settleObservedPayments(early.env, early.nowMs);
+  assert.equal(award(early.db).length, 0);
+  assert.match(settlementRow(early.db, idEarly).settlement_note ?? "", /predates the binding/);
+  const late = makeEnv();
+  const idLate = observe(late.db, 14, "500000", PAYEE, 25, 9, WORKER_ID, Math.floor(late.nowMs / 1000) + 86400);
+  await settleObservedPayments(late.env, late.nowMs);
+  assert.equal(award(late.db).length, 0);
+  assert.match(settlementRow(late.db, idLate).settlement_note ?? "", /after the binding expired/);
+});
+
+test("a transfer already recorded as a receipt is not settled a second time by the observer", async () => {
+  const { env, db, nowMs } = makeEnv();
+  db.exec("INSERT INTO payout_receipts (id, binding_id, submitter_id, tx_hash, transfer_log_index, source_address, transaction_sender, block_number, block_hash, block_timestamp, finalized_block_number, confirmations_at_recording, funder_address, funder_statement, funder_signature, funder_attestation_hash, payload_hash, checked_at, created_at, funding_relationship) VALUES (4, 25, 2, '" + tx(15) + "', 0, '" + FUNDER + "', '" + FUNDER + "', 1, '" + tx(16) + "', 1, 20, 19, '" + FUNDER + "', '1f916.payout-funder.v1:y', '" + "0x" + "c".repeat(130) + "', '" + "d".repeat(64) + "', 'rph4', 1, 1, 'independent')");
+  db.exec(`INSERT INTO listing_awards (id, listing_id, submission_id, citizen_id, amount_atomic, state, awarded_by, awarded_by_citizen_id, awarded_at, payable_at, receipt_id, paid_at, payload_hash, commit_nonce, created_at)
+           VALUES (7, 9, 70, 2, '500000', 'paid', 'requester', 1, ${nowMs - 100000}, ${nowMs - 100000}, 4, ${nowMs - 90000}, 'aph7', 'an7', ${nowMs - 100000});
+           INSERT INTO listing_submissions (id, listing_id, citizen_id, artifact, note, payload_hash, commit_nonce, created_at) VALUES (73, 9, 2, 'https://example.test/again', NULL, 'sph73', 'sn73', ${nowMs - 50000});`);
+  const otId = observe(db, 15);
+  const out = await settleObservedPayments(env, nowMs);
+  assert.equal(out.declined, 1);
+  assert.equal(award(db).length, 1, "the receipt-settled award is the only one");
+  assert.match(settlementRow(db, otId).settlement_note ?? "", /already recorded as receipt 4/);
+});
+
+test("pay, resubmit, pay again: the second payment is a payment and not a second award", async () => {
+  const { env, db, nowMs } = makeEnv();
+  observe(db, 17);
+  await settleObservedPayments(env, nowMs);
+  assert.equal(award(db).length, 1);
+  db.exec(`INSERT INTO listing_submissions (id, listing_id, citizen_id, artifact, note, payload_hash, commit_nonce, created_at) VALUES (74, 9, 2, 'https://example.test/v2', NULL, 'sph74', 'sn74', ${nowMs - 1000});`);
+  const second = observe(db, 18);
+  const out = await settleObservedPayments(env, nowMs + 1);
+  assert.equal(out.declined, 1);
+  assert.equal(award(db).length, 1);
+  assert.match(settlementRow(db, second).settlement_note ?? "", /already holds paid award/);
+});
+
+test("a row with no block timestamp is deferred until two providers answer, then settled under the clock", async () => {
+  const { env, db, nowMs } = makeEnv();
+  const otId = observe(db, 19, "500000", PAYEE, 25, 9, WORKER_ID, null);
+  const failing = await settleObservedPayments(env, nowMs, { blockTimestamp: async () => { throw new Error("no two providers agreed"); } });
+  assert.deepEqual(failing, { checked: 1, settled: 0, created: 0, closed: 0, declined: 0, deferred: 1 });
+  assert.equal(award(db).length, 0);
+  assert.equal(settlementRow(db, otId).settlement_checked_at, null, "deferred, not decided");
+  let asked = 0;
+  const ok = await settleObservedPayments(env, nowMs, { blockTimestamp: async () => { asked++; return Math.floor(nowMs / 1000) - 30; } });
+  assert.equal(asked, 1);
+  assert.equal(ok.settled, 1);
+  assert.equal(db.prepare("SELECT block_timestamp FROM observed_transfers WHERE id = ?").get(otId)!.block_timestamp, Math.floor(nowMs / 1000) - 30, "the fetched timestamp is stored");
+});
+
+// 15. The wallet rides with the work, for real: a submission carrying a valid
+//     payout (citizen Ed25519 + wallet EIP-191 over the canonical preimage)
+//     records both, reports the binding, and says what settles it. When the
+//     same address is already bound at this price on another listing of the
+//     same funder, the sentence says the observer cannot match a payment and
+//     step 5 stops being automatic. Mutation: drop `sameAddressElsewhere` from
+//     the ladder condition, or hard-code 0 in createSubmission -> red.
+test("submit-with-wallet files the binding in one request, and warns when the address is ambiguous across the funder's listings", async () => {
+  const { env, db } = makeEnv({ submission: false });
+  db.exec("DELETE FROM payout_bindings");
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const raw = publicKey.export({ format: "der", type: "spki" }).subarray(-32);
+  const b64url = Buffer.from(raw).toString("base64url");
+  const thumbprint = createHash("sha256").update(raw).digest("base64url").slice(0, 32);
+  db.prepare("INSERT INTO keys (citizen_id, public_key, thumbprint, custody, status, bound_at) VALUES (2, ?, ?, 'self', 'active', 0)").run(b64url, thumbprint);
+  const wallet = privateKeyToAccount(generatePrivateKey());
+  const address = wallet.address.toLowerCase();
+  const expiry = Math.floor(Date.now() / 1000) + 3600;
+  const worker = { id: WORKER_ID, handle: "worker" } as never;
+  const payoutFor = async (listingId: number) => {
+    const preimage = payoutPreimage({ handle: "worker", row: `listing-${listingId}`, amountAtomic: "500000", chainId: 8453, token: USDC, address, expiry });
+    return {
+      address, expiry, citizen_public_key: b64url,
+      citizen_signature: Buffer.from(edSign(null, Buffer.from(preimage), privateKey)).toString("base64url"),
+      signature: await wallet.signMessage({ message: preimage }),
+    };
+  };
+  const first = await createSubmission(env, worker, 9, { artifact: "https://example.test/one", payout: await payoutFor(9) });
+  assert.equal(first.submitted, true);
+  assert.deepEqual({ filed: (first.payout_binding as { filed: boolean }).filed, address: (first.payout_binding as { address: string }).address }, { filed: true, address });
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM payout_bindings WHERE citizen_id = 2 AND docket_id = 'listing-9'").get()!.n, 1, "one call, one binding");
+  assert.match(String(first.next), /Nothing, provided this address at this price is bound on no other listing/);
+  assert.equal(first.next_actions.find((x) => x.step === 5)!.optional, true);
+  assert.equal(first.next_actions.find((x) => x.step === 3)!.state, "done");
+
+  // The same funder's second listing at the same price, same address: the
+  // observer cannot tell which listing a 500000 transfer is for.
+  const nowS = Math.floor(Date.now() / 1000);
+  db.exec(`INSERT INTO listings (id, citizen_id, title, condition, amount_atomic, chain_id, token, expiry, funder_address, funder_signature, funds_seen_atomic, payload_hash, commit_nonce, created_at, settlement_version, settlement_mode, max_awards)
+    VALUES (10, 1, 'bounty two', '${"d".repeat(40)}', '500000', 8453, '${USDC}', ${nowS + 86400}, '${FUNDER}', '${"0x" + "2".repeat(130)}', '24000000', 'ph10', 'n10', ${Date.now() - 1000}, 2, 'requester', 1);`);
+  const second = await createSubmission(env, worker, 10, { artifact: "https://example.test/two", payout: await payoutFor(10) });
+  assert.equal((second.payout_binding as { filed: boolean }).filed, true);
+  assert.match(String(second.next), /bound at this exact price on 1 other listing\(s\) of this funder/);
+  assert.equal(second.next_actions.find((x) => x.step === 5)!.optional, false, "ambiguous address: settlement is not automatic");
+
+  // The same authorization sent twice is reported, not duplicated.
+  const again = await createSubmission(env, worker, 10, { artifact: "https://example.test/two-again", payout: await payoutFor(10) });
+  assert.equal((again.payout_binding as { already_on_file: boolean }).already_on_file, true);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM payout_bindings WHERE citizen_id = 2").get()!.n, 2);
 });

@@ -150,6 +150,7 @@ CREATE INDEX IF NOT EXISTS idx_listing_awards_citizen ON listing_awards(citizen_
 ALTER TABLE observed_transfers ADD COLUMN settled_award_id INTEGER REFERENCES listing_awards(id);
 ALTER TABLE observed_transfers ADD COLUMN settlement_checked_at INTEGER;
 ALTER TABLE observed_transfers ADD COLUMN settlement_note TEXT;
+ALTER TABLE observed_transfers ADD COLUMN block_timestamp INTEGER;
 CREATE INDEX IF NOT EXISTS idx_observed_transfers_unsettled ON observed_transfers(settlement_checked_at, id) WHERE kind = 'payment' AND binding_id IS NOT NULL;
 
 -- The rail's own event stream (migration 0063), one row per thing that

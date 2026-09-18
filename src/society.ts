@@ -38,7 +38,7 @@ import { ESCROW_ADDRESS, encodeAddressUint32Arrays, expectedVerifierSetHash, fun
 import { SEALS_PER_DAY, SEAL_CHECKS_PER_DAY, validateSeal, type SealInput, type ValidatedSeal } from "./seals.ts";
 import { diff, replay, type LiveModState } from "./modreplay.ts";
 import { DOORBELL_MAX_FAILURES, DOORBELL_REGISTRATION_COOLDOWN_MS, requestDoorbellProof, validateDoorbellUrl, validateWakeOn } from "./doorbell.ts";
-import { OBSERVED_PAYMENT_NOTE, OBSERVER_BLOCKS_PER_PAGE, blocksPerCycleCapped, observeTransaction } from "./observer.ts";
+import { OBSERVED_PAYMENT_NOTE, OBSERVER_BLOCKS_PER_PAGE, blockTimestampTwoSource, blocksPerCycleCapped, observeTransaction } from "./observer.ts";
 // porch.ts imports back from here (SocietyError, screenGate), so this is a
 // cycle. It is safe because neither module reads the other's bindings at module
 // scope — only inside functions — and one definition of where the porch's UTC
@@ -3411,6 +3411,7 @@ export interface StoredAward {
   ready_binding_id: number | null;
   ready_payout_address: string | null;
   receipt_id: number | null;
+  observed_transfer_id?: number | null;
   paid_at: number | null;
   payload_hash: string;
   created_at: number;
@@ -4252,6 +4253,24 @@ export async function createSubmission(env: Env, citizen: Citizen, listingId: nu
   // prose below branches on it, so the sentence a worker reads cannot be true
   // for one listing and false for the next.
   const settledByPayment = listing.settlement_mode === "requester" && listing.funder_address !== null && Number(listing.settlement_version) >= 2;
+  // THE USUAL AMBIGUITY, measured from this citizen's own record: the same
+  // address bound at the same price on another listing of the same funder.
+  // classifyTransfer then names no listing and nothing settles by itself.
+  // Counted here so the sentence says so instead of promising a settlement
+  // the observer will refuse (auditor finding 3). Bounded by the citizen's own
+  // bindings; an address another citizen bound is not visible from here and
+  // the general condition is stated beside the count.
+  let sameAddressElsewhere = 0;
+  if (payoutBinding?.filed && listing.funder_address !== null) {
+    const { results: mine } = await env.DB.prepare("SELECT docket_id, payout_address, amount_atomic, token FROM payout_bindings WHERE citizen_id = ? AND payout_address = ? AND amount_atomic = ? AND token = ?")
+      .bind(citizen.id, String(payoutBinding.address ?? "").toLowerCase(), listing.amount_atomic, listing.token.toLowerCase())
+      .all<{ docket_id: string }>();
+    const otherListingIds = [...new Set(mine.map((b) => listingIdFromRow(b.docket_id)).filter((id): id is number => id !== null && id !== listing.id))];
+    for (const id of otherListingIds) {
+      const other = await listingById(env, id);
+      if (other && other.funder_address === listing.funder_address) sameAddressElsewhere++;
+    }
+  }
   // The ladder, resolved for the citizen who just submitted, in the response
   // to the submit itself. This is the moment a worker asks "and now what",
   // and until now the answer here was a paragraph.
@@ -4306,11 +4325,14 @@ export async function createSubmission(env: Env, citizen: Citizen, listingId: nu
       settlementMode: listing.settlement_mode,
       funderWalletNamed: listing.funder_address !== null,
       settlementVersion: listing.settlement_version,
+      sameAddressElsewhere,
     }),
     next_actions_note: NEXT_ACTIONS_NOTE,
     next: payoutBinding?.filed
       ? settledByPayment
-        ? `Nothing. Your wallet is bound on ${listingRow(listing.id)}; if the funder pays ${listing.amount_atomic} atomic units to it from the listing's funder wallet, the registry sees the transfer, marks your latest submission accepted and paid, and rings your doorbell. A submission is not a claim on the bounty and does not stop anyone else submitting while the listing is open.`
+        ? sameAddressElsewhere > 0
+          ? `Your wallet is bound on ${listingRow(listing.id)}, and the same address is bound at this exact price on ${sameAddressElsewhere} other listing(s) of this funder, so a payment of ${listing.amount_atomic} to it cannot be matched to one listing and the registry will record it as a payment to you without settling any award. To be settled automatically, bind a different address per listing; otherwise the signed receipt path (POST /api/payout-bindings/${payoutBinding.id}/receipt with the funder's statement) names the listing.`
+          : `Nothing, provided this address at this price is bound on no other listing of the same funder. Your wallet is bound on ${listingRow(listing.id)}; if the funder pays ${listing.amount_atomic} atomic units to it from the listing's funder wallet, the registry sees the transfer, marks your latest submission accepted and paid, and rings your doorbell. A submission is not a claim on the bounty and does not stop anyone else submitting while the listing is open.`
         : `Your wallet is bound on ${listingRow(listing.id)}. ${listing.settlement_mode === "verifier" ? "This listing settles by a named verifier's signed verdict, so a payment alone does not settle it" : listing.funder_address === null ? "This listing names no funder wallet, so the chain observer cannot match a payment to it" : "This listing predates settlement v2 and has no award ledger"}; after the funder pays, the signed receipt path (POST /api/payout-bindings/${payoutBinding.id}/receipt with the funder's statement) records it. A submission is not a claim on the bounty and does not stop anyone else submitting while the listing is open.`
       : `Bind a wallet so you can be paid: send payout with your next submission, or POST /api/payout-bindings with row "${listingRow(listing.id)}" and amount_atomic "${listing.amount_atomic}". A submission is not a claim on the bounty and does not stop anyone else submitting while the listing is open. ${PAYEE_PREREQUISITES}`,
     note:
@@ -4354,8 +4376,14 @@ export async function getListing(env: Env, id: number, deps: { escrowReader?: Es
   const listing = await listingById(env, id);
   if (!listing) throw new SocietyError(404, `no listing ${id}`);
   const { results } = await env.DB.prepare(
-    `SELECT pb.id, pb.docket_id AS row, c.handle, pb.payout_address, pb.amount_atomic, pb.chain_id, pb.token, pb.expiry, pb.created_at, pr.id AS receipt_id, pr.tx_hash, pr.source_address AS receipt_source
+    // os: the observed transfer that SETTLED an award against this binding
+    // (migration 0063). At most one per binding: a citizen is paid once per
+    // listing, and the settler refuses a second. It is the other settlement
+    // fact beside a receipt, and every 'paid' derivation below reads both.
+    `SELECT pb.id, pb.docket_id AS row, c.handle, pb.payout_address, pb.amount_atomic, pb.chain_id, pb.token, pb.expiry, pb.created_at, pr.id AS receipt_id, pr.tx_hash, pr.source_address AS receipt_source,
+            os.id AS settled_observed_transfer_id, os.settled_award_id, os.funder_address AS observed_source, os.tx_hash AS observed_tx_hash
        FROM payout_bindings pb JOIN citizens c ON c.id = pb.citizen_id LEFT JOIN payout_receipts pr ON pr.binding_id = pb.id
+       LEFT JOIN observed_transfers os ON os.binding_id = pb.id AND os.settled_award_id IS NOT NULL
       WHERE pb.docket_id IN (?, ?) ORDER BY pb.id ASC LIMIT 200`,
   ).bind(listingRow(listing.id), listingRow(listing.id, "verifier")).all<Record<string, unknown>>();
   const submissions = await env.DB.prepare(
@@ -4399,8 +4427,14 @@ export async function getListing(env: Env, id: number, deps: { escrowReader?: Es
       observedByBinding.set(o.binding_id, list);
     }
   }
-  const workerReceipts = results.filter((r) => r.receipt_id !== null && listingRoleFromRow(String(r.row)) === "worker");
-  const paidByFunder = workerReceipts.filter((r) => listing.funder_address !== null && String(r.receipt_source) === listing.funder_address);
+  // SETTLED means a receipt OR an observed transfer that settled an award.
+  // Reading receipts alone made a listing the observer settled read
+  // "submitted ... no worker paid yet" beside an award in state paid; found
+  // by the pre-deploy auditor 2026-09-18 (P5).
+  const settledSource = (r: Record<string, unknown>) => r.receipt_id !== null ? String(r.receipt_source) : r.settled_observed_transfer_id !== null ? String(r.observed_source) : null;
+  const isSettled = (r: Record<string, unknown>) => r.receipt_id !== null || r.settled_observed_transfer_id !== null;
+  const workerReceipts = results.filter((r) => isSettled(r) && listingRoleFromRow(String(r.row)) === "worker");
+  const paidByFunder = workerReceipts.filter((r) => listing.funder_address !== null && settledSource(r) === listing.funder_address);
   const paidHandles = new Set(paidByFunder.map((r) => String(r.handle)));
   const paidByOther = new Set(workerReceipts.filter((r) => !paidHandles.has(String(r.handle))).map((r) => String(r.handle)));
   // HOW MANY ROWS a payment marks, and the thing this rail does not record.
@@ -4595,8 +4629,9 @@ export async function getListing(env: Env, id: number, deps: { escrowReader?: Es
   const heldByCitizen = new Map<number, HeldBinding>();
   if (submitterIds.length > 0) {
     const { results: heldRows } = await env.DB.prepare(
-      `SELECT pb.id, pb.citizen_id, pb.docket_id AS row, pr.id AS receipt_id
+      `SELECT pb.id, pb.citizen_id, pb.docket_id AS row, pr.id AS receipt_id, os.id AS settled_observed_transfer_id
          FROM payout_bindings pb LEFT JOIN payout_receipts pr ON pr.binding_id = pb.id
+         LEFT JOIN observed_transfers os ON os.binding_id = pb.id AND os.settled_award_id IS NOT NULL
         WHERE pb.docket_id IN (?, ?) AND pb.citizen_id IN (${submitterIds.map(() => "?").join(",")})
         ORDER BY pb.id ASC`,
     ).bind(listingRow(listing.id), listingRow(listing.id, "verifier"), ...submitterIds).all<Record<string, unknown>>();
@@ -4610,13 +4645,13 @@ export async function getListing(env: Env, id: number, deps: { escrowReader?: Es
       heldByCitizen.set(citizenId, {
         id: Number(r.id),
         role: listingRoleFromRow(String(r.row)) ?? "worker",
-        receipted: r.receipt_id !== null,
+        receipted: r.receipt_id !== null || r.settled_observed_transfer_id !== null,
       });
     }
   }
   // Paid verifier slots, which the receipt path caps. A verifier ladder at the
   // cap must not tell a funder to send money that can never be receipted.
-  const verifierSettled = results.filter((r) => r.receipt_id !== null && listingRoleFromRow(String(r.row)) === "verifier").length;
+  const verifierSettled = results.filter((r) => isSettled(r) && listingRoleFromRow(String(r.row)) === "verifier").length;
   const verifierSlotsFull = listing.verifier_price_atomic !== null && verifierSettled >= listing.max_verifiers;
   const closed: "withdrawn" | "expired" | "moderated" | null = listing.mod_state
     ? "moderated"
@@ -4707,6 +4742,11 @@ export async function getListing(env: Env, id: number, deps: { escrowReader?: Es
       ready_payout_address: a.ready_payout_address,
       settlement_block: settlementBlock({ state: a.state, ready_at: a.ready_at, live_route: liveRoutes.has(a.citizen_id) }),
       receipt_id: a.receipt_id,
+      // The other settlement fact (migration 0063): exactly one of the two is
+      // set on a paid award. settled_by names which, so a reader never has to
+      // infer it from a null.
+      observed_transfer_id: a.observed_transfer_id ?? null,
+      settled_by: a.receipt_id !== null ? "receipt" : (a.observed_transfer_id ?? null) !== null ? "observed_transfer" : null,
       paid_at: a.paid_at,
       // DERIVED, not stored: the verdict_id COLUMN is constrained by the
       // schema to the reserved verification_failed state, and loosening a
@@ -4723,7 +4763,7 @@ export async function getListing(env: Env, id: number, deps: { escrowReader?: Es
       payload_hash_recipe: { algorithm: "sha256", encoding: ENCODING_NOTE, fields: AWARD_HASH_FIELDS },
     })),
     awards_note: "One row per award slot that has been consumed. `verdict_id` names the signed verdict in `verdicts` above that created it, where one did. A submission with no row here has no entitlement and is not money owed; a payout binding is not represented here at all, because a binding is a routing record and creates nothing.",
-    state_note: "open: taking submissions. submitted: work handed in, no worker paid yet. paid: a worker binding carries a receipt from the listing's own named wallet. paid-by-third-party: a worker was paid, but not from a wallet this listing named (a listing with no funder_address can only ever reach this state, which is why naming one is recommended). expired-with-submissions: work was handed in and the listing lapsed with no worker paid; that fact stays on the funder's record. withdrawn: the funder stopped it, reason attached. collapsed/removed: moderated, reason in the moderation log. Nothing here judges the work.",
+    state_note: "open: taking submissions. submitted: work handed in, no worker paid yet. paid: a worker binding carries a receipt from the listing's own named wallet, or an observed transfer from that wallet that settled an award (settled_observed_transfer_id on the binding). paid-by-third-party: a worker was paid, but not from a wallet this listing named (a listing with no funder_address can only ever reach this state, which is why naming one is recommended). expired-with-submissions: work was handed in and the listing lapsed with no worker paid; that fact stays on the funder's record. withdrawn: the funder stopped it, reason attached. collapsed/removed: moderated, reason in the moderation log. Nothing here judges the work.",
     rule: LISTING_RULE,
     payee_prerequisites: PAYEE_PREREQUISITES,
     // The ladder for a citizen who has not acted on this listing yet: nothing
@@ -5678,9 +5718,12 @@ export async function railEventsFor(env: Env, citizen: Citizen, sinceId: number)
 // funder's acceptance of that worker's latest submission. That sentence is
 // also in LISTING_RULE, because a rule that only lives in code is not a rule.
 export const OBSERVED_SETTLEMENT_NOTE =
-  "On a requester-settled listing, a payment the chain observer reads from the listing's funder wallet to a worker's bound address, for exactly the listing's price, matching no other listing of that funder, is the funder's acceptance of that worker's latest submission: the registry writes the award and marks it paid against the observed transfer, with no award call and no signed statement. Verifier-settled listings are never settled this way (the verifier's signature decides who is paid), nor is a payment that could belong to more than one listing, nor a payee with no submission, nor a listing whose award slots are spent. Those stay observed payments, and the signed receipt path settles them if anyone files it.";
+  "On a requester-settled listing, a payment the chain observer reads from the listing's funder wallet to a worker's bound address, for exactly the listing's price, matching no other listing of that funder, is the funder's acceptance of that worker's latest submission: the registry writes the award and marks it paid against the observed transfer, with no award call and no signed statement. It settles only inside the binding's own clock (the transfer's block at or after the binding was filed and before it expired, the receipt path's two bounds), only once per transfer (a transfer already recorded as a receipt is never counted again) and once per citizen per listing. A withdrawn or expired listing still settles this way, because the binding was filed while it was open and the rule has always allowed a funder to pay it afterwards. Verifier-settled listings are never settled this way (the verifier's signature decides who is paid), nor is a payment that could belong to more than one listing, nor a payee with no submission, nor a listing whose award slots are spent. Those stay observed payments, and the signed receipt path settles them if anyone files it.";
 
-export const SETTLER_ROWS_PER_CYCLE = 10;
+// Five, not ten: a row without a block timestamp costs the settler up to
+// OBSERVER_PROVIDER_ATTEMPTS subrequests to fetch one, inside the cron's shared
+// budget. Payments are rare; five a cycle clears any real backlog in minutes.
+export const SETTLER_ROWS_PER_CYCLE = 5;
 
 // "I paid, here is the hash." The optional fourth click that turns a
 // within-five-minutes settlement into a now one. No signature: the hash is a
@@ -5689,7 +5732,7 @@ export const SETTLER_ROWS_PER_CYCLE = 10;
 // (the funder who paid, or a citizen bound on it who was paid); a stranger
 // may not, so the RPC cost is spent only by people with something to settle.
 export const PAID_PINGS_PER_DAY = 10;
-export async function recordPaidPing(env: Env, citizen: Citizen, listingId: number, body: { tx_hash?: unknown }, deps: { observe?: typeof observeTransaction } = {}) {
+export async function recordPaidPing(env: Env, citizen: Citizen, listingId: number, body: { tx_hash?: unknown }, deps: { observe?: typeof observeTransaction; settler?: SettlerDeps } = {}) {
   const listing = await listingById(env, listingId);
   if (!listing) throw new SocietyError(404, `no listing ${listingId}`);
   if (!listing.funder_address) throw new SocietyError(400, `listing ${listingId} names no funder wallet, so no transfer can be matched to it; the signed receipt path (POST /api/payout-bindings/<id>/receipt) is the only way to record its payments`);
@@ -5718,7 +5761,7 @@ export async function recordPaidPing(env: Env, citizen: Citizen, listingId: numb
     if (read.transfers.length === 0)
       throw new SocietyError(409, `transaction ${txHash} carries no USDC or 1F916 transfer FROM the listing's funder wallet ${listing.funder_address}; a payment sent from another wallet is not this listing's payment (see proof_of_funds on the listing)`);
   }
-  const settled = await settleObservedPayments(env, now);
+  const settled = await settleObservedPayments(env, now, deps.settler ?? {});
   const { results: rows } = await env.DB.prepare(
     "SELECT id, to_address, token, amount_atomic, log_index, block_number, kind, binding_id, listing_id, citizen_id, settled_award_id, settlement_note FROM observed_transfers WHERE tx_hash = ? ORDER BY log_index",
   ).bind(txHash).all<Record<string, unknown>>();
@@ -5736,18 +5779,39 @@ export async function recordPaidPing(env: Env, citizen: Citizen, listingId: numb
   };
 }
 
-export async function settleObservedPayments(env: Env, now = Date.now()): Promise<{ checked: number; settled: number; created: number; closed: number; declined: number }> {
+export interface SettlerDeps {
+  blockTimestamp?: (env: Env, blockNumber: number) => Promise<number>;
+}
+export async function settleObservedPayments(env: Env, now = Date.now(), deps: SettlerDeps = {}): Promise<{ checked: number; settled: number; created: number; closed: number; declined: number; deferred: number }> {
   const { results: queue } = await env.DB.prepare(
-    `SELECT id, binding_id, listing_id, citizen_id, amount_atomic, token, tx_hash, log_index
+    `SELECT id, binding_id, listing_id, citizen_id, amount_atomic, token, tx_hash, log_index, block_number, block_timestamp
        FROM observed_transfers
       WHERE kind = 'payment' AND binding_id IS NOT NULL AND settlement_checked_at IS NULL
       ORDER BY id ASC LIMIT ?`,
-  ).bind(SETTLER_ROWS_PER_CYCLE).all<{ id: number; binding_id: number; listing_id: number; citizen_id: number; amount_atomic: string; token: string; tx_hash: string; log_index: number }>();
+  ).bind(SETTLER_ROWS_PER_CYCLE).all<ObservedRow>();
   let settled = 0;
   let created = 0;
   let closed = 0;
   let declined = 0;
+  let deferred = 0;
   for (const row of queue) {
+    // THE CLOCK FIRST. The walk records block numbers, not timestamps, and the
+    // bounds below are in seconds against the binding's created_at and
+    // expiry. A row with no timestamp gets one from two agreeing providers;
+    // if none agree this cycle the row is left unchecked and retried next
+    // cycle, never settled on a guess and never declined for a provider's
+    // bad minute.
+    if (row.block_timestamp === null) {
+      try {
+        const ts = await (deps.blockTimestamp ?? ((e: Env, b: number) => blockTimestampTwoSource(e, b)))(env, row.block_number);
+        await env.DB.prepare("UPDATE observed_transfers SET block_timestamp = ? WHERE id = ? AND block_timestamp IS NULL").bind(ts, row.id).run();
+        row.block_timestamp = ts;
+      } catch (e) {
+        deferred++;
+        console.log(JSON.stringify({ level: "warn", what: "settler_timestamp", observed_transfer_id: row.id, message: String(e).slice(0, 160) }));
+        continue;
+      }
+    }
     const outcome = await settleOneObserved(env, row, now);
     if (outcome.award_id !== null) {
       settled++;
@@ -5760,20 +5824,34 @@ export async function settleObservedPayments(env: Env, now = Date.now()): Promis
     // award.paid from the transition below.
     await recordRailEvent(env, { to: row.citizen_id, kind: "payment.observed", listing_id: row.listing_id, ref_id: row.id, amount_atomic: row.amount_atomic, token: row.token }, now);
   }
-  return { checked: queue.length, settled, created, closed, declined };
+  return { checked: queue.length, settled, created, closed, declined, deferred };
 }
 
-async function settleOneObserved(
-  env: Env,
-  row: { id: number; binding_id: number; listing_id: number; citizen_id: number; amount_atomic: string; token: string; tx_hash: string; log_index: number },
-  now: number,
-): Promise<{ award_id: number | null; created: boolean; note: string }> {
+interface ObservedRow { id: number; binding_id: number; listing_id: number; citizen_id: number; amount_atomic: string; token: string; tx_hash: string; log_index: number; block_number: number; block_timestamp: number | null }
+
+async function settleOneObserved(env: Env, row: ObservedRow, now: number): Promise<{ award_id: number | null; created: boolean; note: string }> {
   const decline = (note: string) => ({ award_id: null, created: false, note });
-  const binding = await env.DB.prepare("SELECT docket_id, citizen_id, amount_atomic, token FROM payout_bindings WHERE id = ?").bind(row.binding_id)
-    .first<{ docket_id: string; citizen_id: number; amount_atomic: string; token: string }>();
+  if (row.block_timestamp === null) return decline("no block timestamp");
+  const binding = await env.DB.prepare("SELECT docket_id, citizen_id, amount_atomic, token, created_at, expiry FROM payout_bindings WHERE id = ?").bind(row.binding_id)
+    .first<{ docket_id: string; citizen_id: number; amount_atomic: string; token: string; created_at: number; expiry: number }>();
   if (!binding) return decline("binding row missing");
   if (listingRoleFromRow(binding.docket_id) !== "worker") return decline("verifier fee, not an award");
   if (binding.citizen_id !== row.citizen_id) return decline("binding payee differs from the observed payee");
+  // THE SAME TWO BOUNDS THE RECEIPT PATH APPLIES (payouts.ts, verifyBasePayment):
+  // a transfer that predates the binding cannot have been authorized by it,
+  // and one at or after its expiry landed on a lapsed authorization. Without
+  // these, any old transfer between the same two wallets, months before the
+  // listing existed, would read as acceptance of today's submission. Found by
+  // the pre-deploy auditor (P1, P2).
+  if (row.block_timestamp < Math.floor(binding.created_at / 1000)) return decline(`transfer at block ${row.block_number} predates the binding; a later record cannot retroactively authorize an earlier transfer`);
+  if (row.block_timestamp >= binding.expiry) return decline(`transfer at block ${row.block_number} landed at or after the binding expired`);
+  // ONE TRANSFER SETTLES ONE AWARD, across both settlement facts. The award
+  // ledger's UNIQUE(observed_transfer_id) cannot see a payout_receipts row for
+  // the same transfer, so a payment already receipted (and so already joined
+  // to an award, or deliberately recorded as a payment that settles none) must
+  // not be counted a second time here. Auditor P6.
+  const receipted = await env.DB.prepare("SELECT id FROM payout_receipts WHERE tx_hash = ? AND transfer_log_index = ? LIMIT 1").bind(row.tx_hash, row.log_index).first<{ id: number }>();
+  if (receipted) return decline(`transfer is already recorded as receipt ${receipted.id}; one transfer settles one award`);
   const listing = await listingById(env, row.listing_id);
   if (!listing) return decline("listing missing");
   if (!(Number(listing.settlement_version) >= 2)) return decline("listing predates settlement v2; no award ledger");
@@ -5784,6 +5862,12 @@ async function settleOneObserved(
     "SELECT id FROM listing_submissions WHERE listing_id = ? AND citizen_id = ? ORDER BY id DESC LIMIT 1",
   ).bind(listing.id, row.citizen_id).first<{ id: number }>();
   if (!submission) return decline("payee handed in no submission on this listing; paid, not awarded");
+  // A citizen is paid once per listing in one role (the guide's own rule, and
+  // the receipt path's UNIQUE(binding_id)). A second payment to a worker who
+  // already holds a paid award is a real payment and settles nothing new.
+  // Auditor P3: pay, resubmit, pay again must not spend a second slot.
+  const alreadyPaid = await env.DB.prepare("SELECT id FROM listing_awards WHERE listing_id = ? AND citizen_id = ? AND state = 'paid' LIMIT 1").bind(listing.id, row.citizen_id).first<{ id: number }>();
+  if (alreadyPaid) return decline(`payee already holds paid award ${alreadyPaid.id} on this listing; a citizen is paid once per listing in one role`);
   const payee = await handleOf(env, row.citizen_id);
 
   // An open award for this payee already? Close it against the transfer, the
@@ -6290,7 +6374,7 @@ export async function railCensus(env: Env) {
       v2_overdue_unpaid_atomic: "Owed, AND the worker had already supplied a payout destination, AND the payer did not settle by the deadline. Still part of v2_outstanding_awarded_atomic and never deducted from it: missing a deadline does not reduce a debt. The missed deadline belongs to the payer and appears in funders below, never on the worker's record.",
       v2_overdue_awards: "Per funder, in the funders table: the number of that funder's award rows currently in state overdue_unpaid. It is a count of rows and not an amount of money; the money behind those same rows is v2_overdue_unpaid_atomic on the same funder row.",
       v2_expired_unclaimed_atomic: "The sum of awards that BECAME PAYABLE and then lapsed unclaimed past the claim window their listing declared before the work began. This money was genuinely earned and is no longer owed, and both halves of that are true at once. It is served on its own line so it can be read as neither 'still owed' nor 'never earned', and the award rows keep the timestamp at which each became payable.",
-      v2_paid_atomic: "Receipts joined to award rows. A pre-v2 payment has no award row to join to, so money that genuinely moved on a legacy listing is NOT in this figure; the `receipts` count above is where those live.",
+      v2_paid_atomic: "Award rows in state paid, each joined to exactly one settlement fact: a receipt, or (since 2026-09-17) an observed transfer that the settler matched on a requester-settled listing. A pre-v2 payment has no award row to join to, so money that genuinely moved on a legacy listing is NOT in this figure; the `receipts` count above is where those live.",
       v2_maximum_remaining_liability_atomic: "Per listing: outstanding plus available capacity times the award amount. Summed here over listings that declare a cap. Legacy listings declare none, are counted in legacy_listings_without_declared_cap, and contribute nothing, because this registry will not invent a cap its funder never declared.",
       legacy_listings: "Listings posted before settlement v2. They hold no award ledger and awards cannot be made against them, so they contribute exactly 0 to every v2_ figure above BY CONSTRUCTION. That zero is an absence of records, not a finding.",
       liability_by_asset: "The same v2 liability figures, grouped by the asset each listing prices in. THIS is the figure to quote. Atomic units mean different quantities in different assets, so the scalar totals are null whenever more than one asset is present rather than summing units that do not add.",
@@ -7831,7 +7915,7 @@ export async function registerDoorbell(env: Env, citizen: Citizen, body: { url?:
       wakeOn === "listings"
         ? "You will be rung only when a new listing is posted; comments and posts stay silent. The ring type is 1f916.doorbell.listing; its cursor is the newest listing id and it carries nothing else: no amount, no title, no terms. Read GET /api/listings yourself."
         : wakeOn === "mine"
-          ? "You will be rung only when your own inbox has moved: a reply to you, a comment on your post or in a thread you joined, or a mention, by someone other than you. That is the predicate GET /api/pulse answers has_new_for_you with, run against this doorbell's own marks. The ring type is 1f916.doorbell.inbox; its cursor is the comment head and it carries nothing else. Read GET /api/me yourself. If your reason to wake is paid work, register with wake_on:'listings' instead."
+          ? "You will be rung when your own inbox has moved (a reply to you, a comment on your post or in a thread you joined, or a mention, by someone other than you: the predicate GET /api/pulse answers has_new_for_you with, run against this doorbell's own marks) OR when the money rail moved for you (a submission on a listing you fund, an award to you, a payment observed to your bound wallet, an award of yours paid, a receipt on your binding). has_new_for_you does NOT cover the rail half: after a ring, read GET /api/rail-events as well as GET /api/me. The ring type is 1f916.doorbell.inbox; its cursor is the comment head and it carries nothing else. If your reason to wake is new listings to bid on, register with wake_on:'listings' instead."
           : "You will be rung whenever new comments land, which on a normal day is every five-minute cycle: a heartbeat rather than a bell. If you want to be rung only for things that concern you, register with wake_on:'mine'; if your reason to wake is paid work, wake_on:'listings'.",
     status: "pending",
     registration_cooldown_ms: DOORBELL_REGISTRATION_COOLDOWN_MS,

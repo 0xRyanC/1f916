@@ -521,6 +521,9 @@ export async function observeTransaction(env: Env, funderAddress: string, txHash
   if (!agreed) throw new Error(`no two providers agreed on transaction ${txHash} (${answers.length} answered)${lastError ? ": " + lastError : ""}`);
   const logs = agreed[1]!.logs;
   const block = Number(BigInt(String(agreed[1]!.receipt.blockNumber)));
+  // The block's timestamp travels with the rows, so the settler can apply the
+  // binding's clock without a second round trip. Same two-provider rule.
+  const blockTimestamp = logs.length ? await blockTimestampTwoSource(env, block, deps) : null;
   const index = await bindingIndexFor(env, funder);
   const stamp = now();
   let payments = 0;
@@ -528,15 +531,41 @@ export async function observeTransaction(env: Env, funderAddress: string, txHash
   for (const t of logs) {
     const c = classifyTransfer(t, index);
     const r = await env.DB.prepare(
-      `INSERT OR IGNORE INTO observed_transfers (funder_address, to_address, token, amount_atomic, tx_hash, log_index, block_number, kind, binding_id, listing_id, citizen_id, sources, observed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, ?)`,
-    ).bind(funder, t.to, t.token, t.amount_atomic, t.tx_hash, t.log_index, t.block_number, c.kind, c.binding_id, c.listing_id, c.citizen_id, stamp).run();
+      `INSERT OR IGNORE INTO observed_transfers (funder_address, to_address, token, amount_atomic, tx_hash, log_index, block_number, kind, binding_id, listing_id, citizen_id, sources, observed_at, block_timestamp)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, ?, ?)`,
+    ).bind(funder, t.to, t.token, t.amount_atomic, t.tx_hash, t.log_index, t.block_number, c.kind, c.binding_id, c.listing_id, c.citizen_id, stamp, blockTimestamp).run();
     if (Number(r.meta?.changes ?? 0) > 0) {
       written++;
       if (c.kind === "payment") payments++;
     }
   }
   return { tx_hash: txHash, block_number: block, transfers: logs, rows_written: written, payments, sources: 2 };
+}
+
+// A block's timestamp, seconds, from two independently operated providers that
+// agree on it. The settler needs it because a transfer counts as the funder's
+// acceptance only inside the binding's own clock (the same two bounds the
+// receipt path applies, payouts.ts). Throws when no two agree.
+export async function blockTimestampTwoSource(env: Env, blockNumber: number, deps: ObserverDeps = {}): Promise<number> {
+  const call = deps.rpc ?? rpc;
+  const urls = (deps.urls ?? observerRpcUrls)(env);
+  const seen = new Map<number, number>();
+  let lastError = "";
+  for (const url of urls.slice(0, OBSERVER_PROVIDER_ATTEMPTS)) {
+    try {
+      const chain = await call(url, "eth_chainId", []);
+      if (typeof chain !== "string" || BigInt(chain) !== 8453n) continue;
+      const block = (await callWithRetry(call, url, "eth_getBlockByNumber", ["0x" + blockNumber.toString(16), false])) as { timestamp?: string } | null;
+      if (!block || typeof block.timestamp !== "string") continue;
+      const ts = Number(BigInt(block.timestamp));
+      const n = (seen.get(ts) ?? 0) + 1;
+      seen.set(ts, n);
+      if (n >= 2) return ts;
+    } catch (e) {
+      lastError = String(e).slice(0, 120);
+    }
+  }
+  throw new Error(`no two providers agreed on the timestamp of block ${blockNumber}${lastError ? ": " + lastError : ""}`);
 }
 
 // What the read surfaces serve. Kept here so every page that mentions an
