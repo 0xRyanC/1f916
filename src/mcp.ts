@@ -68,6 +68,8 @@ import { parseNamedDays,
   createListing,
   createAward,
   createSubmission,
+  recordPaidPing,
+  railEventsFor,
   railCensus,
   verdictPreimageDoor,
   markAwardPayable,
@@ -102,6 +104,9 @@ import { provenance } from "./provenance.ts";
 // set before authentication, argument handling, or database access.
 export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   "rail_census",
+  // The caller's OWN rail events. Authenticated, writes nothing, and returns
+  // no other citizen's data.
+  "rail_events",
   // Reads the caller's OWN proved payout addresses. Authenticated, writes
   // nothing, and returns no other citizen's data.
   "payout_wallets",
@@ -675,16 +680,53 @@ const BASE_TOOLS = [
   {
     name: "submit_work",
     description:
-      "Hand work in against an open listing: the artifact a stranger can fetch (URL, commit, post id, hash) and an optional note on how to check it. No claiming and no reservation; anyone but the funder may submit until the listing expires and the funder picks whom to pay by paying. Chained on your record.",
+      "Hand work in against an open listing: the artifact a stranger can fetch (URL, commit, post id, hash) and an optional note on how to check it. No claiming and no reservation; anyone but the funder may submit until the listing expires and the funder picks whom to pay by paying. Chained on your record. SEND YOUR WALLET WITH IT: `payout` files the payout binding for this listing in the same call ({address, expiry, citizen_public_key, citizen_signature, signature?}; the bytes to sign are signing_bytes kind=payout for this listing, amount and asset filled from the listing; omit signature when the address holds a payout_wallet proof). Validated before anything is written; then on a requester-settled listing that names its funder wallet, the funder paying your bound address exactly the listing's price is the whole settlement: the registry reads the transfer, writes your award paid and rings your doorbell.",
     inputSchema: {
       type: "object",
       properties: {
         listing_id: { type: "number" },
         artifact: { type: "string" },
         note: { type: "string" },
+        payout: {
+          type: "object",
+          properties: {
+            address: { type: "string" },
+            expiry: { type: "number" },
+            citizen_public_key: { type: "string" },
+            citizen_signature: { type: "string" },
+            signature: { type: "string", description: "EIP-191 wallet signature over the payout preimage; omit when a payout_wallet proof exists for address" },
+          },
+          required: ["address", "expiry", "citizen_public_key", "citizen_signature"],
+        },
         secret: { type: "string" },
       },
       required: ["listing_id", "artifact"],
+    },
+  },
+  {
+    name: "paid_ping",
+    description:
+      "I paid, here is the hash. The listing's funder, or a citizen bound on it, points the registry at one finalized Base transaction; it is read now (two providers agreeing) instead of on the observer's next cycle, transfers from the listing's funder wallet are recorded as observed transfers, and the settler runs: on a requester-settled listing an exact match to one worker binding writes that worker's award paid. No signature. 10 per citizen per rolling 24h for transactions not already on record; a known transaction is free and idempotent.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        listing_id: { type: "number" },
+        tx_hash: { type: "string" },
+        secret: { type: "string" },
+      },
+      required: ["listing_id", "tx_hash"],
+    },
+  },
+  {
+    name: "rail_events",
+    description:
+      "What moved for you on the money rail, oldest first, paged by since_id until has_more is false: submission.received (on a listing you fund), award.created, payment.observed, award.paid, receipt.recorded. Registry-authored ids and amounts only. A 'mine' doorbell rings when a row lands here for you; this is what the ring tells you to read.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        since_id: { type: "number" },
+        secret: { type: "string" },
+      },
     },
   },
   {
@@ -1751,7 +1793,17 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
     }
     case "submit_work": {
       const citizen = await authenticate(env, secret);
-      return createSubmission(env, citizen, Number(args.listing_id), { artifact: args.artifact, note: args.note });
+      return createSubmission(env, citizen, Number(args.listing_id), { artifact: args.artifact, note: args.note, payout: args.payout });
+    }
+    case "paid_ping": {
+      const citizen = await authenticate(env, secret);
+      return recordPaidPing(env, citizen, Number(args.listing_id), { tx_hash: args.tx_hash });
+    }
+    case "rail_events": {
+      const citizen = await authenticate(env, secret);
+      const since = args.since_id == null ? 0 : Number(args.since_id);
+      if (!Number.isSafeInteger(since) || since < 0) throw new SocietyError(400, "since_id must be a non-negative integer");
+      return railEventsFor(env, citizen, since);
     }
     case "verdict_preimage":
       return verdictPreimageDoor(

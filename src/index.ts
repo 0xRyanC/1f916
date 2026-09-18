@@ -98,6 +98,10 @@ import { parseNamedDays,
   createListing,
   createAward,
   createSubmission,
+  recordPaidPing,
+  railEventsFor,
+  railHead,
+  settleObservedPayments,
   railCensus,
   verdictPreimageDoor,
   markAwardPayable,
@@ -1222,6 +1226,20 @@ export default {
         const citizen = await authenticate(env, bearer(request));
         return json(await createSubmission(env, citizen, Number(submissionMatch[1]), await body(request)), 201);
       }
+      // "I paid": read one transaction now instead of waiting for the walk.
+      const paidMatch = path.match(/^\/api\/listings\/(\d+)\/paid$/);
+      if (paidMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await recordPaidPing(env, citizen, Number(paidMatch[1]), await body(request)));
+      }
+      // What moved for you on the money rail; the thing a 'mine' doorbell
+      // ring tells you to come and read.
+      if (path === "/api/rail-events" && method === "GET") {
+        checkQueryParams(url, "/api/rail-events");
+        const citizen = await authenticate(env, bearer(request));
+        const since = url.searchParams.has("since_id") ? wholeNumberParam(url, "since_id", "a rail_events row id") : 0;
+        return json(await railEventsFor(env, citizen, since));
+      }
       // settlement v2. The only write on this rail that can create a
       // liability, and the only one that can close it.
       if (path === "/api/rail" && method === "GET") return json(await railCensus(env));
@@ -1630,9 +1648,10 @@ export default {
         const listingHead =
           (await env.DB.prepare("SELECT MAX(id) AS id FROM listings WHERE withdrawn_at IS NULL").first<{ id: number }>())?.id ?? 0;
         const mentionHead = (await env.DB.prepare("SELECT MAX(id) AS id FROM mentions").first<{ id: number }>())?.id ?? 0;
+        const railMark = await railHead(env);
         if (head > 0) {
           const signer = await registrySigner(env);
-          const rings = await ringDoorbells(env, head, signer.sign, signer.key, listingHead, mentionHead);
+          const rings = await ringDoorbells(env, head, signer.sign, signer.key, listingHead, mentionHead, railMark);
           if (rings.due > 0) console.log(JSON.stringify({ level: "info", what: "doorbells", ...rings }));
         }
         // The channel fan-out: one content-free message per new listing into
@@ -1651,6 +1670,15 @@ export default {
             console.log(JSON.stringify({ level: observed.error || observed.partial ? "warn" : "info", what: "observer", ...observed }));
         } catch (e) {
           console.log(JSON.stringify({ level: "error", what: "observer", message: String(e).slice(0, 200) }));
+        }
+        // The settler: observed payments that match exactly one worker binding
+        // on a requester-settled listing become paid awards, no ceremony.
+        // Runs after the walk so a payment seen this cycle settles this cycle.
+        try {
+          const settled = await settleObservedPayments(env);
+          if (settled.checked > 0) console.log(JSON.stringify({ level: "info", what: "settler", ...settled }));
+        } catch (e) {
+          console.log(JSON.stringify({ level: "error", what: "settler", message: String(e).slice(0, 200) }));
         }
         if (env.DISCORD_LISTINGS_WEBHOOK && listingHead > 0) {
           const announced = await announceListings(env, listingHead, { name: "discord-listings", url: env.DISCORD_LISTINGS_WEBHOOK });

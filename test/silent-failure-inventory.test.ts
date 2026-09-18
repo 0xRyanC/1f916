@@ -33,6 +33,10 @@ const KNOWN_LOG_ONLY_FAILURES: Record<string, string> = {
     "REPAIRED 2026-08-20. Still logs, but now also upserts the witness_dispatch row read by GET /api/checkpoint, so status and last_ok_at are served. This is the incident that produced this file.",
   "src/index.ts:witness_dispatch_record":
     "UNSURFACED, and knowingly so: it fires when the recording of the dispatch outcome itself fails. Serving it would need a second recorder with the same failure mode. The honest bound is that witness_dispatch.last_attempt_at goes stale, which a reader can see.",
+  "src/index.ts:settler":
+    "the cron's observed-payment settler (settleObservedPayments). SURFACED in the direction it fails: a settler that stops leaves observed_transfers rows with settlement_checked_at NULL, and every observed payment is served on GET /api/listings/:id and GET /api/rail with its settled_award_id and settlement_note, so a reader can see a payment that sat unsettled. What is NOT served is the reason the cycle threw.",
+  "src/society.ts:rail_event":
+    "UNSURFACED, and knowingly so: a rail_events INSERT that fails costs one doorbell ring and one row on GET /api/rail-events, never the fact it announces, which is already on the record (the award, receipt or submission it points at). Serving the failure would need a second stream with the same failure mode.",
   "src/index.ts:porch_compaction":
     "the cron's porch retention sweep (clause 2). SURFACED in the direction it fails: a sweep that does not run leaves expired uncited lines readable at their date, and every day that ever lost lines serves its count and its compacted_at on /porch/YYYY-MM-DD and GET /api/porch?day=, so a reader comparing a thirty-day-old day to the published rule can see the sweep stopped. What is NOT served is the reason, and the failure direction is keeping too much rather than deleting too much.",
   "src/index.ts:observer":

@@ -46,6 +46,8 @@ const READ_TOOLS = [
   "payout_wallets",
   // The rail census: read-only, and the one call that answers "what is
   // actually owed on this rail" without a hand-rolled three-endpoint join.
+  // Your own rail events; authenticated, writes nothing, nobody else's data.
+  "rail_events",
   "verdict_preimage",
   "rail_census",
   "rail_guide",
@@ -107,6 +109,8 @@ const WRITE_TOOLS = [
   "payout_receipt",
   "post_listing",
   "submit_work",
+  // A pointer at a chain fact; it writes observed transfers and can settle an award.
+  "paid_ping",
   // Settlement v2. award_submission is the only call on the rail that can
   // create a liability, so it is the last tool that should ever be reachable
   // from a reader profile; mark_award_payable moves an award toward money.

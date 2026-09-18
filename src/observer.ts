@@ -14,8 +14,16 @@
 // address a citizen bound on one of that funder's listings is an OBSERVED
 // PAYMENT. It is a weaker fact than a receipt (no funder statement, no chosen
 // log index, no confirmation count at recording) and it is served as its own
-// tier, never as a receipt and never as an award. A zero-value transfer is the
-// address-poisoning pattern, recorded so the funder's page can warn them.
+// tier, never as a receipt. A zero-value transfer is the address-poisoning
+// pattern, recorded so the funder's page can warn them.
+//
+// SINCE 2026-09-17 IT CAN BE AN AWARD. The settler (settleObservedPayments in
+// society.ts) reads these rows and, on a REQUESTER-settled listing where the
+// transfer matched exactly one worker binding at exactly the listing's price,
+// writes the award paid against the observed transfer. The funder's payment is
+// the funder's decision; the ceremony (award call, statement, receipt) was the
+// registry asking to be told what the chain already said. Verifier listings
+// and every ambiguous case stay exactly what this header describes.
 //
 // Budget: the cron shares a subrequest budget with checkpoints and doorbells.
 // One wallet per cycle, at most OBSERVER_PROVIDER_ATTEMPTS providers, one
@@ -462,7 +470,76 @@ async function walkWallet(env: Env, wallet: WalletRow, deps: ObserverDeps): Prom
   return { wallet: funder, from_block: fromBlock, to_block: coveredTo, rows: covered.length, payments, zero_value: zero, sources: 2, pages, ...(partial ? { partial } : {}) };
 }
 
+// ONE TRANSACTION, NOW. The funder (or the payee) says "here is the hash" and
+// the registry reads that transaction instead of waiting for the walk to
+// reach its block. Same evidence rule as the walk: two independently operated
+// providers return the identical receipt, and the block is at or behind the
+// finalized head of each. Same classification, same table, same UNIQUE, so a
+// pinged transfer and a walked one are one row. Nothing is signed by anyone:
+// the hash is a pointer, the chain is the witness.
+export interface PingResult {
+  tx_hash: string;
+  block_number: number;
+  transfers: TransferLog[];
+  rows_written: number;
+  payments: number;
+  sources: number;
+}
+
+export async function observeTransaction(env: Env, funderAddress: string, txHash: string, deps: ObserverDeps = {}): Promise<PingResult> {
+  const call = deps.rpc ?? rpc;
+  const urls = (deps.urls ?? observerRpcUrls)(env);
+  const now = deps.now ?? Date.now;
+  const funder = funderAddress.toLowerCase();
+  type Answer = { url: string; receipt: Record<string, unknown>; logs: TransferLog[] };
+  const answers: Answer[] = [];
+  let agreed: Answer[] | null = null;
+  let lastError = "";
+  for (const url of urls.slice(0, OBSERVER_PROVIDER_ATTEMPTS)) {
+    try {
+      const chain = await call(url, "eth_chainId", []);
+      if (typeof chain !== "string" || BigInt(chain) !== 8453n) continue;
+      const receipt = (await callWithRetry(call, url, "eth_getTransactionReceipt", [txHash])) as Record<string, unknown> | null;
+      if (!receipt) throw new Error("transaction not found or not yet mined");
+      if (String(receipt.status).toLowerCase() !== "0x1") throw new Error("transaction reverted");
+      const head = (await callWithRetry(call, url, "eth_getBlockByNumber", ["finalized", false])) as { number?: string } | null;
+      if (!head || typeof head.number !== "string") continue;
+      const block = Number(BigInt(String(receipt.blockNumber)));
+      if (block > Number(BigInt(head.number))) throw new Error(`block ${block} is not yet finalized (finalized head ${Number(BigInt(head.number))})`);
+      const logs = parseTransferLogs(receipt.logs).filter((l) => l.from === funder && OBSERVED_TOKENS.includes(l.token));
+      const answer = { url, receipt, logs };
+      const twin = answers.find((a) => logsAgree(a.logs, logs) && String(a.receipt.blockHash) === String(receipt.blockHash));
+      answers.push(answer);
+      if (twin) {
+        agreed = [twin, answer];
+        break;
+      }
+    } catch (e) {
+      lastError = String(e).slice(0, 160);
+    }
+  }
+  if (!agreed) throw new Error(`no two providers agreed on transaction ${txHash} (${answers.length} answered)${lastError ? ": " + lastError : ""}`);
+  const logs = agreed[1]!.logs;
+  const block = Number(BigInt(String(agreed[1]!.receipt.blockNumber)));
+  const index = await bindingIndexFor(env, funder);
+  const stamp = now();
+  let payments = 0;
+  let written = 0;
+  for (const t of logs) {
+    const c = classifyTransfer(t, index);
+    const r = await env.DB.prepare(
+      `INSERT OR IGNORE INTO observed_transfers (funder_address, to_address, token, amount_atomic, tx_hash, log_index, block_number, kind, binding_id, listing_id, citizen_id, sources, observed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 2, ?)`,
+    ).bind(funder, t.to, t.token, t.amount_atomic, t.tx_hash, t.log_index, t.block_number, c.kind, c.binding_id, c.listing_id, c.citizen_id, stamp).run();
+    if (Number(r.meta?.changes ?? 0) > 0) {
+      written++;
+      if (c.kind === "payment") payments++;
+    }
+  }
+  return { tx_hash: txHash, block_number: block, transfers: logs, rows_written: written, payments, sources: 2 };
+}
+
 // What the read surfaces serve. Kept here so every page that mentions an
 // observed payment describes it the same way.
 export const OBSERVED_PAYMENT_NOTE =
-  "An observed payment is a USDC or 1F916 transfer this registry read off Base, from the wallet this listing names as its funder to an address a citizen bound on it, for exactly the bound amount and asset, where that address, amount and asset match a binding on no other listing of the same funder, returned identically by two providers in the registry's pool and behind the finalized head. It is not a receipt: nobody signed a statement about it, and it does not say which submission it was for. A transfer to a bound address for some other amount, or one that could belong to more than one of the funder's listings, is recorded against the citizen only, credited to no listing. A listing that names no funder wallet is never walked and serves null here, not zero. It is served so that money that moved is never invisible because a form was not filed.";
+  "An observed payment is a USDC or 1F916 transfer this registry read off Base, from the wallet this listing names as its funder to an address a citizen bound on it, for exactly the bound amount and asset, where that address, amount and asset match a binding on no other listing of the same funder, returned identically by two providers in the registry's pool and behind the finalized head. It is not a receipt: nobody signed a statement about it, and it does not say which submission it was for. A transfer to a bound address for some other amount, or one that could belong to more than one of the funder's listings, is recorded against the citizen only, credited to no listing. A listing that names no funder wallet is never walked and serves null here, not zero. It is served so that money that moved is never invisible because a form was not filed. Since 2026-09-17 an observed payment on a REQUESTER-settled listing also settles: see settlement_note on the row, and OBSERVED_SETTLEMENT_NOTE on GET /api/rail.";

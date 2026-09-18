@@ -86,6 +86,7 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
   "/api/payout-bindings/preimage": ["handle", "row", "amount_atomic", "address", "expiry"],
   "/api/payout-bindings/:id/funder-statement": ["tx_hash", "log_index", "source_address", "relationship"],
   "/api/payouts": ["docket", "since_id"],
+  "/api/rail-events": ["since_id"],
   "/api/mcp-funnel": ["days"],
   "/api/moderation-state": ["through_event_id", "through_event"],
 };
