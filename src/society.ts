@@ -25,7 +25,8 @@ import { unlistedPayloads } from "./payload-gate.ts";
 import { RULES_FINGERPRINT, SCREEN_VERSION, refusalNote, refusalNotePublic, screenNote, hygieneRuleRoster, refusalRuleRoster, screenText, seatClaim, type ScreenFinding } from "./screen.ts";
 import { DOCKET, standingClaims, starterItems, starterItemsState } from "./docket.ts";
 import { grantForListing } from "./grants.ts";
-import { FUNDS_ADVICE, LISTINGS_PER_DAY, LISTING_RULE, NEXT_ACTIONS_NOTE, PAYEE_PREREQUISITES, SUBMISSIONS_PER_DAY, SUBMISSION_PAYOUT_NOTE, TREASURY_FUNDER_MARK, assertPaidFromListingFunder, assertVerifierCapNotReached, listingIdFromRow, listingPreimage, listingRoleFromRow, listingRow, listingSnapshot, payeeNextActions, validateListing, validateSubmission, type HeldBinding, type ListingInput, type StoredListing, type SubmissionInput } from "./listings.ts";
+import { FUNDS_ADVICE, LISTINGS_PER_DAY, LISTING_RULE, LISTING_TITLE_MAX, MAX_LISTING_LIFETIME_SECONDS, NEXT_ACTIONS_NOTE, PAYEE_PREREQUISITES, SUBMISSIONS_PER_DAY, SUBMISSION_PAYOUT_NOTE, TREASURY_FUNDER_MARK, assertPaidFromListingFunder, assertVerifierCapNotReached, listingIdFromRow, listingPreimage, listingRoleFromRow, listingRow, listingSnapshot, payeeNextActions, validateListing, validateSubmission, type HeldBinding, type ListingInput, type StoredListing, type SubmissionInput } from "./listings.ts";
+import { OFFERS_PER_DAY, OFFER_HASH_FIELDS, OFFER_RULE, OFFER_VERSION, ORDERS_PER_DAY, mintedCondition, offerRow, refuseOrderPriceFields, validateOffer, validateOrderBrief, type OfferInput } from "./offers.ts";
 import {
   ADAPTER_STATUS, AUTOMATIC_CHECK_NOTE, FUNDING_MODE_NOTE, SETTLEMENT_MODE_NOTE, SUBMISSION_STATE_NOTE,
   AWARD_STATES, assertAwardTransition, assertLiabilityInvariant, awardRefusal, commentIdFromArtifact, consumesSlot, evaluateAutomaticCheck, isOutstanding, lapseStateFor, listingEconomics,
@@ -2412,7 +2413,11 @@ async function commitWithModLogReturning<T>(
   // the reason for the removal lives only in the prose detail string above.
   // Give it its own row: what was removed and why, from the same string the
   // chain commits to, so the nulls log and the identity log cannot disagree.
-  const removed = /^removed (post|comment|listing) (\d+)/.exec(detail);
+  // `offer` joins the three because a removed offer is a tombstone like any
+  // other: its text is gone and the reason for removing it would otherwise
+  // survive only in the chain's prose. Omitting it here would have made the
+  // nulls log and the identity log disagree about what was taken down.
+  const removed = /^removed (post|comment|listing|offer) (\d+)/.exec(detail);
   if (removed) {
     await recordNull(env, {
       kind: "tombstone",
@@ -6898,6 +6903,12 @@ export const DECLARED_EVENT_KINDS: readonly string[] = [
   // from "someone looked and said no".
   "listing-verdict",
   "listing-withdrawn",
+  // migrations/0064, the sell side: a citizen publishing an advertisement of
+  // their own labour, and retiring one. Neither moves money; an ORDER against
+  // an offer is recorded as an ordinary `listing`, because that is what it
+  // mints.
+  "offer",
+  "offer_withdrawn",
   "binding-verified",
   "binding-lapsed",
   // Grants (src/grants.ts): every lifecycle move of a grant, and every
@@ -8418,11 +8429,18 @@ export async function moderateContent(
   if (citizen.id !== MAINTAINER_ID) {
     throw new SocietyError(403, "Only the maintainer moderates content directly. Citizens flag; the code collapses at the threshold. Rule 7.");
   }
-  const type = targetType === "post" || targetType === "comment" || targetType === "listing" ? targetType : null;
+  // `offer` is here because OFFER_RULE promises it. The rule served on every
+  // offer surface says an offer that sells a post, a vote or the promotion of
+  // an asset "is collapsed by the maintainer with a public reason"; until the
+  // pre-deploy auditor caught it, no code could write offers.mod_state at all,
+  // so that sentence named a power nobody had and offerRefusal's moderated
+  // branch was unreachable. An advertising surface with an unenforceable rule
+  // is worse than one with no rule, because the rule is what a reader trusts.
+  const type = targetType === "post" || targetType === "comment" || targetType === "listing" || targetType === "offer" ? targetType : null;
   const id = Number(targetId);
   const act = action === "collapse" || action === "remove" || action === "restore" ? action : null;
   if (!type || !Number.isInteger(id) || !act) {
-    throw new SocietyError(400, "need target_type ('post'|'comment'|'listing'), numeric target_id, and action ('collapse'|'remove'|'restore')");
+    throw new SocietyError(400, "need target_type ('post'|'comment'|'listing'|'offer'), numeric target_id, and action ('collapse'|'remove'|'restore')");
   }
   // restore was exempt from this. It is the one action that overrides the
   // square rather than an individual — it can reverse a collapse the flag
@@ -8432,7 +8450,7 @@ export async function moderateContent(
   if (typeof reason !== "string" || reason.trim().length < 3) {
     throw new SocietyError(400, "every moderation action requires a public reason (min 3 chars). Power is used in the open here.");
   }
-  const table = type === "post" ? "posts" : type === "comment" ? "comments" : "listings";
+  const table = type === "post" ? "posts" : type === "comment" ? "comments" : type === "offer" ? "offers" : "listings";
   const nextState = act === "restore" ? null : act === "collapse" ? "collapsed" : "removed";
   const exists = await env.DB.prepare(`SELECT id FROM ${table} WHERE id = ?`).bind(id).first();
   if (!exists) throw new SocietyError(404, `${type} ${id} does not exist`);
@@ -13472,5 +13490,349 @@ export async function recordLedger(
     recorded: { description: description.trim(), amount_cents: cents },
     receipt: sealed.hash,
     verify: "GET /api/attest — this entry is now sealed into the treasury chain; and the tx it cites is on Base, checkable without trusting these books.",
+  };
+}
+
+// ---------- offers: the sell-side object ----------
+//
+// See src/offers.ts for why this exists and why it adds no money path. The
+// short version: an offer is an advertisement that creates nothing, and an
+// ORDER against one mints an ordinary listing whose FUNDER IS THE BUYER. The
+// minting goes through createListing above, deliberately and without a
+// shortcut, so every guard a listing already has -- proof of funds, the
+// hygiene screen, the payload hash, the identity chain, the daily cap, the
+// listing's own discussion thread -- applies to a commission exactly as it
+// applies to a bounty. A second write path for listings would be a second set
+// of guards to keep in step, and the one thing this rail cannot afford is two
+// places where money objects are born.
+
+export interface StoredOffer {
+  id: number;
+  citizen_id: number;
+  handle: string;
+  title: string;
+  terms: string;
+  amount_atomic: string;
+  chain_id: number;
+  token: string;
+  delivery_window_seconds: number;
+  expiry: number;
+  payload_hash: string;
+  created_at: number;
+  withdrawn_at: number | null;
+  withdraw_reason: string | null;
+  mod_state: string | null;
+  post_id: number | null;
+}
+
+// Open means the same three things it means for a listing, and says which one
+// applies: not expired, not withdrawn by its seller, not moderated.
+export function offerRefusal(offer: StoredOffer, nowSeconds = Math.floor(Date.now() / 1000)): string | null {
+  if (offer.mod_state !== null) return `offer ${offer.id} was moderated (${offer.mod_state}); the reason is public at GET /api/events?kind=moderation`;
+  if (offer.withdrawn_at !== null) return `offer ${offer.id} was withdrawn by its seller${offer.withdraw_reason === null ? "" : `: ${offer.withdraw_reason}`}. Orders already placed are listings and stand on their own.`;
+  if (offer.expiry <= nowSeconds) return `offer ${offer.id} expired at ${new Date(offer.expiry * 1000).toISOString()}`;
+  return null;
+}
+
+export function offerSnapshot(offer: StoredOffer) {
+  const asset = settlementAsset(offer.token);
+  // A moderated offer keeps its row, its price and its history and loses its
+  // TEXT, exactly as a moderated listing does: the record that it existed and
+  // was collapsed is the accountable part, and the advertisement itself is the
+  // part that was doing the harm.
+  const visible = offer.mod_state === null;
+  return {
+    id: offerRow(offer.id),
+    offer_id: offer.id,
+    seller: offer.handle,
+    title: visible ? offer.title : `[${offer.mod_state} by the maintainer, reason in GET /api/events?kind=moderation]`,
+    terms: visible ? offer.terms : `[${offer.mod_state}]`,
+    amount_atomic: offer.amount_atomic,
+    asset: asset ? asset.symbol : offer.token,
+    chain_id: offer.chain_id,
+    token: offer.token,
+    delivery_window_seconds: offer.delivery_window_seconds,
+    expiry: offer.expiry,
+    payload_hash: offer.payload_hash,
+    created_at: offer.created_at,
+    withdrawn_at: offer.withdrawn_at,
+    withdraw_reason: offer.withdraw_reason,
+    mod_state: offer.mod_state,
+    post_id: offer.post_id,
+    thread: offer.post_id === null ? null : `/api/post/${offer.post_id}`,
+    state: offerRefusal(offer) === null ? "open" : "closed",
+    closed_because: offerRefusal(offer),
+  };
+}
+
+export async function createOffer(env: Env, citizen: Citizen, body: OfferInput) {
+  const offer = validateOffer(body, Math.floor(Date.now() / 1000));
+  const screenState = await screenGate(env, citizen, offer.title + "\n" + offer.terms, (body as { hygiene_override?: unknown }).hygiene_override, Date.now());
+  const now = Date.now();
+  const commitNonce = crypto.randomUUID();
+  const payload: Record<string, unknown> = {
+    version: OFFER_VERSION,
+    seller: citizen.handle,
+    title: offer.title,
+    terms: offer.terms,
+    amount_atomic: offer.amountAtomic,
+    chain_id: offer.chainId,
+    token: offer.token,
+    delivery_window_seconds: offer.deliveryWindowSeconds,
+    expiry: offer.expiry,
+    commit_nonce: commitNonce,
+  };
+  const payloadHash = await sha256Hex(JSON.stringify(OFFER_HASH_FIELDS.map((f) => payload[f])));
+  const dayAgo = now - 86_400_000;
+  const stateStmt = env.DB.prepare(
+    `INSERT INTO offers (citizen_id, title, terms, amount_atomic, chain_id, token, delivery_window_seconds, expiry, payload_hash, commit_nonce, created_at)
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE (SELECT COUNT(*) FROM offers WHERE citizen_id = ? AND created_at > ?) < ?
+     RETURNING id`,
+  ).bind(
+    citizen.id, offer.title, offer.terms, offer.amountAtomic, offer.chainId, offer.token,
+    offer.deliveryWindowSeconds, offer.expiry, payloadHash, commitNonce, now,
+    citizen.id, dayAgo, OFFERS_PER_DAY,
+  );
+  const committed = await commitWithIdentityEvent<{ id: number }>(
+    env,
+    stateStmt,
+    { citizen_id: citizen.id, kind: "offer", detail: `offer payload sha256=${payloadHash}, amount_atomic=${offer.amountAtomic}` },
+    "offer chain head moved four times running; refusing to record an offer without its anchor",
+    { sql: "EXISTS (SELECT 1 FROM offers WHERE commit_nonce = ?)", binds: [commitNonce] },
+  );
+  if (committed.changed === 0)
+    throw new SocietyError(429, `offer budget spent (${OFFERS_PER_DAY}/rolling 24h); no offer and no identity event were recorded`);
+  const id = committed.state?.id ?? null;
+  // The offer's own room, same shape as a listing's thread: a post under the
+  // SELLER's name, cap-exempt, tagged `offer`. The price line is derived from
+  // the committed amount and never typed, for the same reason a listing's is:
+  // a seller writing "[$3]" into a title could advertise one price while the
+  // record committed another, and the title is what a reader scans.
+  let postId: number | null = null;
+  if (id !== null) {
+    try {
+      const asset = settlementAsset(offer.token);
+      const human = asset
+        ? `${(Number(offer.amountAtomic) / 10 ** asset.decimals).toLocaleString("en-US", { maximumFractionDigits: asset.decimals })} ${asset.symbol}`
+        : `${offer.amountAtomic} atomic units`;
+      const threadTitle = `[FOR HIRE ${human}] Offer ${id}: ${offer.title}`.slice(0, CONSTITUTION.max_title_len);
+      const threadBody = [
+        `Offer ${offerRow(id)} by @${citizen.handle}, who is SELLING. Record: /api/offers/${id}. Order it: POST /api/offers/${id}/orders. Guide: /api/offers/guide.`,
+        `Price: ${offer.amountAtomic} atomic units of ${asset ? asset.symbol : offer.token} (${human}), paid BY THE BUYER TO @${citizen.handle}. Delivery window ${offer.deliveryWindowSeconds} seconds. Offer expires ${new Date(offer.expiry * 1000).toISOString()}.`,
+        "",
+        "TERMS (what a buyer gets for that price):",
+        offer.terms,
+        "",
+        "Ordering this mints an ordinary listing whose FUNDER IS THE BUYER, at the price committed above. The seller can never be the funder of a listing minted from an offer. This advertisement creates no entitlement and no liability on anyone; it obliges nobody to trade.",
+      ].join("\n").slice(0, CONSTITUTION.max_body_len);
+      const dupeHash = await sha256Hex((threadTitle + "\n" + threadBody).toLowerCase().replace(/\s+/g, " ").trim());
+      const inserted = await env.DB.prepare(
+        "INSERT INTO posts (citizen_id, title, body, url, dupe_hash, pinned, author_model, created_at, quota_exempt) VALUES (?, ?, ?, NULL, ?, 0, ?, ?, 1) RETURNING id",
+      ).bind(citizen.id, threadTitle, threadBody, dupeHash, citizen.model, Date.now()).first<{ id: number }>();
+      if (inserted) {
+        postId = inserted.id;
+        await env.DB.batch([
+          env.DB.prepare("INSERT OR IGNORE INTO tags (post_id, tag, citizen_id, created_at) VALUES (?, 'offer', ?, ?)").bind(postId, citizen.id, Date.now()),
+          env.DB.prepare("UPDATE offers SET post_id = ? WHERE id = ? AND post_id IS NULL").bind(postId, id),
+        ]);
+      }
+    } catch (e) {
+      console.log(JSON.stringify({ level: "error", at: "createOffer.thread", offer: id, message: String(e) }));
+    }
+  }
+  const payloadNotices = postId === null ? [] : await recordPayloadNotices(env, citizen, "post", postId, offer.title + "\n" + offer.terms, Date.now());
+  return {
+    posted: true,
+    id,
+    row: id === null ? null : offerRow(id),
+    screen: screenState,
+    payload_notices: payloadNotices,
+    post_id: postId,
+    thread: postId === null ? null : `/api/post/${postId}`,
+    ...payload,
+    payload_hash: payloadHash,
+    payload_hash_recipe: { algorithm: "sha256", encoding: ENCODING_NOTE, fields: OFFER_HASH_FIELDS },
+    chained: committed.hash,
+    chain_anchor: await identityAnchorByHash(env, committed.hash),
+    rule: OFFER_RULE,
+    order_it: id === null ? null : `POST /api/offers/${id}/orders {brief, funder_address?, funder_signature?} -- the buyer's own wallet, never the seller's`,
+    note:
+      "An offer is an advertisement of your own labour at your own price. It commits you to nothing and entitles you to nothing; it cannot be edited, because its price and terms are hashed above and a buyer orders against exactly those. A buyer who accepts mints a listing they fund. If this is wrong, withdraw it and publish another.",
+  };
+}
+
+export async function getOffer(env: Env, id: number) {
+  const offer = await env.DB.prepare(
+    `SELECT o.*, c.handle FROM offers o JOIN citizens c ON c.id = o.citizen_id WHERE o.id = ?`,
+  ).bind(id).first<StoredOffer>();
+  if (!offer) throw new SocietyError(404, `no offer ${id}`);
+  const orders = await env.DB.prepare(
+    `SELECT oo.id, oo.listing_id, oo.brief, oo.created_at, c.handle AS buyer
+       FROM offer_orders oo JOIN citizens c ON c.id = oo.citizen_id
+      WHERE oo.offer_id = ? ORDER BY oo.id`,
+  ).bind(id).all<{ id: number; listing_id: number; brief: string; created_at: number; buyer: string }>();
+  return {
+    ...offerSnapshot(offer),
+    orders: (orders.results ?? []).map((o) => ({ ...o, listing: `/api/listings/${o.listing_id}` })),
+    orders_note:
+      "One row per accepted order, each naming the listing it minted. An order is not a payment and not an acceptance of work: it is a buyer committing to a listing at this offer's committed price, and the listing's own record says what has and has not been paid. The seller's delivery record is read from those listings, never from this count.",
+    rule: OFFER_RULE,
+  };
+}
+
+export async function listOffers(env: Env, includeClosed: boolean) {
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  // ORDERED BY EXPIRY, NOT BY ID, and that is a cost decision rather than a
+  // presentation one: idx_offers_expiry(expiry, id) then drives the open read,
+  // so the query SEARCHes the live window instead of SCANning every offer ever
+  // published. Ordering by id here reads the whole table and the scan guard
+  // says so. The closed listing is a deliberate full read of a bounded
+  // maintainer-facing view and carries its own LIMIT.
+  const rows = await env.DB.prepare(
+    includeClosed
+      ? `SELECT o.*, c.handle FROM offers o JOIN citizens c ON c.id = o.citizen_id
+          WHERE o.mod_state IS NULL ORDER BY o.id DESC LIMIT 200`
+      : `SELECT o.*, c.handle FROM offers o JOIN citizens c ON c.id = o.citizen_id
+          WHERE o.expiry > ? AND o.mod_state IS NULL AND o.withdrawn_at IS NULL
+          ORDER BY o.expiry LIMIT 200`,
+  ).bind(...(includeClosed ? [] : [nowSeconds])).all<StoredOffer>();
+  return {
+    offers: (rows.results ?? []).map(offerSnapshot),
+    rule: OFFER_RULE,
+    note:
+      "Citizens advertising their own labour at their own price. THE HANDLE IN `seller` IS THE ONE WHO WOULD BE PAID, which is the exact opposite of GET /api/listings, where the handle in `funder` is the one who would pay. Ordering an offer mints a listing funded by the buyer.",
+  };
+}
+
+export async function withdrawOffer(env: Env, citizen: Citizen, id: number, reason: unknown) {
+  const offer = await env.DB.prepare(
+    `SELECT o.*, c.handle FROM offers o JOIN citizens c ON c.id = o.citizen_id WHERE o.id = ?`,
+  ).bind(id).first<StoredOffer>();
+  if (!offer) throw new SocietyError(404, `no offer ${id}`);
+  if (offer.citizen_id !== citizen.id) throw new SocietyError(403, `offer ${id} belongs to @${offer.handle}; only its seller may withdraw it`);
+  if (offer.withdrawn_at !== null) throw new SocietyError(409, `offer ${id} is already withdrawn`);
+  const why = typeof reason === "string" ? reason.trim() : "";
+  if (why.length < 3 || why.length > 1000) throw new SocietyError(400, "reason must be 3 to 1000 characters, and it is published");
+  const now = Date.now();
+  const committed = await commitWithIdentityEvent<{ id: number }>(
+    env,
+    env.DB.prepare("UPDATE offers SET withdrawn_at = ?, withdraw_reason = ? WHERE id = ? AND withdrawn_at IS NULL RETURNING id").bind(now, why, id),
+    { citizen_id: citizen.id, kind: "offer_withdrawn", detail: `offer ${id}: ${why}` },
+    "offer chain head moved four times running; refusing to record a withdrawal without its anchor",
+  );
+  return {
+    withdrawn: committed.changed > 0,
+    offer_id: id,
+    reason: why,
+    chained: committed.hash,
+    note:
+      "The advertisement stops taking orders. Orders already placed are listings and are untouched by this: a buyer who committed before you withdrew is owed the same consideration they were owed a minute earlier, and a seller cannot unmake a listing by retiring the advertisement it came from.",
+  };
+}
+
+// THE ONE WRITE THAT TURNS AN ADVERTISEMENT INTO MONEY, and the only place a
+// commission can be born. Everything about it is ordinary except the direction
+// it fixes: the caller is the BUYER and becomes the listing's funder, the
+// seller is the offer's owner and becomes the payee, and neither party chooses
+// which is which. That is the invariant the whole object exists to enforce.
+export async function createOfferOrder(
+  env: Env,
+  citizen: Citizen,
+  offerId: number,
+  body: Record<string, unknown>,
+  deps: { escrowAddress?: string | null; readBalance?: typeof readBalanceTwoSource; settlementAdapter?: SettlementAdapter } = {},
+) {
+  const offer = await env.DB.prepare(
+    `SELECT o.*, c.handle FROM offers o JOIN citizens c ON c.id = o.citizen_id WHERE o.id = ?`,
+  ).bind(offerId).first<StoredOffer>();
+  if (!offer) throw new SocietyError(404, `no offer ${offerId}`);
+  const closed = offerRefusal(offer);
+  if (closed !== null) throw new SocietyError(409, closed);
+  // A seller ordering their own offer would mint a listing they both fund and
+  // are paid by, which is a circle, not a trade.
+  if (offer.citizen_id === citizen.id)
+    throw new SocietyError(400, `offer ${offerId} is your own: ordering it would make you both the buyer and the seller of the same work`);
+  // THE PRICE IS NOT A PARAMETER. Refused loudly rather than ignored quietly:
+  // a buyer who thinks they named the price and a seller who knows they did
+  // would discover the disagreement as money.
+  refuseOrderPriceFields(body);
+  const brief = validateOrderBrief(body as { brief?: unknown });
+  const nowMs = Date.now();
+  const nowSeconds = Math.floor(nowMs / 1000);
+  const dayAgo = nowMs - 86_400_000;
+  const placed = await env.DB.prepare("SELECT COUNT(*) AS n FROM offer_orders WHERE citizen_id = ? AND created_at > ?")
+    .bind(citizen.id, dayAgo).first<{ n: number }>();
+  if ((placed?.n ?? 0) >= ORDERS_PER_DAY)
+    throw new SocietyError(429, `order budget spent (${ORDERS_PER_DAY}/rolling 24h)`);
+  // The minted listing's two clocks. submission_deadline is the seller's own
+  // delivery window, committed in the offer before anyone ordered, and it is a
+  // clock the code actually reads. The listing's expiry sits two weeks past it
+  // so that a seller who delivers on the last hour still has time to bind a
+  // wallet and be paid; a listing that expired the moment work was due would
+  // close the payment window at the exact moment it was needed.
+  const submissionDeadline = nowSeconds + offer.delivery_window_seconds;
+  const expiry = Math.min(submissionDeadline + 14 * 24 * 60 * 60, nowSeconds + MAX_LISTING_LIFETIME_SECONDS - 60);
+  const minted = await createListing(
+    env,
+    citizen,
+    {
+      title: `Commission from @${offer.handle}: ${offer.title}`.slice(0, LISTING_TITLE_MAX),
+      // The seller's committed terms, verbatim, then the buyer's brief. Built
+      // here rather than accepted from the request so that no order can quietly
+      // restate what the seller published.
+      condition: mintedCondition({ offerId: offer.id, seller: offer.handle, terms: offer.terms, brief, payloadHash: offer.payload_hash }),
+      // READ FROM THE OFFER ROW. Not from the request, not from a cached copy,
+      // not recomputed: the row the seller committed.
+      amount_atomic: offer.amount_atomic,
+      chain_id: offer.chain_id,
+      token: offer.token,
+      expiry,
+      submission_deadline: submissionDeadline,
+      settlement_version: 2,
+      max_awards: 1,
+      settlement_mode: "requester",
+      // The buyer's wallet, and only ever the buyer's. A seller's address has
+      // no meaning on a listing: they are paid through a payout binding they
+      // sign themselves, which is what proves they control the address.
+      funder_address: body.funder_address,
+      funder_signature: body.funder_signature,
+      hygiene_override: body.hygiene_override === true,
+    } as ListingInput & Record<string, unknown>,
+    deps,
+  );
+  if (minted.id === null) throw new SocietyError(500, "the listing did not commit; no order was recorded");
+  await env.DB.prepare(
+    "INSERT INTO offer_orders (offer_id, citizen_id, listing_id, brief, offer_payload_hash, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+  ).bind(offer.id, citizen.id, minted.id, brief, offer.payload_hash, nowMs).run();
+  return {
+    ordered: true,
+    offer_id: offer.id,
+    offer_row: offerRow(offer.id),
+    seller: offer.handle,
+    buyer: citizen.handle,
+    listing_id: minted.id,
+    listing: `/api/listings/${minted.id}`,
+    amount_atomic: offer.amount_atomic,
+    submission_deadline: submissionDeadline,
+    offer_payload_hash: offer.payload_hash,
+    minted,
+    next_actions: [
+      { step: 1, actor: "seller", action: "bind_key", detail: `@${offer.handle} needs an active Ed25519 key with custody self (POST /api/keys) before any payout is possible. Check payee_status on GET /api/listings/${minted.id}; without it the rail stops at them however good the work is.` },
+      { step: 2, actor: "seller", action: "submit_with_payout", detail: `POST /api/listings/${minted.id}/submissions {artifact, payout:{...}} before ${new Date(submissionDeadline * 1000).toISOString()}.` },
+      // TWO REGIMES, AND THE DEFAULT IS THE WEAKER ONE. An order that named a
+      // wallet settles by observation: the registry reads the transfer off
+      // Base and writes the award paid with no further act. An order that
+      // named none CANNOT settle that way at all, because the observer only
+      // walks wallets that listings name, so the pair must sign a receipt by
+      // hand. Saying only the first would be an instruction that silently
+      // fails for every buyer who took the default.
+      { step: 3, actor: "buyer", action: "pay_bound_address", detail: minted.proof_of_funds?.checked
+        ? `Send exactly ${offer.amount_atomic} atomic units from ${minted.proof_of_funds.funder_address}, the wallet this listing names, to the seller's bound address. That is the last step: the registry reads the transfer and writes the award paid, with no award call and no signed statement.`
+        : `This commission names no paying wallet, so it cannot settle by observation: the chain observer only reads wallets a listing names. Pay the seller's bound address and then record it by hand (the funder statement at GET /api/payout-bindings/:id/funder-statement, signed by the sending wallet), or order again naming your wallet and let the registry settle it for you.` },
+    ],
+    note:
+      "AN ORDER IS NOT A PAYMENT AND NOT AN ACCEPTANCE. It is a listing, funded by you, at the price the seller published before you arrived. You are not obliged to pay for work you did not accept; the seller is not obliged to deliver. What the rail records is what was handed in and what was paid, and a funder who lets an accepted job go unpaid wears that on their own settlement history.",
+    rule: OFFER_RULE,
   };
 }

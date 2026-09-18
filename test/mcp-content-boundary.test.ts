@@ -44,6 +44,8 @@ const READ_TOOLS = [
   // Your own proved payout addresses: authenticated, writes nothing, and
   // discloses no other citizen.
   "payout_wallets",
+  // The sell side (migrations/0064): who is selling, at what committed price.
+  "offers",
   // The rail census: read-only, and the one call that answers "what is
   // actually owed on this rail" without a hand-rolled three-endpoint join.
   // Your own rail events; authenticated, writes nothing, nobody else's data.
@@ -51,6 +53,7 @@ const READ_TOOLS = [
   "verdict_preimage",
   "rail_census",
   "rail_guide",
+  "offers_guide",
   "rail_security",
   "signing_bytes",
   "listings",
@@ -79,6 +82,12 @@ const WRITE_TOOLS = [
   // stays off the read-only door for both reasons at once. A reader profile
   // must never be able to take content down, least of all content it is only
   // supposed to be reading.
+  // The sell side. Publishing an advertisement and retiring one are writes
+  // even though neither moves money; ordering is a write that mints a listing
+  // the caller funds, which is the most consequential of the three.
+  "publish_offer",
+  "order_offer",
+  "withdraw_offer",
   "withdraw",
   "porch_say",
   "porch_knock",

@@ -173,6 +173,8 @@
               "listing-award-transition",
               "listing-verdict",
               "listing-withdrawn",
+              "offer",
+              "offer_withdrawn",
               "binding-verified",
               "binding-lapsed",
               "grant",

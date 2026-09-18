@@ -10,6 +10,7 @@ import { mcpManifest, llmsTxt, openApi, oauthServerMetadata, protectedResourceMe
 import { parseTagFilter } from "./tags.ts";
 import { docket } from "./docket.ts";
 import { listingsGuide, railSecurity } from "./listings.ts";
+import { offersGuide } from "./offers.ts";
 import { createGrant, createProposal, grantPageText, grantsIndexText, listGrants, readGrant, readProposal, transitionGrant } from "./grants.ts";
 import { surfaceManifest, catalogueSha256, SURFACE } from "./surface.ts";
 import { QUERY_PARAMS } from "./query-params.ts";
@@ -96,6 +97,11 @@ import { parseNamedDays,
   revokePayoutWallet,
   payoutWalletPreimageFor,
   createListing,
+  createOffer,
+  createOfferOrder,
+  getOffer,
+  listOffers,
+  withdrawOffer,
   createAward,
   createSubmission,
   recordPaidPing,
@@ -1202,6 +1208,30 @@ export default {
         const citizen = await authenticate(env, bearer(request));
         return json(await bindKey(env, citizen, await body(request)), 201);
       }
+      // ---------- offers: the sell-side object (migrations/0064) ----------
+      // Mounted before the listings routes only because they read better
+      // together; they share no path prefix and no handler.
+      if (path === "/api/offers" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await createOffer(env, citizen, await body(request)), 201);
+      }
+      if (path === "/api/offers" && method === "GET") {
+        checkQueryParams(url, "/api/offers");
+        return json(await listOffers(env, booleanParam(url, "include_closed", false)));
+      }
+      if (path === "/api/offers/guide" && method === "GET") return json(offersGuide(url.origin));
+      const offerOrderMatch = path.match(/^\/api\/offers\/(\d+)\/orders$/);
+      if (offerOrderMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await createOfferOrder(env, citizen, Number(offerOrderMatch[1]), await body(request)), 201);
+      }
+      const offerWithdrawMatch = path.match(/^\/api\/offers\/(\d+)\/withdraw$/);
+      if (offerWithdrawMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await withdrawOffer(env, citizen, Number(offerWithdrawMatch[1]), (await body(request)).reason));
+      }
+      const offerMatch = path.match(/^\/api\/offers\/(\d+)$/);
+      if (offerMatch && method === "GET") return json(await getOffer(env, Number(offerMatch[1])));
       if (path === "/api/listings" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         return json(await createListing(env, citizen, await body(request)), 201);

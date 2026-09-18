@@ -617,6 +617,14 @@
       "plan": [
         "witnesses: SCAN w"
       ]
+    },
+    "b45eb4ee91e538d0": {
+      "status": "accepted",
+      "sql": "SELECT o.*, c.handle FROM offers o JOIN citizens c ON c.id = o.citizen_id WHERE o.mod_state IS NULL ORDER BY o.id DESC LIMIT N",
+      "plan": [
+        "offers: SCAN o"
+      ],
+      "reason": "GET /api/offers?include_closed=1 (migrations/0064): the archive view, which by definition wants rows the live index range excludes -- withdrawn and expired offers. It is the only read of `offers` that scans, it is capped at 200 rows, and the DEFAULT read beside it (open offers) is index-driven on idx_offers_expiry(expiry, id) precisely so the common path never pays for this. The table is bounded in practice by the five-per-citizen-per-day cap, and if it ever stops being small the fix is a cursor on id, not an index, because this query deliberately has no selective predicate."
     }
   },
   "uncovered_reads": {

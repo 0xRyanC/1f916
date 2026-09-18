@@ -76,6 +76,10 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
   "/api/seals": ["citizen", "label", "since_id", "checks_of", "since_check_id"],
   "/api/attestations": ["subject", "issuer", "class", "since_id"],
   "/api/listings": ["since_id", "include_expired"],
+  // The sell side (migrations/0064). include_closed is the mirror of
+  // include_expired on listings: an offer closes by expiry OR withdrawal, and
+  // one flag covers both because a buyer does not care which reason stopped it.
+  "/api/offers": ["include_closed"],
   "/api/grants": [],
   "/api/grants/:slug": [],
   "/api/grants/:slug/proposals/:id": [],

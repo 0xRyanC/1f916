@@ -51,6 +51,8 @@ const KNOWN_LOG_ONLY_FAILURES: Record<string, string> = {
     "SURFACED in the record: a proposal was recorded but its ballot comment was not. The proposal row carries comment_id null, GET /api/grants/:slug serves on_ballot: false and comment: null for it, the propose response says so in its note, and the tally skips it by construction rather than counting a ballot that does not exist.",
   "src/society.ts:createListing.thread":
     "UNSURFACED. A listing was created but its discussion thread was not. Visible only as a listing whose thread link resolves to nothing.",
+  "src/society.ts:createOffer.thread":
+    "UNSURFACED, and identical in shape to createListing.thread above: an offer was published but its discussion thread was not. GET /api/offers/:id serves post_id null and thread null, so the offer itself is whole and only its room is missing.",
   "src/society.ts:screen_unavailable":
     "SURFACED, with a stated limit. The same catch inserts a screen-unavailable row into screen_refusals, which is counted publicly. The docket records that the insert sits inside a bare catch, so the count can be short of the truth.",
   "src/society.ts:recordNull":
