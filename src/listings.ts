@@ -237,6 +237,14 @@ export function payeeNextActions(input: {
   // one listing and step 5 is not automatic. Unknown reads as zero, and the
   // general condition is stated in the step's own text.
   sameAddressElsewhere?: number;
+  // Every worker award seat on a v2 listing is taken (awarded_slots_used is
+  // max_awards) and this citizen holds none of them. The settler guards the
+  // seat inside its award INSERT and declines the transfer as paid, not
+  // awarded, and createAward refuses it as exhausted, so a worker ladder
+  // past the cap must not say the payment will settle: the verifier-cap shape
+  // again. A citizen who holds one of the seats is not blocked by it, because
+  // a payment to them closes their own award. Absent reads as false.
+  workerSeatsFull?: boolean;
 }): NextAction[] {
   const { listingId, keyBound, submitted, held, closed, verifierPriceAtomic, verifierSlotsFull, unresolved } = input;
   // Same three-way condition as createSubmission's `next`: requester mode, a
@@ -308,7 +316,9 @@ export function payeeNextActions(input: {
       ? `listing ${listingId} is moderated, and the receipt path refuses any payment against it however the binding was filed; the reason is in GET /api/events?kind=moderation`
       : role === "verifier" && verifierSlotsFull
         ? `every paid verifier slot on listing ${listingId} is already settled, and the receipt path refuses the next one`
-        : null;
+        : role === 'worker' && input.workerSeatsFull === true
+          ? `every award seat on listing ${listingId} is taken: the chain observer declines a further transfer to this address as paid, not awarded, a receipt creates no award, and POST /api/listings/${listingId}/award refuses it as exhausted`
+          : null;
   steps.push({
     step: 4,
     actor: "funder",

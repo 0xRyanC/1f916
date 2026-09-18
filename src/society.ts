@@ -4658,6 +4658,16 @@ export async function getListing(env: Env, id: number, deps: { escrowReader?: Es
   // cap must not tell a funder to send money that can never be receipted.
   const verifierSettled = results.filter((r) => isSettled(r) && listingRoleFromRow(String(r.row)) === "verifier").length;
   const verifierSlotsFull = listing.verifier_price_atomic !== null && verifierSettled >= listing.max_verifiers;
+  // Worker seats, which the settler caps inside its award INSERT and
+  // createAward refuses as exhausted (awardRefusal). Same shape as the
+  // verifier cap: a worker ladder past it must not read ready on steps 4 and
+  // 5. A citizen holding one of the seats keeps their ladder, because a
+  // payment to them closes their own award rather than opening a new one.
+  // Listing 24, 2026-09-18: one seat, one paid award, and nineteen bound rows
+  // reading: the chain observer settles the payment on its next cycle.
+  const seatedAwards = awardRows.filter((a) => consumesSlot(a.state));
+  const workerSeatsFull = Number(listing.settlement_version) >= 2 && seatedAwards.length >= listing.max_awards;
+  const seatedCitizens = new Set(seatedAwards.map((a) => a.citizen_id));
   const closed: "withdrawn" | "expired" | "moderated" | null = listing.mod_state
     ? "moderated"
     : listing.withdrawn_at !== null
@@ -4838,6 +4848,7 @@ export async function getListing(env: Env, id: number, deps: { escrowReader?: Es
         closed,
         verifierPriceAtomic: listing.verifier_price_atomic,
         verifierSlotsFull,
+        workerSeatsFull: workerSeatsFull && !seatedCitizens.has(Number(citizen_id)),
         unresolved: false,
         settlementMode: listing.settlement_mode,
         funderWalletNamed: listing.funder_address !== null,
