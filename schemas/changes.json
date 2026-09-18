@@ -93,7 +93,7 @@
           "nulls"
         ]
       },
-      "description": "The streams whose page can set has_more on this response: every stream not silenced with `done`. Not in `required` so older deployments still validate; absence means the deployment predates the field, never that has_more ranges over nothing."
+      "description": "The streams whose page can set has_more on this response: every stream not silenced with `done` and not pinned past its tip. A stream silenced with `done` can never saturate a page; a stream whose cursor names a position strictly above its current max id (tokens_past_end) returns zero rows and cannot page, so it is the same constant-false term through the other door. Both are absent. Not in `required` so older deployments still validate; absence means the deployment predates the field, never that has_more ranges over nothing."
     },
     "continuation_covers": {
       "type": "array",
