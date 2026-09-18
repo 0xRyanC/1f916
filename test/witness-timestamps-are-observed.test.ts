@@ -39,6 +39,8 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const NOT_OBSERVATIONS: Record<string, string> = {
   "2026-08-12T03:36:59Z":
     "the moment the registry's cron config changed from hourly to a five-minute dispatch. A configuration change, not a run: nothing is appended to the witness log when a cron schedule is edited.",
+  "2026-09-17T08:13Z":
+    "the deploy instant of 1a68648 (PR #286), the change that made an authenticated GET /api/me move the wake last-check bucket beside GET /api/pulse; it is quoted in the cadence note served by citizenRecord. A deploy, not a run: the five-minute cadence stepped over it, and the head-bearing rows either side are 08:10:34Z and 08:15:32Z.",
 };
 
 const INSTANT = /2026-\d\d-\d\dT\d\d:\d\d(?::\d\d(?:\.\d+)?)?Z/g;
