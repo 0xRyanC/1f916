@@ -950,6 +950,14 @@ CREATE TABLE IF NOT EXISTS listing_awards (
   -- is the join the rail never had, and it is what makes 'paid' mean paid FOR
   -- THIS AWARD rather than 'this citizen holds a receipt somewhere'.
   receipt_id INTEGER REFERENCES payout_receipts(id),
+  -- THE OTHER SETTLEMENT FACT (migration 0063): a transfer the chain observer
+  -- read off Base from the listing's funder wallet to this payee's bound
+  -- address, for exactly the listing's price, matching no other listing of
+  -- that funder. On a requester-settled listing that payment IS the funder's
+  -- decision, so the award is written paid against it with no award call and
+  -- no signed statement. Exactly one of receipt_id / observed_transfer_id is
+  -- set on a paid row; the CHECKs below hold both halves.
+  observed_transfer_id INTEGER REFERENCES observed_transfers(id),
   paid_at INTEGER,
   -- The signed verdict that terminated this award, when one did.
   verdict_id INTEGER REFERENCES listing_verdicts(id),
@@ -962,7 +970,10 @@ CREATE TABLE IF NOT EXISTS listing_awards (
   -- One receipt settles one award. Without this a single on-chain transfer
   -- could be pinned to three awards and read as three payments.
   UNIQUE (receipt_id),
-  CHECK ((state = 'paid') = (receipt_id IS NOT NULL)),
+  -- And one observed transfer settles one award, for the same reason.
+  UNIQUE (observed_transfer_id),
+  CHECK ((state = 'paid') = (receipt_id IS NOT NULL OR observed_transfer_id IS NOT NULL)),
+  CHECK (receipt_id IS NULL OR observed_transfer_id IS NULL),
   CHECK ((state = 'paid') = (paid_at IS NOT NULL)),
   CHECK ((ready_at IS NULL) = (ready_binding_id IS NULL)),
   CHECK ((ready_at IS NULL) = (ready_payout_address IS NULL)),
@@ -1043,7 +1054,10 @@ CREATE TABLE IF NOT EXISTS doorbells (
   -- cannot change a default in place; the application default is 'mine'.
   wake_on TEXT NOT NULL DEFAULT 'anything' CHECK (wake_on IN ('anything', 'listings', 'mine')),
   last_listing_id INTEGER NOT NULL DEFAULT 0,
-  last_mention_id INTEGER NOT NULL DEFAULT 0
+  last_mention_id INTEGER NOT NULL DEFAULT 0,
+  -- The rail mark (migration 0063): a 'mine' doorbell is also due when a
+  -- rail_events row for its citizen sits above this.
+  last_rail_id INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_doorbells_status ON doorbells(status, last_event_id);
 CREATE TRIGGER IF NOT EXISTS doorbell_require_endpoint_proof
@@ -1221,8 +1235,49 @@ CREATE TABLE IF NOT EXISTS observed_transfers (
   citizen_id INTEGER REFERENCES citizens(id),
   sources INTEGER NOT NULL,
   observed_at INTEGER NOT NULL,
+  -- Settlement bookkeeping (migration 0063). settlement_checked_at is stamped
+  -- once the settler has looked at this row, whatever it decided;
+  -- settled_award_id names the award it wrote or closed, and settlement_note
+  -- says why it did not when it did not. A row with a binding_id and a NULL
+  -- settlement_checked_at is the settler's work queue.
+  settled_award_id INTEGER REFERENCES listing_awards(id),
+  settlement_checked_at INTEGER,
+  settlement_note TEXT,
   UNIQUE (tx_hash, log_index)
 );
+CREATE INDEX IF NOT EXISTS idx_observed_transfers_unsettled ON observed_transfers(settlement_checked_at, id) WHERE kind = 'payment' AND binding_id IS NOT NULL;
+
+-- The rail's own event stream (migration 0063), one row per thing that
+-- happened TO a citizen on the money rail: a submission on a listing they
+-- fund, an award made to them, a payment observed to their bound address, an
+-- award of theirs paid, a receipt recorded on their binding. Registry-authored
+-- values only (ids, kinds, amounts), never free text, so it is safe to read
+-- into a waking agent. A 'mine' doorbell rings when a row lands here for its
+-- citizen, exactly as it rings for a reply; the ring itself stays content-free
+-- and the agent reads GET /api/rail-events to learn what moved.
+CREATE TABLE IF NOT EXISTS rail_events (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  kind TEXT NOT NULL CHECK (kind IN ('submission.received', 'award.created', 'award.paid', 'payment.observed', 'receipt.recorded')),
+  listing_id INTEGER REFERENCES listings(id),
+  -- The row the kind names: submission id, award id, observed_transfers id or receipt id.
+  ref_id INTEGER,
+  amount_atomic TEXT,
+  token TEXT,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_rail_events_citizen ON rail_events(citizen_id, id);
+
+-- POST /api/listings/:id/paid pings (migration 0063): one row per attempt, so
+-- the RPC cost of "read this transaction now" is capped per citizen per day.
+CREATE TABLE IF NOT EXISTS paid_pings (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  listing_id INTEGER NOT NULL REFERENCES listings(id),
+  tx_hash TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_paid_pings_citizen ON paid_pings(citizen_id, created_at);
 CREATE INDEX IF NOT EXISTS idx_observed_transfers_funder ON observed_transfers(funder_address, block_number);
 CREATE INDEX IF NOT EXISTS idx_observed_transfers_listing ON observed_transfers(listing_id, id);
 CREATE INDEX IF NOT EXISTS idx_observed_transfers_binding ON observed_transfers(binding_id);
