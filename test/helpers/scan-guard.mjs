@@ -47,6 +47,7 @@ import { DatabaseSync } from "node:sqlite";
 import { existsSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
+import { isRuntimeLikePattern } from "./d1-compat.mjs";
 
 const root = fileURLToPath(new URL("../../", import.meta.url));
 const CAPTURE_DIR = `${root}.sql-capture`;
@@ -255,6 +256,8 @@ for (const file of walkTs(`${root}src`)) {
     readLiterals.push({ file: file.slice(root.length), sql: raw.replace(/\s+/g, " ").trim() });
   }
 }
+
+const d1Hits = readLiterals.filter((l) => isRuntimeLikePattern(l.sql));
 // ANCHORED, so a literal is covered only by a statement that IS it, not by one
 // that merely contains its text (the pre-deploy auditor showed `SELECT id FROM
 // comments`, a full scan no test ran, passing as covered inside a longer
@@ -318,6 +321,12 @@ console.log(
     `(${debt} debt, ${Object.keys(baseline).length - debt} accepted in the baseline); ${notRun.length} baseline entries did not run.`,
 );
 let failed = false;
+if (d1Hits.length) {
+  failed = true;
+  console.error(`\nD1-COMPAT: ${d1Hits.length} LIKE/GLOB pattern(s) built from a value — they outgrow D1's SQLITE_MAX_LIKE_PATTERN_LENGTH at execution time in production while passing every offline test (node:sqlite has no such limit and none can be set):\n`);
+  for (const h of d1Hits) console.error(`  ${h.file}: ${h.sql.replaceAll("\u0000", "${…}").slice(0, 200)}\n`);
+  console.error("  Use a `?` bound by the client, or instr(col, ?) > 0 (no pattern at all). A bound `?` and a fully static '...' literal are fine.\n");
+}
 if (newScans.length) {
   failed = true;
   console.error(`\nSCAN-GUARD: ${newScans.length} NEW read(s) cost rows in proportion to a whole table:\n`);
