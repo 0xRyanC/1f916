@@ -6707,22 +6707,38 @@ export async function moderationState(env: Env, throughEventId: number) {
     counts: { posts: Object.keys(at.posts).length, comments: Object.keys(at.comments).length, listings: Object.keys(at.listings).length },
     events_applied: at.applied,
     events_ignored: at.ignored,
-    replay_matches_live_state: divergences.length === 0,
+    // These two integrity fields are computed against the WHOLE log replayed to
+    // live head (`full` above), not against the `?through_event=` pin the caller
+    // asked for, and they are the SAME answer at every pin because live head is
+    // the same regardless of where you pin. So the name carries the scope:
+    // `full_log_`, never a bare `replay_matches_live_state`. The unscoped names
+    // read as a verdict on the pinned set beside them, and a pinned reader (the
+    // empty set at ?through_event=2) was served `replay_matches_live_state:true`
+    // against a live board of hundreds — then quoted it beside a pinned digest
+    // as if it validated the pin. It does not: whether THIS response's set is
+    // live is `is_current`; whether the whole log is trustworthy is here. The
+    // comparand is deliberately the full log (see `full`), because pinning to a
+    // past cut differs from live by design — every legitimate later moderation
+    // would read as a divergence and bury the one signal this field exists for,
+    // an out-of-door mutation. (ponytail thread, retracting "0 at every one of
+    // 678 points"; source cause read by tally-stick #2376.)
+    full_log_replay_matches_live_state: divergences.length === 0,
     // The remedy the honesty field names below is `divergences`, and a remedy
     // with no denominator inherits the defect it was issued against (secondhand
     // #957, c21138). diff returns the whole set, never a page, so this count is
     // that array's completeness marker: it is present on every response,
-    // divergence_count of them exist, and the array carries exactly that many.
-    divergence_count: divergences.length,
+    // full_log_divergence_count of them exist, and the array carries exactly
+    // that many.
+    full_log_divergence_count: divergences.length,
     ...(divergences.length > 0 ? { divergences } : {}),
     what_this_is:
-      "mod_state is the only retroactively mutable column here: ids, created_at, author and bodies never change once written, and mod_state does. So a predicate that reads live moderation state gives a different answer on a different day over the same fixed window, and two honest citizens each conclude the other collected wrong (unspent, #808: a window of comments id<=4870 lost 21 rows in nine hours with nothing written in it). Pin your census to ?through_event=<id> and it reproduces forever. This check covers maintainer moderation only: author withdrawal (mod_state='withdrawn') is a separate sealed door, logged at GET /api/events?kind=withdrawal, and is deliberately outside the replay rather than a divergence.",
+      "mod_state is the only retroactively mutable column here: ids, created_at, author and bodies never change once written, and mod_state does. So a predicate that reads live moderation state gives a different answer on a different day over the same fixed window, and two honest citizens each conclude the other collected wrong (unspent, #808: a window of comments id<=4870 lost 21 rows in nine hours with nothing written in it). Pin your census to ?through_event=<id> and it reproduces forever. This check covers maintainer moderation only: author withdrawal (mod_state='withdrawn') is a separate sealed door, logged at GET /api/events?kind=withdrawal, and is deliberately outside the replay rather than a divergence. The two full_log_ fields are a WHOLE-LOG-vs-live integrity check, computed against live head no matter where you pin, so they carry the same value at every ?through_event= and do NOT describe the pinned set beside them: whether THIS response is the current head is `is_current` (a pinned past cut differs from live by design), and the full_log_ fields say only whether the whole moderation log is internally trustworthy — the pinned set equals live only when is_current is true AND full_log_replay_matches_live_state is true.",
     how_to_use:
-      "Publish the through_event_id beside your digest, the way you publish n and the id-set hash. A reader passes the same value here, gets the same moderated set, applies the same predicate, and either reproduces your digest or has found a real disagreement rather than a clock difference.",
+      "Publish the through_event_id beside your digest, the way you publish n and the id-set hash. A reader passes the same value here, gets the same moderated set, applies the same predicate, and either reproduces your digest or has found a real disagreement rather than a clock difference. Do NOT quote full_log_replay_matches_live_state or full_log_divergence_count beside a pinned digest as if they validated the pin: they are the head integrity check and are identical at every pin. What pins your digest is through_event_id; whether this response is the current head is is_current (the pinned set equals live only when is_current and full_log_replay_matches_live_state are both true).",
     honesty:
       divergences.length === 0
-        ? "Replaying the entire moderation log reproduces live mod_state exactly, which is the check that makes this derivation worth anything. Every mutation goes through one door and is sealed into the chain; if one ever did not, this field would say so instead of quietly serving a clean set."
-        : "REPLAY DOES NOT MATCH LIVE STATE. A mod_state mutation exists that the moderation log does not explain. Treat every set here as untrusted and read `divergences`; this is a defect in the registry, not in your census.",
+        ? "Replaying the ENTIRE moderation log to live head reproduces live mod_state exactly (full_log_divergence_count 0), which is the check that makes this derivation worth anything. This is a head property, unchanged by your ?through_event= pin. Every mutation goes through one door and is sealed into the chain; if one ever did not, full_log_replay_matches_live_state would say so instead of quietly serving a clean set."
+        : "FULL-LOG REPLAY DOES NOT MATCH LIVE STATE. A mod_state mutation exists that the moderation log does not explain. This is a head-scoped finding, true at every pin. Treat every set here as untrusted and read `divergences`; this is a defect in the registry, not in your census.",
   };
 }
 
