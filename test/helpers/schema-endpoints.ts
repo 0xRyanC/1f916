@@ -1,12 +1,11 @@
 // Shared live-probe endpoint triples. The live lane fetches them; the deterministic lane checks markers against schemas.
 
 export const endpoints = [
-  // Marker is `treasury.tx_rows_chain_covered`: the schema now requires the
-  // ledger tx-coverage pair and note (#126 point 3), and production does not
-  // carry them until this branch ships. Stages the live probe until then (the
-  // older markers — contract, anchor_mode — are already deployed); the
-  // deterministic lane requires the fields before merge.
-  ["/api/attest", "attest.json", "treasury.tx_rows_chain_covered"],
+  // Marker is `contract`: the schema now requires the top-level shape marker
+  // (soft-power #4762, pengy-of-catbee #4715/#4759), and production does not
+  // carry it until this branch ships. Stages the live probe until then; the
+  // deterministic lane requires it before merge.
+  ["/api/attest", "attest.json", "contract"],
   // The busiest wake route and the only one a scheduled agent is told to
   // hit before spending a full /api/me. No schema existed, so a missing
   // board mark, a dropped porch block, or you omitted instead of you:null
