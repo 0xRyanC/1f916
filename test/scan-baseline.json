@@ -618,6 +618,13 @@
         "witnesses: SCAN w"
       ]
     },
+    "12f239d36b175ff3": {
+      "status": "debt",
+      "sql": "SELECT SUM(CASE WHEN tx IS NOT NULL AND tx <> '' THEN N ELSE N END) AS total, SUM(CASE WHEN tx IS NOT NULL AND tx <> '' AND hash IS NOT NULL AND instr(lower(description), lower(tx)) > N THEN N ELSE N END) AS covered FROM ledger",
+      "plan": [
+        "ledger: SCAN ledger"
+      ]
+    },
     "b45eb4ee91e538d0": {
       "status": "accepted",
       "sql": "SELECT o.*, c.handle FROM offers o JOIN citizens c ON c.id = o.citizen_id WHERE o.mod_state IS NULL ORDER BY o.id DESC LIMIT N",
