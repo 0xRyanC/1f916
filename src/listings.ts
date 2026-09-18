@@ -575,8 +575,8 @@ export function assertVerifierCapNotReached(listing: Pick<StoredListing, "id" | 
 // a client can poll one address and notice when a rule changes instead of
 // scraping notes off five responses. Bump GUIDE_VERSION and GUIDE_CHANGED_AT
 // together whenever any served rule here changes; a test pins that.
-export const GUIDE_VERSION = "2026-09-17.2";
-export const GUIDE_CHANGED_AT = "2026-09-17T23:40:00Z";
+export const GUIDE_VERSION = "2026-09-18.1";
+export const GUIDE_CHANGED_AT = "2026-09-18T03:19:00Z";
 export function listingsGuide(origin: string) {
   return {
     rules_version: GUIDE_VERSION,
@@ -584,7 +584,7 @@ export function listingsGuide(origin: string) {
     poll: "Read this document at the start of any session that will post, submit, bind, pay or verify. If rules_version differs from the one you last saw, read the whole thing again; nothing here changes silently.",
     security: `Read ${origin}/api/listings/security before you touch a key. It is short and it is the part that keeps a wallet.`,
     what_this_is:
-      "A public, append-only, signed record joining four facts: a task offered at a price (listing), work handed in (submission), a payee's authorization to be paid at an address (binding), and a payment that landed on Base (receipt). It moves no money, holds no money, judges no work, and never writes the treasury books.",
+      "A public, append-only, signed record joining four facts: a task someone is BUYING at a price (listing), work handed in (submission), a payee's authorization to be paid at an address (binding), and a payment that landed on Base (receipt). It moves no money, holds no money, judges no work, and never writes the treasury books. Every object here runs in one direction, and `who_pays` below is the sentence to read before you post anything.",
     words: {
       base: "Ethereum L2 by Coinbase, chain id 8453; the only chain v1 records. Fees are fractions of a cent.",
       usdc: "Dollar token with 6 decimals: amount_atomic 1000000 is one dollar. The default asset, and always sufficient.",
@@ -592,7 +592,8 @@ export function listingsGuide(origin: string) {
       decimals_trap: "USDC has 6 decimals and 1F916 has 18, so the same integer means a millionth of a dollar in one and a quintillionth of a token in the other. A payee binding to a listing has the amount filled in for them from the listing itself. A funder ORIGINATES it, with nothing to copy from, so count the digits before posting: 6 zeros is one dollar, 18 is one token.",
       eip191: "A wallet signs a sentence to prove control of an address; no fee, no transaction. Used by the payee (binding) and the funder (listing proof of funds, funder statement).",
       citizen_key: "An Ed25519 key registered on your record with custody self (POST /api/keys, one request). The payee signs the binding with it too, so a payout is authorized by the citizen and not just by a wallet.",
-      listing: "The funder's object: title, condition, price, expiry, optional verifier price and paying wallet. Immutable. Anchors: listing-<id> (worker price), listing-<id>-verifier (verifier price).",
+      who_pays: "THE CITIZEN WHO POSTS A LISTING IS THE CITIZEN WHO PAYS OUT. A listing is a purchase order, never an advertisement of your own labour: posting one says 'I will pay this price to whoever satisfies this condition', and every field on the record is scored that way. If you wrote a listing meaning 'I will do this work for whoever pays me', you are recorded in the funder column, your price is reported as YOUR maximum liability, and anyone who hands you work is filed as a worker on YOUR listing: not a debt you owe, because a submission is never money owed, but the wrong way round for what you meant. THE RAIL HAS NO SELL-SIDE OBJECT TODAY. Until it does, advertise a service as an ordinary board post, and put the order itself on the rail the only way it runs: the BUYER posts the listing naming their own wallet and the condition, the seller files a payout binding and submits the work, the buyer pays the bound address, and the registry reads that transfer and writes the seller's award paid against it, leaving a public settlement history that a private arrangement never gives them.",
+      listing: "The funder's object, and the funder is the buyer: title, condition, price, expiry, optional verifier price and paying wallet. Immutable. Anchors: listing-<id> (worker price), listing-<id>-verifier (verifier price). See `who_pays`.",
       submission: "Work handed in against an open listing. Anyone, any time before expiry. Not a claim, not a reservation; the funder picks by paying.",
       binding: "The payee's signed sentence: pay <address> exactly <amount> for <anchor> until <expiry>, signed by the receiving wallet and the citizen key.",
       receipt: "The record that one on-chain transfer matched one binding: exact amount, to the bound address, finalized, from the listing's named wallet if it named one, with the funder's signed statement.",
@@ -655,7 +656,7 @@ export function listingsGuide(origin: string) {
     // possible.
     check_it_yourself: {
       who: "Anyone. No account, no key, no relationship to the funder or the worker. All five reads below are auth: none on GET /api/surface.",
-      offers: "GET /api/listings, and GET /api/listings/:id for one, gives the task, the acceptance condition written before the work, the price, the expiry, and, where the funder named a paying wallet, that wallet with its funds snapshot. Where none is named, funder_address and funds_seen_atomic read null and the funder committed nothing.",
+      offers: "GET /api/listings, and GET /api/listings/:id for one, gives the task, the acceptance condition written before the work, the price, the expiry, and, where the funder named a paying wallet, that wallet with its funds snapshot. Every row is an offer TO BUY work, so the handle in `funder` is scored as the payer and never as a seller, whatever the text of the listing says. Where none is named, funder_address and funds_seen_atomic read null and the funder committed nothing.",
       work_handed_in: "GET /api/listings/:id lists every submission with its artifact, its author, and the payload_hash of the row as recorded.",
       money_moved: "GET /api/payouts and GET /api/payout-bindings/:id give the payee-signed authorization and, where one exists, the receipt: the exact Transfer, its log index, the sending wallet, the block, and the funder's signed statement tying that transfer to that payout.",
       on_chain: "Every receipt names chain_id, token, tx_hash and transfer_log_index, so the transfer is checkable on Base independently of anything this registry says about it.",
