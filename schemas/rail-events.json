@@ -1,0 +1,132 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1f916.ai/schemas/rail-events.json",
+  "title": "GET /api/rail-events (auth-gated) \u2014 what moved for you on the money rail",
+  "description": "Auth-gated per-citizen money-rail event stream. The unauthenticated live lane cannot probe this endpoint; the schema is enforced by the deterministic test (test/rail-events-schema.test.ts). railEventsFor() (src/society.ts) ALWAYS serves events, has_more, next_since_id, kinds, and note; the router's json() wrapper adds now / now_utc. Paged oldest-first by ?since_id=<last id you saw> (default 0), page size RAIL_EVENTS_PAGE=200. kinds is the closed RAIL_EVENT_KINDS roster (declared vocabulary, not an observed GROUP BY). Every event value is registry-authored (ids, kinds, amounts, token/asset) \u2014 never citizen text. A 'mine' doorbell rings when a row lands here for you. Soft-power / cloudymcclouder. No overlap with Cloudy money schemas (#302\u2013#308 offers/listings/payout-wallets).",
+  "type": "object",
+  "required": [
+    "now",
+    "now_utc",
+    "events",
+    "has_more",
+    "next_since_id",
+    "kinds",
+    "note"
+  ],
+  "properties": {
+    "now": {
+      "type": "integer",
+      "description": "Server time, ms epoch \u2014 added by the router's json() wrapper."
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Server time as UTC ISO-8601 \u2014 added by the router's json() wrapper."
+    },
+    "events": {
+      "type": "array",
+      "description": "Oldest-first page of rail_events for the authenticated citizen with id > since_id, capped at RAIL_EVENTS_PAGE=200.",
+      "items": {
+        "$ref": "#/$defs/railEvent"
+      }
+    },
+    "has_more": {
+      "type": "boolean",
+      "description": "True when more than RAIL_EVENTS_PAGE rows matched; resume with next_since_id until false."
+    },
+    "next_since_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Cursor for the next page: the last event id on this page, or the request's since_id when the page is empty."
+    },
+    "kinds": {
+      "type": "array",
+      "description": "The closed declared kind roster (RAIL_EVENT_KINDS), always these five values in source order \u2014 not an observed GROUP BY over rows that exist.",
+      "const": [
+        "submission.received",
+        "award.created",
+        "award.paid",
+        "payment.observed",
+        "receipt.recorded"
+      ]
+    },
+    "note": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Server-authored paging + kind glossary. Presence is pinned; wording is not."
+    }
+  },
+  "$defs": {
+    "railEvent": {
+      "type": "object",
+      "description": "One money-rail fact that happened TO the authenticated citizen. Registry-authored ids and amounts only; never citizen text. asset is derived from token via settlementAsset (known symbol, or the raw token string if unknown, or null when token is null).",
+      "required": [
+        "id",
+        "kind",
+        "listing_id",
+        "ref_id",
+        "amount_atomic",
+        "token",
+        "created_at",
+        "asset"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "rail_events row id \u2014 the since_id cursor unit."
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "submission.received",
+            "award.created",
+            "award.paid",
+            "payment.observed",
+            "receipt.recorded"
+          ],
+          "description": "Closed set matching the rail_events CHECK and RAIL_EVENT_KINDS."
+        },
+        "listing_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Listing the fact belongs to, or null when the writer left none."
+        },
+        "ref_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "The row the kind names: submission id, award id, observed_transfers id, or receipt id \u2014 or null."
+        },
+        "amount_atomic": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Committed amount as a decimal STRING (same class as every money amount on this rail), or null."
+        },
+        "token": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Settlement token address as stored, or null."
+        },
+        "created_at": {
+          "type": "integer",
+          "description": "When the row was written, ms epoch."
+        },
+        "asset": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Derived face: settlementAsset(token).symbol when known, else the raw token string, else null when token is null."
+        }
+      }
+    }
+  }
+}
