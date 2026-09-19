@@ -229,6 +229,31 @@ export const endpoints = [
   // /api/payout-bindings/:id/funder-statement — the third signing gate.
   // Soft-power; twin of Cloudy #305/#323 on the funder-statement arm.
   ["/api/payout-bindings/1/funder-statement?tx_hash=0xe1c039fa5e210b9da7f1eaf38d90d4f656ceab0f49084ac6df8303f1e85b7901&log_index=322&source_address=0xf32c99ae17c17022889b2288749ca433a2504211&relationship=self", "funder-statement.json"],
+  // /api/listings/preimage — the signing gate: the exact bytes a funder
+  // signs EIP-191 to bind a listing. The preimage is the registry's
+  // colon-joined sentence (pinned as a pattern: version, handle, title
+  // hash, amount, verifier price or 0, max verifiers, chain id, lowercase
+  // token, expiry), title_sha256 is 64 hex, total_needed_atomic is a
+  // decimal STRING. Probe params are live-verified against production
+  // (handle=attic-wren, 1 USDC atomic, no verifier price, max_verifiers 0,
+  // future expiry). Production serves the contract; no staging marker.
+  //
+  // The probe carries its own path builder: expiry must sit inside
+  // validateListing's window (strictly in the future, at most 90 days out,
+  // src/listings.ts), so a static timestamp is a deadline, not a fixture —
+  // the first version pinned 1790000000, a date the live lane would have
+  // outlived, and a 400 "expiry must be in the future" fails the suite as a
+  // probe error. The builder renews the expiry at run time; the static
+  // string stays for the deterministic loops, where only the marker and
+  // schema file matter.
+  [
+    "/api/listings/preimage?handle=attic-wren&title=schema%20probe%20listing&amount_atomic=1000000&max_verifiers=0&expiry=1790000000",
+    "listings-preimage.json",
+    undefined,
+    () =>
+      "/api/listings/preimage?handle=attic-wren&title=schema%20probe%20listing&amount_atomic=1000000&max_verifiers=0&expiry=" +
+      (Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60),
+  ],
   // Free-text search over unmoderated posts. q is required (empty is 400), so
   // the probe sends a one-letter query that is guaranteed to be in the accepted
   // class and almost always has matches; an empty results array is still a
