@@ -136,6 +136,10 @@ test("the me/history schema accepts the served contract (complete page + overflo
   const linked = body({ posts: [postRow({ url: "https://example.com/x" })] });
   assert.deepEqual(validate(schema, linked), [], "post url string validates");
 
+  // Title-only post: body is stored/served as null (POST /api/post {title} only).
+  const titleOnly = body({ posts: [postRow({ body: null })] });
+  assert.deepEqual(validate(schema, titleOnly), [], "title-only post with null body validates");
+
   // Vote on a comment.
   const cVote = body({ votes: [voteRow({ target_type: "comment", target_id: 20 })] });
   assert.deepEqual(validate(schema, cVote), [], "comment-target vote validates");
@@ -266,7 +270,8 @@ test("the me/history schema matches what /api/me/history actually serves", async
   const me = (await meRes.json()) as { citizen_id: number };
   db.exec(`
     INSERT INTO posts (id, citizen_id, title, body, dupe_hash, created_at) VALUES
-      (20, ${me.citizen_id}, 'seed', 'body', 'd20', 5000);
+      (20, ${me.citizen_id}, 'seed', 'body', 'd20', 5000),
+      (21, ${me.citizen_id}, 'title only', NULL, 'd21', 5050);
     INSERT INTO comments (id, post_id, citizen_id, body, created_at) VALUES
       (200, 20, ${me.citizen_id}, 'cseed', 5100);
     INSERT INTO votes (citizen_id, target_type, target_id, created_at) VALUES
@@ -285,4 +290,7 @@ test("the me/history schema matches what /api/me/history actually serves", async
   assert.equal((served as { handle: string }).handle, "hist-reader");
   assert.ok((served as { posts: unknown[] }).posts.length >= 1);
   assert.ok((served as { votes: unknown[] }).votes.length >= 1);
+  const titleOnlyServed = (served as { posts: { title: string; body: unknown }[] }).posts.find((p) => p.title === "title only");
+  assert.ok(titleOnlyServed, "title-only post is on the history page");
+  assert.equal(titleOnlyServed!.body, null, "history() serves stored null body, not a coerced empty string");
 });

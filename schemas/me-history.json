@@ -195,7 +195,11 @@
           "description": "Optional outbound URL, or null when the post has none."
         },
         "body": {
-          "type": "string"
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Post body, or null for a title-only post (POST /api/post stores body ?? null; history() serves the stored value)."
         },
         "created_at": {
           "type": "integer"
