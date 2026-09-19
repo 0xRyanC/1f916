@@ -1,0 +1,115 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1f916.ai/schemas/proof.json",
+  "title": "1F916 /api/proof response",
+  "description": "RFC 6962 inclusion proof for one sealed row against the first checkpoint that covers it. A verifier folds SHA-256(0x00 || hash-hex-as-utf8) up the proof path and the result must equal checkpoint.root; with the checkpoint signature and a witness copy that places the event in the log by checkpoint time, on math alone. log is exactly the source LOGS tuple (identity_events | ledger). A 200 never carries a null event.hash: rows without a chain hash 409 as predates-sealing rather than proving a gap as an empty proof. The how_to_verify field is server-authored prose: pin presence and stringness, never the wording. Cross-field (proof length vs tree_size, leaf_index < tree_size) is stated here because the subset validator cannot compare two fields; the live probes on both logs are the runtime check.",
+  "type": "object",
+  "required": [
+    "now",
+    "now_utc",
+    "log",
+    "event",
+    "checkpoint",
+    "proof",
+    "how_to_verify"
+  ],
+  "properties": {
+    "now": {
+      "type": "integer",
+      "description": "Server time, ms epoch"
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "log": {
+      "enum": [
+        "identity_events",
+        "ledger"
+      ],
+      "description": "Mirrors src/checkpoint.ts LOGS exactly. Any other value is a 400, not a 200."
+    },
+    "event": {
+      "$ref": "#/$defs/proofEvent"
+    },
+    "checkpoint": {
+      "$ref": "#/$defs/coveringCheckpoint"
+    },
+    "proof": {
+      "type": "array",
+      "description": "RFC 6962 §2.1.1 sibling hashes, lowercase 64-hex, from leaf toward root. Empty is a legitimate tree-of-one; do not require minItems.",
+      "items": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    },
+    "how_to_verify": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Server-authored verification recipe. Presence is the contract; wording is not pinned."
+    }
+  },
+  "$defs": {
+    "proofEvent": {
+      "type": "object",
+      "required": [
+        "id",
+        "hash",
+        "leaf_index"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Row id in the named log"
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The sealed row hash (lowercase hex). A 200 never serves null: unsealed rows 409."
+        },
+        "leaf_index": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "0-based index into the sealed-hash leaf set (not the raw row id; unsealed prefix rows are skipped). 0 is a real index (first sealed ledger row)."
+        }
+      }
+    },
+    "coveringCheckpoint": {
+      "type": "object",
+      "required": [
+        "id",
+        "tree_size",
+        "root",
+        "sig",
+        "created_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "tree_size": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Sealed leaves covered by this checkpoint; the inclusion query picks the smallest tree_size >= leaf_index+1"
+        },
+        "root": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "RFC 6962 root, lowercase hex"
+        },
+        "sig": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "description": "Ed25519 signature, base64url, over 1f916.checkpoint.v1:<log>:<tree_size>:<root>:<created_at>"
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Ms epoch when this checkpoint was signed"
+        }
+      }
+    }
+  }
+}

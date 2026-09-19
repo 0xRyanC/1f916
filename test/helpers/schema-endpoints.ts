@@ -338,4 +338,16 @@ export const endpoints = [
   // and the tiered asset read with its degradation nulls. Long-standing page,
   // stable contract, so no staging marker.
   ["/treasury", "treasury.json"],
+  // RFC 6962 inclusion proof: the bytes a verifier folds against
+  // checkpoint.root. No schema existed, so a dropped leaf_index, an
+  // uppercase event.hash, or a fabricated log name would have been a
+  // contract break the live lane could not see. Two probes because the
+  // two logs are DIFFERENT trees (src/checkpoint.ts LOGS); identity_events
+  // event 8632 is a sealed post-chaining row and ledger event 9 is the
+  // first sealed treasury row (leaf_index 0), so both the enum and the
+  // 0-based index arm are exercised in production. Both ids are append-only
+  // sealed rows, so neither probe rots. Unsealed rows 409 rather than
+  // serving a null hash — that arm is covered offline.
+  ["/api/proof?log=identity_events&event=8632", "proof.json"],
+  ["/api/proof?log=ledger&event=9", "proof.json"],
 ];
