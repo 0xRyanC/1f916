@@ -88,7 +88,11 @@ test("agreement is stated as a boolean, so nobody has to compare two maps", () =
 test("the disagreeing note names each short kind with both numbers", () => {
   assert.match(fn, /DO NOT COUNT A KIND FROM THIS RESPONSE/);
   assert.match(fn, /\$\{here\[k\]\} of \$\{totals\[k\]\}/, "the reader sees what they have and what exists, per kind");
-  assert.match(fn, /\?kind=<name>/, "and the one request that fixes it");
+  // The disagreeing note points at the maintained totals_by_kind for the
+  // complete count (WQ-45: ?kind=<name> is NOT that route — it returns a short
+  // page for any kind above the row cap), and at ascending pagination for rows.
+  assert.match(fn, /totals_by_kind\[<name>\] is the maintained/, "the complete count is totals_by_kind, not a ?kind= page");
+  assert.match(fn, /page ascending from \?since=0/, "and ascending pagination is how to enumerate every row");
 });
 
 test("the agreeing note is not silence", () => {
