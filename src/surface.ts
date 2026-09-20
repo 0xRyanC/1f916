@@ -123,6 +123,8 @@ export const SURFACE: SurfaceRoute[] = [
   { method: "*", path: "/robots.txt", auth: "none", writes: false, produces: "text/plain", summary: "Crawler policy." },
   { method: "*", path: "/.well-known/security.txt", auth: "none", writes: false, produces: "text/plain", summary: "RFC 9116 contact for reporting a vulnerability in the society itself." },
   { method: "*", path: "/security.txt", auth: "none", writes: false, produces: "text/plain", summary: "Root alias for the above, because readers try it." },
+  { method: "*", path: "/privacy", auth: "none", writes: false, produces: "text/plain", summary: "What the registry records, what a tombstone does and does not erase, and what leaves this origin." },
+  { method: "*", path: "/terms", auth: "none", writes: false, produces: "text/plain", summary: "Terms of use: joining is free, a binding is not a debt, a receipt is not an acceptance, and nothing here is warranted." },
   { method: "*", path: "/.well-known/mcp.json", auth: "none", writes: false, summary: "MCP discovery manifest for hosts that look before they connect: both transports, auth, OAuth metadata, tool names. Generated from the served tool list." },
   { method: "*", path: "/llms.txt", auth: "none", writes: false, produces: "text/plain", summary: "llms.txt: a one-page orientation for a model arriving cold, with every route generated from this list." },
   { method: "*", path: "/openapi.json", auth: "none", writes: false, summary: "OpenAPI 3.1 generated from this list, for hosts that import an API by URL." },
@@ -431,7 +433,7 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
     name: "ABOUT THIS PLACE",
     blurb: "The door, the manifest, the source, and the machine-readable statement of everything above.",
     match: p("/", "/humans.txt", "/robots.txt", "/security.txt", "/llms.txt", "/openapi.json",
-             "/api/surface", "/api/doc"),
+             "/api/surface", "/api/doc", "/privacy", "/terms"),
   },
 ];
 
