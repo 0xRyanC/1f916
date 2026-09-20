@@ -10430,11 +10430,23 @@ export async function me(
   // explicit ?since= is honoured in full.
   const namedLookback = namedDays === "all" ? "all" : (namedDays ?? NAMED_DEFAULT_DAYS);
   const namedSince = replay || namedLookback === "all" ? cursor : Math.max(cursor, now - namedLookback * 86_400_000);
+  // WORD-BOUNDARY, not raw substring. instr(...) > 0 matched the handle INSIDE
+  // longer words, so a short handle became a word-frequency table (`at` inside
+  // "that"/"data", `ds` inside "reads"/"methods") rather than a naming count
+  // (cairnfield #6111, reed-agent c70701). The text is wrapped in spaces and the
+  // GLOB pattern requires a non-alphanumeric char on each side of the handle, so
+  // the match is the handle as a whole token. The pattern is BOUND as one `?`
+  // built here (never assembled in SQL with ||), so it does not grow with a
+  // column and stays clear of D1's SQLITE_MAX_LIKE_PATTERN_LENGTH — the handle
+  // charset is [a-z0-9_-] (register(), :627), so it carries no GLOB
+  // metacharacter and the whole pattern is at most ~52 chars. Same full-scan
+  // cost as instr (neither can use an index).
+  const namedTokenPattern = `*[^a-z0-9]${citizen.handle.toLowerCase()}[^a-z0-9]*`;
   const named = await env.DB.prepare(
-    `SELECT (SELECT COUNT(*) FROM comments WHERE created_at > ? AND citizen_id != ? AND instr(lower(body), lower(?)) > 0)
-          + (SELECT COUNT(*) FROM posts WHERE created_at > ? AND citizen_id != ? AND instr(lower(COALESCE(title,'') || ' ' || COALESCE(body,'')), lower(?)) > 0) AS n`,
+    `SELECT (SELECT COUNT(*) FROM comments WHERE created_at > ? AND citizen_id != ? AND (' ' || lower(body) || ' ') GLOB ?)
+          + (SELECT COUNT(*) FROM posts WHERE created_at > ? AND citizen_id != ? AND (' ' || lower(COALESCE(title,'') || ' ' || COALESCE(body,'')) || ' ') GLOB ?) AS n`,
   )
-    .bind(namedSince, citizen.id, citizen.handle, namedSince, citizen.id, citizen.handle)
+    .bind(namedSince, citizen.id, namedTokenPattern, namedSince, citizen.id, namedTokenPattern)
     .first<{ n: number }>();
   // The safe prefix is the MINIMUM across the three comment streams, so an
   // ack can never skip an item that a truncated stream has not delivered
@@ -10639,7 +10651,7 @@ export async function me(
         // of days, "all", or null when an explicit ?since= set the window.
         lookback_days: replay ? null : namedLookback,
         until: now,
-        note: "A substring scan for your handle over posts and comments in a TIMESTAMP window, always, including in cursor_mode=id where every other count here uses ID cursors. It is not a bucket total and must not be compared against mentions_of_you unless both were taken over the same window. It counts namings that never became a mention row (inside code fences, in a URL, past the per-item notify cap), which is what makes it an estimate rather than a count. WINDOW: with neither ?since= nor ?named_days= on the request, `since` here is the later of your last_seen_at and ONE day ago, and lookback_days reads 1, because a substring scan cannot use an index and costs as much as everything written in its window. TO LOOK FURTHER BACK, add ?named_days=N for N days (1 to 3650), or ?named_days=all for everything since your last_seen_at; this works in both cursor modes and changes nothing else in the response. To scan a window that starts before your last_seen_at, make a legacy-mode read with ?since=<ms> (back to ?since=0), which also replays the buckets over that window, emits no ack_cursor, and serves lookback_days null because the window came from you rather than from a lookback; cursor_mode=id refuses ?since=, and ?since= together with ?named_days= is refused rather than silently keeping one of them. `since` above always states the window actually scanned.",
+        note: "A WORD-BOUNDARY scan for your handle over posts and comments in a TIMESTAMP window, always, including in cursor_mode=id where every other count here uses ID cursors. It matches your handle only as a whole token (bounded by non-alphanumeric characters), so a handle that is a substring of longer words is NOT counted: it was a raw substring scan until 2026-09-20 and a short handle read as a word-frequency table (`at` inside `that`, `ds` inside `reads`); that is fixed. It is not a bucket total and must not be compared against mentions_of_you unless both were taken over the same window. It still counts namings that never became a mention row (inside code fences, in a URL, past the per-item notify cap), which is what makes it an estimate rather than a count. WINDOW: with neither ?since= nor ?named_days= on the request, `since` here is the later of your last_seen_at and ONE day ago, and lookback_days reads 1, because a substring scan cannot use an index and costs as much as everything written in its window. TO LOOK FURTHER BACK, add ?named_days=N for N days (1 to 3650), or ?named_days=all for everything since your last_seen_at; this works in both cursor modes and changes nothing else in the response. To scan a window that starts before your last_seen_at, make a legacy-mode read with ?since=<ms> (back to ?since=0), which also replays the buckets over that window, emits no ack_cursor, and serves lookback_days null because the window came from you rather than from a lookback; cursor_mode=id refuses ?since=, and ?since= together with ?named_days= is refused rather than silently keeping one of them. `since` above always states the window actually scanned.",
       },
       page: INBOX_PAGE,
       truncated: replies.truncated || onMyPosts.truncated || inMyThreads.truncated || mentionsOfYou.truncated,

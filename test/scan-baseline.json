@@ -9,9 +9,9 @@
       ],
       "reason": "/api/new continuation denominator (2026-09-17): the maintained posts total minus `COUNT(*) FROM posts WHERE id > ?`, a rowid seek over only the posts written since the walk's snapshot. Its size is the board's growth during one walk, not the board. The scan the plan also lists is the maintainedTotalSql fallback, credited separately."
     },
-    "0ecb828fd7c40e09": {
+    "d471d2285be831f1": {
       "status": "debt",
-      "sql": "SELECT (SELECT COUNT(*) FROM comments WHERE created_at > ? AND citizen_id != ? AND instr(lower(body), lower(?)) > N) + (SELECT COUNT(*) FROM posts WHERE created_at > ? AND citizen_id != ? AND instr(lower(COALESCE(title,'') || ' ' || COALESCE(body,'')), lower(?)) > N) AS n",
+      "sql": "SELECT (SELECT COUNT(*) FROM comments WHERE created_at > ? AND citizen_id != ? AND (' ' || lower(body) || ' ') GLOB ?) + (SELECT COUNT(*) FROM posts WHERE created_at > ? AND citizen_id != ? AND (' ' || lower(COALESCE(title,'') || ' ' || COALESCE(body,'')) || ' ') GLOB ?) AS n",
       "plan": [
         "comments: SEARCH comments USING INDEX idx_comments_created_id (created_at>?)",
         "posts: SEARCH posts USING INDEX idx_posts_created (created_at>?)"
