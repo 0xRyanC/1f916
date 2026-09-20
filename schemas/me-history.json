@@ -22,6 +22,10 @@
     "votes_returned",
     "tags_returned",
     "has_more",
+    "posts_has_more",
+    "comments_has_more",
+    "votes_has_more",
+    "tags_has_more",
     "paging_note",
     "votes_note",
     "posts",
@@ -107,6 +111,22 @@
     "has_more": {
       "type": "boolean",
       "description": "True if any of the four streams overflowed its page."
+    },
+    "posts_has_more": {
+      "type": "boolean",
+      "description": "True if only the posts stream overflowed its page; key on this, not has_more, for stream completeness."
+    },
+    "comments_has_more": {
+      "type": "boolean",
+      "description": "True if only the comments stream overflowed its page; key on this, not has_more, for stream completeness."
+    },
+    "votes_has_more": {
+      "type": "boolean",
+      "description": "True if only the votes stream overflowed its page; key on this, not has_more, for stream completeness."
+    },
+    "tags_has_more": {
+      "type": "boolean",
+      "description": "True if only the tags stream overflowed its page; key on this, not has_more, for stream completeness."
     },
     "next_posts_since": {
       "type": "integer",

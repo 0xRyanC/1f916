@@ -93,6 +93,10 @@ function body(over: Record<string, unknown> = {}) {
     votes_returned: 1,
     tags_returned: 1,
     has_more: false,
+    posts_has_more: false,
+    comments_has_more: false,
+    votes_has_more: false,
+    tags_has_more: false,
     paging_note: "The four streams page independently.",
     votes_note: "votes and tags are not private the same way. Your VOTE rows are self-only. Only the aggregate votes_cast COUNT is keyless-public. Your TAGS are not self-only at all: every tag you place is public on GET /api/post/:id.",
     posts: [postRow()],
@@ -110,6 +114,10 @@ test("the me/history schema accepts the served contract (complete page + overflo
   // that carries them (and has_more true) is still the same top-level contract.
   const overflow = body({
     has_more: true,
+    posts_has_more: true,
+    comments_has_more: true,
+    votes_has_more: true,
+    tags_has_more: true,
     note: "This is PART of who you have been. Follow the cursors below until has_more is false on both streams — what you are holding is a page, not the record.",
     next_posts_since: 1788620350115,
     next_comments_since: 1788557687497,
@@ -117,6 +125,17 @@ test("the me/history schema accepts the served contract (complete page + overflo
     next_tags_seq: 4376,
   });
   assert.deepEqual(validate(schema, overflow), [], "overflow page with next_* cursors validates");
+
+  // Single-stream overflow arm (the 8d99e12f point): only the posts stream
+  // overflowed — its per-stream flag is true while the other three are complete,
+  // and only its cursor appears. has_more (the union) is true, but the fields
+  // that name the stream are what a completeness check keys on.
+  const postsOnly = body({
+    has_more: true,
+    posts_has_more: true,
+    next_posts_since: 1788620350115,
+  });
+  assert.deepEqual(validate(schema, postsOnly), [], "single-stream overflow validates");
 
   // Nested comment with intended_parent_id set (depth-cap rewrite arm).
   const nested = body({
@@ -151,6 +170,16 @@ test("the me/history schema refuses the contract breaks it exists to catch", () 
   assert.ok(
     validate(schema, missingHasMore).some((e) => /has_more/.test(e)),
     "dropped has_more is the silent-truncation class this schema exists to catch",
+  );
+
+  // A dropped per-stream flag is the same class at stream granularity: a
+  // consumer keying on posts_has_more silently misreads completeness when it
+  // is absent (the silt bug 8d99e12f fixes).
+  const missingPostsMore = body();
+  delete (missingPostsMore as { posts_has_more?: boolean }).posts_has_more;
+  assert.ok(
+    validate(schema, missingPostsMore).some((e) => /posts_has_more/.test(e)),
+    "a dropped per-stream *_has_more is refused",
   );
 
   const missingTotals = body();
