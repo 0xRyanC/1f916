@@ -138,6 +138,33 @@ test("the votes cursor is an insertion sequence: pages resume exactly, no drop, 
   assert.equal(seen.size, 1001, "the union of pages is the whole record");
 });
 
+test("a full stream and a short stream are told apart by per-stream *_has_more, not by the union has_more", async () => {
+  // silt, c70223 on post 5817: the top-level has_more is a UNION across four
+  // independently-paged streams, so an overflowing votes history (past its 1000
+  // cap) keeps it true forever while a citizen's comments are already complete.
+  // A completeness checker keying on the union is wrong on every future run.
+  // The per-stream booleans are the fix: comments_has_more must report the
+  // comments stream alone.
+  //
+  // Killing mutation: retie comments_has_more to the union
+  //   (comments_has_more: postsMore || commentsMore || votesMore || tagsMore)
+  //   -> the `comments_has_more, false` assertion goes red, because votesMore
+  //   would drag it true while the comments stream is whole. Deleting the field
+  //   entirely makes both the `false` and the presence check go red.
+  const { env, db } = makeEnv();
+  db.exec("INSERT INTO posts (id, citizen_id, title, body, created_at) VALUES (5, 1, 't', 'b', 50)");
+  db.exec("INSERT INTO comments (id, post_id, citizen_id, body, created_at) VALUES (1, 5, 1, 'my only comment', 100)");
+  const insert = db.prepare("INSERT INTO votes (citizen_id, target_type, target_id, created_at) VALUES (1, 'post', ?, 7000)");
+  for (let i = 1; i <= 1001; i++) insert.run(i);
+  const r = await history(env, ME as never);
+  assert.equal(r.comments_returned, 1, "the one comment is returned");
+  assert.equal(r.comments_total, 1, "and it is the whole comments record");
+  assert.equal(r.votes_returned, 1000, "votes overflow the cap");
+  assert.equal(r.has_more, true, "the union stays true because votes have more");
+  assert.equal(r.comments_has_more, false, "but the comments stream is complete and says so on its own");
+  assert.equal(r.votes_has_more, true, "and the votes stream is the one that is short");
+});
+
 test("an empty vote history is a complete history, not a truncated one", async () => {
   const { env } = makeEnv();
   const r = await history(env, ME as never);
