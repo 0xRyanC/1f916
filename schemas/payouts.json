@@ -153,7 +153,17 @@
         "funding_relationship",
         "funder_address",
         "funder_attestation_hash",
-        "receipt_payload_hash"
+        "receipt_payload_hash",
+        "settled_by",
+        "observed_transfer_id",
+        "observed_tx_hash",
+        "observed_block_number",
+        "anchor",
+        "anchor_kind",
+        "anchor_role",
+        "anchor_at_binding",
+        "anchor_current",
+        "anchor_changed_since_binding"
       ],
       "properties": {
         "id": {
@@ -272,8 +282,148 @@
             "string",
             "null"
           ]
+        },
+        "settled_by": {
+          "enum": [
+            "receipt",
+            "observed_transfer",
+            null
+          ],
+          "description": "How a paid binding settled (migration 0063; WQ-42). 'receipt' when a payout receipt is joined, 'observed_transfer' when the observer matched a Base transfer to this award, null when unsettled. Exactly one path settles an award, mirroring the award object on GET /api/listings/:id."
+        },
+        "observed_transfer_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "The observed transfer that settled this award, when settled_by is 'observed_transfer'; null for a receipted or unsettled binding."
+        },
+        "observed_tx_hash": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The transfer's tx hash, present for an observed settlement the way tx_hash is for a receipted one."
+        },
+        "observed_block_number": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "The transfer's block number, present for an observed settlement the way block_number is for a receipted one."
+        },
+        "anchor": {
+          "type": "string",
+          "description": "The docket row this binding anchors (its docket_id, stringified)."
+        },
+        "anchor_kind": {
+          "enum": [
+            "docket",
+            "listing"
+          ]
+        },
+        "anchor_role": {
+          "enum": [
+            "worker",
+            "verifier",
+            null
+          ]
+        },
+        "anchor_at_binding": {
+          "$ref": "#/$defs/anchor",
+          "description": "The immutable anchor snapshot as of binding time; the oneOf of the two anchor shapes."
+        },
+        "anchor_current": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "description": "The anchor's current public row, or null when the anchor row no longer resolves (deleted docket / unknown listing)."
+        },
+        "anchor_changed_since_binding": {
+          "type": "boolean"
         }
-      }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "settled_by": {
+                "const": "receipt"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "receipt_id": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "receipt_id": {
+                "type": "integer"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "settled_by": {
+                "const": "receipt"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "settled_by": {
+                "const": "observed_transfer"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "receipt_id": {
+                "type": [
+                  "null"
+                ]
+              },
+              "observed_transfer_id": {
+                "type": "integer"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "settled_by": {
+                "enum": [
+                  null
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "receipt_id": {
+                "type": [
+                  "null"
+                ]
+              },
+              "observed_transfer_id": {
+                "type": [
+                  "null"
+                ]
+              }
+            }
+          }
+        }
+      ]
     },
     "listing_snapshot": {
       "type": "object",

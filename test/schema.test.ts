@@ -317,6 +317,61 @@ test("local payout list and detail fixtures satisfy complete public contracts", 
   );
 });
 
+test("the /api/payouts row pins the settlement and anchor family it now serves", () => {
+  // WQ-42 + migration 0063 added settled_by and the observed_* trio; the anchor
+  // family (anchor, anchor_kind, anchor_role, anchor_at_binding, anchor_current,
+  // anchor_changed_since_binding) is served on every row too. The schema was
+  // last edited 2026-08-16, before all of them, so a live row that omits any of
+  // these used to validate — the verifier under-covered a money-adjacent surface.
+  const listSchema = loadSchema("payouts.json");
+  const listFixture = JSON.parse(readFileSync(join(import.meta.dirname, "fixtures", "payouts-list.json"), "utf8"));
+  const row = () => structuredClone(listFixture.bindings[0]);
+  const one = (over: Record<string, unknown>) =>
+    validate(listSchema, { ...listFixture, bindings: [Object.assign(row(), over)] });
+
+  // Control: the receipted docket fixture validates.
+  assert.deepEqual(validate(listSchema, listFixture), [], "the receipted docket fixture validates");
+
+  // settled_by is an enum: an unknown settlement label is refused.
+  assert.notDeepEqual(one({ settled_by: "filed" }), [], "an unknown settled_by is refused");
+  // WQ-42's whole point: an observed-settled award must not read as unpaid.
+  assert.deepEqual(
+    one({ settled_by: "observed_transfer", receipt_id: null, observed_transfer_id: 5, observed_tx_hash: "0x" + "ab".repeat(32), observed_block_number: 42 }),
+    [],
+    "an observed-settled row is a valid settlement",
+  );
+  // The load-bearing coupling, both directions:
+  assert.notDeepEqual(
+    one({ settled_by: "receipt", receipt_id: null }),
+    [],
+    "settled_by:receipt with no receipt is refused (an observed-settled award mislabelled as receipted)",
+  );
+  assert.notDeepEqual(
+    one({ settled_by: "observed_transfer", receipt_id: 1, observed_transfer_id: null }),
+    [],
+    "settled_by:observed_transfer with a joined receipt is refused (exactly one path settles)",
+  );
+  assert.notDeepEqual(
+    one({ settled_by: null, receipt_id: 9 }),
+    [],
+    "an unsettled row carrying a receipt is refused (receipt implies settled_by:receipt)",
+  );
+  // The anchor family is required: dropping it is the break the schema now catches.
+  for (const key of ["anchor", "anchor_kind", "anchor_role", "anchor_at_binding", "anchor_current", "anchor_changed_since_binding"]) {
+    const bent = structuredClone(listFixture);
+    delete bent.bindings[0][key];
+    assert.notDeepEqual(
+      validate(listSchema, bent),
+      [],
+      `a row missing ${key} must be refused`,
+    );
+  }
+  // anchor_kind is an enum: an unknown kind is refused.
+  assert.notDeepEqual(one({ anchor_kind: "order" }), [], "anchor_kind must be docket|listing");
+  // anchor_role null is the docket arm (docket rows carry no listing role).
+  assert.deepEqual(one({ anchor_role: null }), [], "null anchor_role is the docket arm");
+});
+
 test("the changes schema rejects the contract breaks it exists to catch", () => {
   // A live probe that passes on its first run proves the schema is WELL-FORMED,
   // never that it is TIGHT. So every clause that carries weight is given a
