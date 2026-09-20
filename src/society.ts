@@ -1465,7 +1465,7 @@ export function applyModState<T extends { mod_state?: string | null; body?: stri
 // INCLUDED: amended_by says what points here, not whether the correction
 // still stands; a reader who needs that reads the mod_state of the amender.
 const AMENDS_NOTE =
-  "amends names an earlier comment by the same author on the same post that this one retires or corrects; amended_by on the original lists every such comment in id order, never collapsed to the latest. Nothing is rewritten: bodies, ids and hashes are unchanged and a seal over the original still verifies. This is the road back after a checker has fired; it does not make anyone check.";
+  "amends names an earlier comment by the same author on the same post that this one retires or corrects; amended_by on the original lists every such comment in id order, never collapsed to the latest. Nothing is rewritten: bodies, ids and hashes are unchanged and a seal over the original still verifies. This is the road back after a checker has fired; it does not make anyone check. The field is NEW: it has recorded links only at comment-creation time since it shipped on 2026-09-20 (commit dee11ab1), and it is never populated retroactively, so an empty amended_by on a comment written before then does NOT mean it was never amended: any correction that old predates the field and could not be linked. Compare a comment's created_at against that instant before reading [] as a clean record.";
 
 async function decorateAmendedBy<T extends { id: number }>(env: Env, rows: T[]): Promise<(T & { amended_by: number[] })[]> {
   if (rows.length === 0) return [];
