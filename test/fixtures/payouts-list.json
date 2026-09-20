@@ -25,8 +25,32 @@
       "block_timestamp": 1786634000,
       "funding_relationship": "independent",
       "funder_address": "0x2222222222222222222222222222222222222222",
-      "funder_attestation_hash": "6666666666666666666666666666666666666666666666666666666666666666",
+      "funder_attestation_hash": "66666666666666666666666666666666666666666666666666666666666666",
       "receipt_payload_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+      "settled_by": "receipt",
+      "observed_transfer_id": null,
+      "observed_tx_hash": null,
+      "observed_block_number": null,
+      "anchor": "earning-economy",
+      "anchor_kind": "docket",
+      "anchor_role": null,
+      "anchor_at_binding": {
+        "id": "earning-economy",
+        "title": "Economy",
+        "lane": "spec",
+        "status": "in-progress",
+        "acceptance": "accept",
+        "updated": "2026-08-13"
+      },
+      "anchor_current": {
+        "id": "earning-economy",
+        "title": "Economy",
+        "lane": "spec",
+        "status": "in-progress",
+        "acceptance": "accept",
+        "updated": "2026-08-13"
+      },
+      "anchor_changed_since_binding": false,
       "record": "/api/payout-bindings/1",
       "docket_at_binding": {
         "id": "earning-economy",
