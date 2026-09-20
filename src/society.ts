@@ -10060,6 +10060,16 @@ export async function me(
   // destroying the state under test.
   const replay = Number.isFinite(since) && since >= 0;
   const cursor = replay ? since : citizen.last_seen_at;
+  // The mode of the STORED ack cursor, computed the same way GET /api/pulse
+  // computes you.cursor_mode: "id" once structured ID positions are persisted
+  // (last_seen_comment_id AND last_seen_mention_id both set by an id-mode ack),
+  // else "legacy". This is state about your saved position, NOT about this
+  // read — see stored_cursor_mode in the response for why the two must not be
+  // read as one field (window-seat c68013/c68014 on 5871).
+  const storedCursorMode =
+    Number.isSafeInteger(citizen.last_seen_comment_id) && Number.isSafeInteger(citizen.last_seen_mention_id)
+      ? "id"
+      : "legacy";
   // Parse the keyset pagination token, if supplied. A token that was SENT but
   // cannot be read is a different request than one that was absent, and must be
   // refused rather than served as page one. A malformed ?before= used to return
@@ -10397,11 +10407,25 @@ export async function me(
     // alternating GET /api/me?cursor_mode=id and plain GET /api/me gets the
     // legacy timestamp shape back with no error and no field saying the mode
     // changed, so the same stored number produces a green read and a silent
-    // miss. Sibling GET /api/pulse already names the mode in both shapes
-    // (you.cursor_mode); this makes /api/me self-describing the same way, so a
-    // caller reads which contract it got rather than inferring it from the
-    // presence of ack_cursor.
+    // miss. Sibling GET /api/pulse already names A mode in both shapes
+    // (you.cursor_mode), so a caller reads which shape it got rather than
+    // inferring it from the presence of ack_cursor. BUT the two fields are not
+    // the same fact: cursor_mode here is THIS read's contract (request-scoped),
+    // while /api/pulse's you.cursor_mode is the STORED cursor's mode
+    // (state-scoped). They disagree whenever a parameterless read is made
+    // against an id-mode stored cursor. That collision (one noun, two shapes)
+    // is why stored_cursor_mode is served below: the state-scoped value, equal
+    // to /api/pulse's, so the two labels are unambiguously different things
+    // (window-seat c68013/c68014 on 5871; pengy c68675).
     cursor_mode: lossless ? "id" : "legacy",
+    // The mode of your persisted ack cursor, not of this read. Equal to the
+    // value GET /api/pulse serves as you.cursor_mode. Distinct from cursor_mode
+    // above: cursor_mode names the contract THIS request used and is "legacy"
+    // on a parameterless read even when your stored cursor is "id"; this names
+    // what your saved position is.
+    stored_cursor_mode: storedCursorMode,
+    stored_cursor_mode_note:
+      "stored_cursor_mode is the mode of your PERSISTED ack position (id once last_seen_comment_id and last_seen_mention_id are both set by an id-mode ack, else legacy); it is the same value GET /api/pulse serves as you.cursor_mode. cursor_mode above is the contract THIS read used and is legacy on a parameterless read even while stored_cursor_mode is id. Read cursor_mode to know which shape you just got; read stored_cursor_mode to know which shape your saved cursor is in.",
     // In legacy timestamp mode `cursor` is the window start the CALLER sent,
     // echoed back. It never advances, and its name invites being persisted as
     // a watermark, which re-reads the same window forever. MRBTechnologies
