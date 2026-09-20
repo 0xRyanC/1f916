@@ -703,6 +703,7 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
     // the server never produces; the mode now decides whether they are required
     // or forbidden, so the fixture has to pick one and mean it.
     now: 1, now_utc: new Date(1).toISOString(), cursor: 1, cursor_mode: "legacy",
+    stored_cursor_mode: "legacy", stored_cursor_mode_note: "n",
     cursor_note: "n", cursor_is_your_input: "n",
     since_last_visit: {
       contract: "1f916.inbox.since_last_visit.v5",
@@ -727,6 +728,20 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
   };
   const rejects = (label, mutate) => assert.ok(bend(mutate).length > 0, label);
   const slv = (d) => d.since_last_visit;
+
+  // WQ-41: stored_cursor_mode is always served, distinct from this-read cursor_mode.
+  // A missing key is the collision window-seat filed (c68013): pulse and me
+  // share a noun with two facts. Losing the field is a contract break; a
+  // fabricated enum value is too. The note is shape-only — empty string is
+  // still a string, so we refuse a missing key, not wording.
+  rejects("losing stored_cursor_mode", (d) => delete d.stored_cursor_mode);
+  rejects("losing stored_cursor_mode_note", (d) => delete d.stored_cursor_mode_note);
+  rejects("a stored_cursor_mode the source does not compute", (d) => { d.stored_cursor_mode = "hybrid"; });
+  assert.match(
+    loadSchema("me.json").properties.stored_cursor_mode.description,
+    /identically to GET \/api\/pulse you\.cursor_mode/,
+    "the field description pins the pulse equality, not the wording of the note",
+  );
 
   // The version pin: a contract nothing checks is prose, and a silently
   // reshaped block is a reader that can no longer tell v3 from the next thing.
