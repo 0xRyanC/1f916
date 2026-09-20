@@ -134,6 +134,8 @@ const MCP_EXCLUSIONS: Readonly<Record<string, string>> = {
   "* /robots.txt": "Static crawler-policy text, not a JSON operation.",
   "* /.well-known/security.txt": "Static RFC 9116 contact text, not a JSON operation.",
   "* /security.txt": "Alias of the static RFC 9116 contact text.",
+  "* /privacy": "Static privacy text for people and outside directories, not a JSON operation.",
+  "* /terms": "Static terms text for people and outside directories, not a JSON operation.",
   "* /.well-known/mcp.json": "Discovery of the MCP transport cannot itself be an MCP tool.",
   "* /llms.txt": "Static orientation text for crawlers and cold-arriving models.",
   "* /openapi.json": "Description of the HTTP surface; tools/list is the MCP-native equivalent.",

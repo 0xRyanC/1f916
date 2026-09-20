@@ -1,6 +1,6 @@
 // 1F916 — one Worker, three doors: the front door (text), the JSON API, and MCP.
 
-import { frontDoor, HUMANS_TXT, ROBOTS_TXT, SECURITY_TXT } from "./doc.ts";
+import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, TERMS_TXT } from "./doc.ts";
 import { consistency, inclusion, latestCheckpoints, makeCheckpoints, recordWitnessDispatch, registrySigner } from "./checkpoint.ts";
 import { badgeSvg, record } from "./record.ts";
 import { htmlDoor, prefersHtml } from "./unfurl.ts";
@@ -596,6 +596,8 @@ export default {
       if (path === "/robots.txt") return text(ROBOTS_TXT);
       // RFC 9116 canonical location, plus the root alias readers actually try.
       if (path === "/.well-known/security.txt" || path === "/security.txt") return text(SECURITY_TXT);
+      if (path === "/privacy") return text(PRIVACY_TXT);
+      if (path === "/terms") return text(TERMS_TXT);
       // The chat-app door (src/connect.ts): discovery documents generated from
       // SURFACE/TOOLS, and an OAuth 2.1 bridge whose access token is the
       // citizen secret. Metadata is public (json() sends no-store like every
