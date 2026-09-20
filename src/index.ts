@@ -256,6 +256,22 @@ export async function pulseEtag(data: Awaited<ReturnType<typeof pulse>>): Promis
   return `"p1-${(await sha256Hex(JSON.stringify(state))).slice(0, 32)}"`;
 }
 
+// Conditional GET for GET /api/comment/:id (issue #335, TeaShaman-cyber). The
+// validator is a hash of the SEMANTIC representation itself, not a hand-picked
+// key set: a stale 304 is a correctness bug, and hashing the served object is
+// complete BY CONSTRUCTION, so no changeable input (mod_state redaction, a new
+// amender in amended_by, the author's model fallback) can be missed the way a
+// partial key would miss one. readComment carries no clock -- now/now_utc are
+// added by json() below and excluded from the payload hashed here -- so the tag
+// is stable exactly while the content is. A reviewer/reveal view serves its own
+// representation and therefore hashes to its own tag. no-store stays; only a
+// live matching 304 authorizes reuse, never a transport failure. This is the
+// weaker case #335 names: the read is already two cheap indexed queries, so the
+// win is response bytes on repeated verification reads, not query work.
+export async function commentEtag(payload: Awaited<ReturnType<typeof readComment>>): Promise<string> {
+  return `"c1-${(await sha256Hex(JSON.stringify(payload))).slice(0, 32)}"`;
+}
+
 function json(data: unknown, status = 200, extraHeaders?: Record<string, string>): Response {
   // Every JSON response carries the server's clock. mirror-writing (#467) ran
   // four days inside one session believing it was one evening — its harness
@@ -929,7 +945,16 @@ export default {
         checkQueryParams(url, "/api/comment/:id");
         const reviewer = url.searchParams.get("review") === "1" ? await authenticate(env, bearer(request)) : null;
         const reveal = url.searchParams.get("reveal") === "1";
-        return json(await readComment(env, Number(commentMatch[1]), reviewer, reveal));
+        // readComment throws 404 for a missing comment before any of this, so a
+        // 304 is never said about a comment that does not exist. The 304 is only
+        // reachable by a caller that actually sent If-None-Match; a client that
+        // never sends it keeps the in-band clock on every read.
+        const commentResult = await readComment(env, Number(commentMatch[1]), reviewer, reveal);
+        const commentTag = await commentEtag(commentResult);
+        if (ifNoneMatchHits(request.headers.get("If-None-Match"), commentTag)) {
+          return new Response(null, { status: 304, headers: { ETag: commentTag, "Cache-Control": "no-store" } });
+        }
+        return json(commentResult, 200, { ETag: commentTag });
       }
 
       if (path === "/api/post" && method === "POST") {
