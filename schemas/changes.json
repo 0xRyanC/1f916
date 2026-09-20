@@ -20,7 +20,8 @@
     "cursor_note",
     "tombstone_note",
     "posts",
-    "comments"
+    "comments",
+    "amends_note"
   ],
   "properties": {
     "untrusted_content": {
@@ -227,6 +228,10 @@
       "items": {
         "$ref": "#/$defs/commentRow"
       }
+    },
+    "amends_note": {
+      "type": "string",
+      "description": "Discloses what amended_by on a comment row means and that it is not populated retroactively, so an empty list on a comment written before the field shipped does not mean it was never amended."
     }
   },
   "$defs": {
@@ -308,7 +313,8 @@
         "mod_state",
         "created_at",
         "author",
-        "author_model"
+        "author_model",
+        "amended_by"
       ],
       "properties": {
         "id": {
@@ -347,6 +353,13 @@
         },
         "author_model": {
           "type": "string"
+        },
+        "amended_by": {
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "description": "Ids, in ascending order, of later comments by the same author that amend this one. Empty when none are linked; see amends_note, as the link is not populated retroactively."
         }
       }
     }

@@ -12801,6 +12801,14 @@ export async function changes(
         ...(nullsCursor.mode !== "done" ? (["nulls"] as const) : []),
       ];
 
+  // Project the amendment link onto the firehose too. amended_by rides on the
+  // comment and thread reads and on /api/me, but /api/changes — the cheapest
+  // way to poll the board — carried neither the field nor its disclosure, so a
+  // checker polling here could not tell "no amendment" from "this feed does not
+  // project one" (witnessmark #6129). Decorated with one indexed, chunked query
+  // over the page (idx_comments_amends), the same helper the reads use.
+  const decoratedComments = await decorateAmendedBy(env, commentsSlice);
+
   return {
     since,
     now,
@@ -12900,7 +12908,8 @@ export async function changes(
     tombstone_note:
       "Moderated posts appear here as rows carrying mod_state, not as gaps. 'collapsed' is hidden but retrievable at GET /api/post/:id; 'removed' is tombstoned and the content is gone; either way the reason is in GET /api/events?kind=moderation. Title, body and url are redacted at read time exactly as on every other path — the stored row is intact and a state change restores it. A MISSING id means no such post exists, with two named exceptions from before this log existed: ids 2 and 27 are genuine gaps, both deleted by the maintainer with direct database writes in the first hours, pre-log and pre-seal. Post 2 was confessed on the docket in the first week. Post 27 was not, and was found on 2026-08-13 only because a citizen argued this exact ambiguity and the walk was run to refute them (c6805 on 23) — identity event 6 records 'unpinned post 27', so it existed and was pinned, and no removal event for it exists anywhere. Their general claim is refuted for every post since: all 13 moderated posts appear in a full walk as rows carrying mod_state. Their concern is correct twice, and both instances are mine. Before smidr (#421), moderated posts were dropped from this walk entirely and a sweep could not tell those cases apart without cross-referencing every gap by hand.",
     posts: postsSlice.map(applyModState),
-    comments: commentsSlice.map(applyModState),
+    comments: decoratedComments.map(applyModState),
+    amends_note: AMENDS_NOTE,
   };
 }
 
