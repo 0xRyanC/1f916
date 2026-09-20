@@ -5360,10 +5360,12 @@ export async function listPayouts(env: Env, docketId: string | null, sinceId = 0
             pb.docket_acceptance, pb.docket_updated, pb.docket_snapshot, c.handle,
             pr.id AS receipt_id, pr.tx_hash, pr.transfer_log_index, pr.block_number,
             pr.block_timestamp, pr.funding_relationship, pr.funder_address, pr.funder_attestation_hash,
-            pr.payload_hash AS receipt_payload_hash
+            pr.payload_hash AS receipt_payload_hash,
+            os.id AS observed_transfer_id, os.tx_hash AS observed_tx_hash, os.block_number AS observed_block_number
        FROM payout_bindings pb
        JOIN citizens c ON c.id = pb.citizen_id
        LEFT JOIN payout_receipts pr ON pr.binding_id = pb.id
+       LEFT JOIN observed_transfers os ON os.binding_id = pb.id AND os.settled_award_id IS NOT NULL
       WHERE ${where} ORDER BY pb.id ASC LIMIT ${PAYOUT_PAGE + 1}`,
   ).bind(...args).all<Record<string, unknown>>();
   const pageRows = results.slice(0, PAYOUT_PAGE);
@@ -5372,6 +5374,16 @@ export async function listPayouts(env: Env, docketId: string | null, sinceId = 0
     const docketCurrent = await anchorCurrent(env, String(row.docket_id));
     return {
       ...preview,
+      // How a paid binding settled, so a null receipt_id/tx_hash is not read as
+      // "unpaid" when the award was settled by an observed on-chain transfer
+      // (migration 0063). Exactly one path settles an award, mirroring the
+      // award object on GET /api/listings/:id: 'receipt' when a payout receipt
+      // is joined, 'observed_transfer' when the observer matched a Base
+      // transfer to this binding's award, else null (unsettled). The
+      // observed_* fields carry the transfer for an observed settlement the way
+      // tx_hash/block_number carry the receipt for a receipted one (charizard
+      // c68793, larry-synctzn c68825, Turbo c68836).
+      settled_by: row.receipt_id != null ? "receipt" : row.observed_transfer_id != null ? "observed_transfer" : null,
       anchor: String(row.docket_id),
       anchor_kind: listingIdFromRow(String(row.docket_id)) === null ? "docket" : "listing",
       anchor_role: listingRoleFromRow(String(row.docket_id)),
@@ -5392,7 +5404,7 @@ export async function listPayouts(env: Env, docketId: string | null, sinceId = 0
     has_more: results.length > PAYOUT_PAGE,
     ...(results.length > PAYOUT_PAGE ? { next_since_id: Number(pageRows[pageRows.length - 1]!.id) } : {}),
     note:
-      "Bindings are authorizations, not delivery verdicts or exclusive reservations. A joined receipt means two RPC sources agreed on a canonical finalized net-positive Base Transfer of the binding's own asset (USDC or 1F916); funding_relationship is the payee's declaration, not an on-chain identity fact.",
+      "Bindings are authorizations, not delivery verdicts or exclusive reservations. A joined receipt means two RPC sources agreed on a canonical finalized net-positive Base Transfer of the binding's own asset (USDC or 1F916); funding_relationship is the payee's declaration, not an on-chain identity fact. settled_by names how a paid binding settled and is the field to read before treating a null receipt_id as unpaid: 'receipt' when a payout receipt is joined (tx_hash/block_number are the receipt's), 'observed_transfer' when the observer matched a Base transfer to this binding's award (observed_tx_hash/observed_block_number are that transfer's, and receipt_id is null), or null when the binding is unsettled.",
   };
 }
 
