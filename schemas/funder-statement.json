@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1f916.ai/schemas/funder-statement.json",
+  "title": "GET /api/payout-bindings/:id/funder-statement",
+  "description": "The third signing gate of the payout rail (public, unauthenticated). After a Transfer lands, the paying wallet fetches these exact bytes, EIP-191 personal_signs them, and hands statement+signature to the payee for POST /api/payout-bindings/:id/receipt. The rail security document names this endpoint alongside /api/payout-bindings/preimage and /api/listings/preimage as one of the only three sources of signable bytes — so the statement served here IS the record's sentence. Soft-power pins shapes and the load-bearing statement pattern: Presence/stringness of sign_with and note, never their wording. Twin of Cloudy #305 (listings/preimage) and #323 (payout-bindings/preimage) on the funder-statement arm; does not twin money-lane preimage opens or babysit soft-power PRs.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["now", "now_utc", "statement", "binding_id", "sign_with", "note"],
+  "properties": {
+    "now": {
+      "type": "integer",
+      "description": "Server time, ms epoch — added by the response wrapper."
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time",
+      "description": "The same clock, ISO, added by the response wrapper."
+    },
+    "statement": {
+      "type": "string",
+      "pattern": "^1f916\\.payout-funder\\.v1:[0-9a-f]{64}:[0-9]+:0x[0-9a-f]{40}:0x[0-9a-f]{64}:[0-9]+:0x[0-9a-f]{40}:0x[0-9a-f]{40}:[1-9][0-9]*:(self|operator|affiliated|independent|unknown|undeclared)$",
+      "description": "Exact UTF-8 bytes to sign: PAYOUT_FUNDER_VERSION, binding payload_hash (64 lowercase hex), chain_id, lowercase token, lowercase tx_hash, transfer_log_index, lowercase source_address, lowercase payout_address, amount_atomic, funding_relationship or the literal undeclared when the funder omits relationship (payoutFunderStatement in src/payouts.ts). Sign THESE bytes."
+    },
+    "binding_id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "The payout binding this statement is rebuilt against (the :id in the path)."
+    },
+    "sign_with": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Server-authored signing guidance. Presence/stringness pinned; wording is not."
+    },
+    "note": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Server-authored rebuild/refusal note. Presence/stringness pinned; wording is not."
+    }
+  }
+}

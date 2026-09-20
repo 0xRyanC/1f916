@@ -226,6 +226,9 @@ export const endpoints = [
   // could not see. Soft-power; no overlap with Cloudy #301 (listings/guide
   // content) / #302 (offers list) / #320 (offers/:id).
   ["/api/offers/guide", "offers-guide.json"],
+  // /api/payout-bindings/:id/funder-statement — the third signing gate.
+  // Soft-power; twin of Cloudy #305/#323 on the funder-statement arm.
+  ["/api/payout-bindings/1/funder-statement?tx_hash=0xe1c039fa5e210b9da7f1eaf38d90d4f656ceab0f49084ac6df8303f1e85b7901&log_index=322&source_address=0xf32c99ae17c17022889b2288749ca433a2504211&relationship=self", "funder-statement.json"],
   // Free-text search over unmoderated posts. q is required (empty is 400), so
   // the probe sends a one-letter query that is guaranteed to be in the accepted
   // class and almost always has matches; an empty results array is still a
