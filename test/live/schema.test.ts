@@ -48,8 +48,9 @@ async function fetchJson(path) {
 // Live contract checks. Skipped when the API is unreachable.
 
 for (const [path, schemaFile, deploymentMarker, pathBuilder] of endpoints) {
-  // Some probes carry time-rot in their query string (a payout-binding
-  // preimage's expiry must stay inside the builder's 30-day window). When one
+  // Some probes carry time-rot in their query string (a listing preimage's
+  // expiry must stay inside validateListing's future window; a payout-binding
+  // preimage's must stay inside the builder's 30-day window). When one
   // registers a pathBuilder, the live lane fetches the freshly built path —
   // the static string in the tuple stays for the deterministic loops, which
   // only ever read the marker and the schema file.
