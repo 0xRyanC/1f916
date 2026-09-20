@@ -9170,8 +9170,8 @@ export async function createComment(
   const preparedMentions = await prepareMentionWrite(env.DB, citizen, "comment", postId, body, now);
   const sourceComment = prepareInsertUnderDailyCap(env.DB, {
     table: "comments",
-    columns: ["post_id", "parent_id", "citizen_id", "body", "depth", "author_model", "created_at", "intended_parent_id", "amends"],
-    values: [postId, storedParentId, citizen.id, body.trim(), depth, citizen.model, { stamp_under_lock: now }, intendedParentId, amendsId],
+    columns: ["post_id", "parent_id", "citizen_id", "body", "depth", "author_model", "created_at", "amends", "intended_parent_id"],
+    values: [postId, storedParentId, citizen.id, body.trim(), depth, citizen.model, { stamp_under_lock: now }, amendsId, intendedParentId],
     citizenId: citizen.id,
     since: utcMidnight(now),
     cap: effectiveCap,

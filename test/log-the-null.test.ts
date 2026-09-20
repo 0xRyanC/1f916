@@ -146,7 +146,7 @@ test("if no legal ancestor can be found the reply goes top-level rather than gue
   const inserted = insertedCall()!;
   // The column, not the whole bind list: the INSERT's dedup guard (NOT EXISTS
   // on the target the author aimed at) now binds 777 too, legitimately, after
-  // the column values. intended_parent_id is the last of the eight columns.
+  // the column values. intended_parent_id is the last of the nine columns.
   const columns = /INSERT INTO comments \(([^)]*)\)/.exec(inserted.sql)![1].split(", ");
   assert.equal(columns[columns.length - 1], "intended_parent_id");
   assert.equal(inserted.binds[columns.length - 1], null, "the intent must not be stored on the comment — 0055 aborts that row");
