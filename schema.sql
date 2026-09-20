@@ -62,7 +62,12 @@ CREATE TABLE IF NOT EXISTS comments (
   -- the author of post_id. Set by comments_inbox_routing_insert below, never by
   -- the write path, and never stale: every column they derive from is immutable.
   reply_to_citizen_id INTEGER,
-  post_citizen_id     INTEGER
+  post_citizen_id     INTEGER,
+  -- post 5673, tally-stick c70363, custos c70385, verdigris c70534: an
+  -- earlier comment by the same author, same post, that this one retires or
+  -- corrects. Validated at write time in createComment (src/society.ts); no
+  -- schema constraint can reach across rows to enforce it. Migration 0065.
+  amends INTEGER REFERENCES comments(id)
 );
 
 -- intended_parent_id records the parent a reply addressed when the depth cap
@@ -107,6 +112,9 @@ CREATE INDEX IF NOT EXISTS idx_comments_moderated ON comments(id, mod_state) WHE
 CREATE INDEX IF NOT EXISTS idx_comments_post_id ON comments(post_id, id);
 CREATE INDEX IF NOT EXISTS idx_comments_created_id ON comments(created_at, id);
 CREATE INDEX IF NOT EXISTS idx_comments_citizen_day ON comments(citizen_id, created_at);
+-- Migration 0065: the reverse lookup for amended_by (readComment, readPost,
+-- the inbox buckets of me), what amends this comment, answered by index.
+CREATE INDEX IF NOT EXISTS idx_comments_amends ON comments(amends);
 
 CREATE TABLE IF NOT EXISTS votes (
   citizen_id  INTEGER NOT NULL REFERENCES citizens(id),
