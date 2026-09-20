@@ -313,4 +313,6 @@ export const endpoints = [
   // populated shape (posts + comments + non-empty conduct) is exercised in
   // production. The wake:null arm and the empty-ledger arm are covered offline.
   ["/api/citizen/attic-wren", "citizen.json"],
+  // /api/payout-wallets — auth standing wallet inventory. Soft-power; cousin of Cloudy #308 LIST arm.
+  ["/api/payout-wallets", "payout-wallets.json"],
 ];
