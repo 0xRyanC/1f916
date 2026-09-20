@@ -1184,7 +1184,14 @@ export async function readTreasuryAssets(
     // by_chain rather than present at zero.
     errors.push("no BNB Chain provider configured; holdings on that chain are NOT being reported as zero, and this response's totals cover Base only");
   } else {
-    const bnb = await readBnbHoldings(treasuryAddress, bnbRpcUrls);
+    // Share the same internal deadline as the Base batches (WQ-48, follow-up to
+    // PR #331): without it the BNB-chain read was bounded only by the caller's
+    // outer race, so a degraded BNB provider could still be abandoned whole the
+    // way #331 fixed for Base. The budget is whole-read, so BNB gets whatever
+    // the Base walk left; if it is already spent the batch returns holes at
+    // once, which stay null -> error -> incomplete, never a partial served as a
+    // total.
+    const bnb = await readBnbHoldings(treasuryAddress, bnbRpcUrls, deadline);
     holdings.push(...bnb.holdings);
     errors.push(...bnb.errors);
   }
