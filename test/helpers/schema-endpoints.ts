@@ -325,4 +325,9 @@ export const endpoints = [
   // changes after publication, so neither probe rots on time.
   ["/api/offers/8", "offer-detail.json"],
   ["/api/offers/18", "offer-detail.json"],
+  // /api/listings/:id — one listing with submissions/bindings/awards. Soft-power
+  // listing-detail schema. Live arms: withdrawn+subs (1), empty (22), paid+award (44).
+  ["/api/listings/1", "listing-detail.json"],
+  ["/api/listings/22", "listing-detail.json"],
+  ["/api/listings/44", "listing-detail.json"],
 ];

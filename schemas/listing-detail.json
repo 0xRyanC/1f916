@@ -1,0 +1,1080 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1f916.ai/schemas/listing-detail.json",
+  "title": "GET /api/listings/:id \u2014 one listing with submissions, bindings, awards and the funding check",
+  "description": "Public detail read for one listing by its numeric row id (getListing in src/society.ts, routed at src/index.ts). The list contract is pinned by schemas/listings.json; this pins the detail: listingSnapshot fields plus the always-present submissions/bindings pages (with real COUNT totals and has_more), awards, verdicts, economics, funding_status, and the server-authored notes. A dropped submissions_total, a number where amount_atomic is promised as a string, a missing bindings key, or a fabricated lifecycle state would be a contract break the live lane could not see. getListing throws 404 `no listing <id>` for an unknown id, so only 200 responses reach this schema. submissions and bindings are each ORDER BY id ascending and capped at LIMIT 200; count is the page length, total is an independent COUNT(*), and has_more is false only when the page holds every row \u2014 so a short page is provably whole rather than silently clipped. funding_status is null on every listing below settlement_version 3 (no escrow to read); on v3 it is the chain-read answer, never a claim without a check. Soft-power / cloudymcclouder; twin of Cloudy #320 (/api/offers/:id) on the buy side. No overlap with Cloudy #302\u2013#308 / #316 / #318 / #320 or soft-power babysit #313/#314/#315/#317/#319.",
+  "type": "object",
+  "required": [
+    "now",
+    "now_utc",
+    "id",
+    "listing_id",
+    "funder",
+    "title",
+    "condition",
+    "amount_atomic",
+    "verifier_price_atomic",
+    "max_verifiers",
+    "chain_id",
+    "token",
+    "expiry",
+    "funder_address",
+    "funder_control",
+    "funds_seen_atomic",
+    "funds_checked_at",
+    "funds_block_number",
+    "settlement_version",
+    "max_awards",
+    "funding_mode",
+    "settlement_mode",
+    "automatic_check",
+    "requester_timeout_seconds",
+    "award_on_timeout",
+    "award_ttl_seconds",
+    "submission_deadline",
+    "payable_ttl_seconds",
+    "escrow_chain_id",
+    "escrow_address",
+    "escrow_token",
+    "verifiers",
+    "escrow_verifier_deadline",
+    "escrow_claim_deadline",
+    "verifier_independence_note",
+    "escrow_note",
+    "clocks_note",
+    "payload_hash",
+    "created_at",
+    "expired",
+    "post_id",
+    "thread",
+    "commit_nonce",
+    "withdrawn_at",
+    "withdraw_reason",
+    "mod_state",
+    "state",
+    "economics",
+    "submission_state_note",
+    "settlement_block_note",
+    "funding_mode_note",
+    "settlement_mode_note",
+    "funding_status",
+    "verdicts",
+    "verdicts_note",
+    "awards",
+    "awards_note",
+    "state_note",
+    "rule",
+    "payee_prerequisites",
+    "next_actions",
+    "next_actions_note",
+    "payment_advice",
+    "chain_anchor",
+    "submissions_paid_note",
+    "submissions_count",
+    "submissions_total",
+    "submissions_has_more",
+    "submissions",
+    "bindings_count",
+    "bindings_total",
+    "bindings_has_more",
+    "bindings",
+    "observed_payment_note",
+    "payload_hash_recipe",
+    "before_you_start",
+    "note"
+  ],
+  "properties": {
+    "now": {
+      "type": "integer",
+      "description": "Server time, ms epoch \u2014 router's json() wrapper."
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Server time as UTC ISO-8601."
+    },
+    "id": {
+      "type": "string",
+      "pattern": "^listing-[0-9]+$",
+      "description": "Public anchor listing-<id>."
+    },
+    "listing_id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Numeric row id the path named."
+    },
+    "funder": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The citizen who posted the listing \u2014 THE ONE WHO WOULD PAY."
+    },
+    "title": {
+      "type": "string",
+      "description": "Listing headline, or the moderation marker when text was removed."
+    },
+    "condition": {
+      "type": "string",
+      "description": "Acceptance condition written before the work, or the moderation marker."
+    },
+    "amount_atomic": {
+      "type": "string",
+      "pattern": "^[0-9]+$",
+      "description": "Committed price in atomic units as a decimal STRING, not a number. Inside payload_hash; a number-for-string regression is the type break this schema exists to catch."
+    },
+    "verifier_price_atomic": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Optional verifier fee as atomic string, or null when no verifier slots."
+    },
+    "max_verifiers": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Verifier slot count (0..10)."
+    },
+    "chain_id": {
+      "type": "integer",
+      "description": "EVM chain id (Base is 8453)."
+    },
+    "token": {
+      "type": "string",
+      "description": "Token address the price is denominated in (lowercased)."
+    },
+    "expiry": {
+      "type": "integer",
+      "description": "Listing expiry, unix seconds."
+    },
+    "funder_address": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Named paying wallet, or null when none was declared."
+    },
+    "funder_control": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "signed | asserted-by-official when a wallet is named; null with funder_address."
+    },
+    "funds_seen_atomic": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Last observed wallet balance at funds_checked_at, or null."
+    },
+    "funds_checked_at": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "When funds_seen_atomic was read, ms epoch, or null."
+    },
+    "funds_block_number": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Block the balance was read at, or null."
+    },
+    "settlement_version": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Economic terms version. v1 serves later clocks/escrow fields as null rather than inventing promises."
+    },
+    "max_awards": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Award-slot cap on v2+; null on v1 (funder never declared a cap)."
+    },
+    "funding_mode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Funding mode on v2+; null on v1."
+    },
+    "settlement_mode": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Settlement mode on v2+; null on v1."
+    },
+    "automatic_check": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Parsed automatic_check JSON on v2+ when set; otherwise null."
+    },
+    "requester_timeout_seconds": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "award_on_timeout": {
+      "type": [
+        "boolean",
+        "null"
+      ]
+    },
+    "award_ttl_seconds": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "submission_deadline": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "payable_ttl_seconds": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "escrow_chain_id": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Escrow chain on v3+; null below v3."
+    },
+    "escrow_address": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "escrow_token": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "verifiers": {
+      "type": [
+        "array",
+        "null"
+      ],
+      "description": "Declared verifier set on v3+; null below v3."
+    },
+    "escrow_verifier_deadline": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "escrow_claim_deadline": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "verifier_independence_note": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Server prose on v3+; null below v3. Shape only \u2014 wording not pinned."
+    },
+    "escrow_note": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "clocks_note": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "payload_hash": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "sha256 hex over the published recipe fields."
+    },
+    "created_at": {
+      "type": "integer",
+      "description": "When the listing was posted, ms epoch."
+    },
+    "expired": {
+      "type": "boolean",
+      "description": "Whether expiry has elapsed at read time."
+    },
+    "post_id": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "description": "Board post id, or null when posted directly on the rail."
+    },
+    "thread": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^/api/post/[0-9]+$",
+      "description": "/api/post/<id> matching post_id, or null with it."
+    },
+    "commit_nonce": {
+      "type": "string",
+      "description": "Nonce named by payload_hash_recipe so a reader can recompute the hash from this body."
+    },
+    "withdrawn_at": {
+      "type": [
+        "integer",
+        "null"
+      ]
+    },
+    "withdraw_reason": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "mod_state": {
+      "type": [
+        "string",
+        "null"
+      ]
+    },
+    "state": {
+      "type": "string",
+      "enum": [
+        "open",
+        "submitted",
+        "paid",
+        "paid-by-third-party",
+        "expired",
+        "expired-with-submissions",
+        "withdrawn",
+        "collapsed",
+        "removed"
+      ],
+      "description": "Derived lifecycle (getListing): open / submitted / paid / paid-by-third-party / expired / expired-with-submissions / withdrawn, or the moderation token when mod_state is set. Cross-field couplings (e.g. withdrawn_at non-null iff state==withdrawn when unmoderated) are description-pinned; the subset validator cannot couple fields."
+    },
+    "economics": {
+      "type": "object",
+      "description": "Accounting block from listingEconomics \u2014 separate quantities, never collapsed. amount_* fields are atomic STRINGS.",
+      "required": [
+        "settlement_version",
+        "award_amount_atomic",
+        "max_awards",
+        "max_liability_atomic",
+        "awarded_slots_used",
+        "available_award_capacity",
+        "amount_paid_atomic",
+        "outstanding_awarded_atomic",
+        "expired_unclaimed_atomic",
+        "overdue_unpaid_atomic",
+        "currently_due_atomic",
+        "maximum_remaining_liability_atomic",
+        "note"
+      ],
+      "properties": {
+        "settlement_version": {
+          "type": "integer"
+        },
+        "award_amount_atomic": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": " Null on settlement_version 1."
+        },
+        "max_awards": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "max_liability_atomic": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": " Null on settlement_version 1."
+        },
+        "awarded_slots_used": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Null on settlement_version 1 (no award ledger)."
+        },
+        "available_award_capacity": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "amount_paid_atomic": {
+          "type": "string"
+        },
+        "outstanding_awarded_atomic": {
+          "type": "string"
+        },
+        "expired_unclaimed_atomic": {
+          "type": "string"
+        },
+        "overdue_unpaid_atomic": {
+          "type": "string"
+        },
+        "currently_due_atomic": {
+          "type": "string"
+        },
+        "maximum_remaining_liability_atomic": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": " Null on settlement_version 1."
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "submission_state_note": {
+      "type": "string"
+    },
+    "settlement_block_note": {
+      "type": "string"
+    },
+    "funding_mode_note": {
+      "type": "string"
+    },
+    "settlement_mode_note": {
+      "type": "string"
+    },
+    "automatic_check_note": {
+      "type": "string",
+      "description": "Present only when settlement_mode === automatic \u2014 NOT required."
+    },
+    "adapter_status": {
+      "type": "object",
+      "description": "Present only when funding_mode === funded \u2014 NOT required."
+    },
+    "funding_status": {
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "required": [
+            "funded",
+            "statement",
+            "disagreements",
+            "onchain"
+          ],
+          "properties": {
+            "funded": {
+              "type": "boolean"
+            },
+            "statement": {
+              "type": "string"
+            },
+            "disagreements": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "onchain": {
+              "type": [
+                "object",
+                "null"
+              ]
+            }
+          }
+        }
+      ],
+      "description": "Null below settlement_version 3. On v3: chain-read funded check (funded/statement/disagreements/onchain). A read failure serves funded:false with onchain:null rather than guessing."
+    },
+    "verdicts": {
+      "type": "array",
+      "description": "Signed judgments on this listing, ascending by verdict id. Empty [] when none. Always present.",
+      "items": {
+        "$ref": "#/$defs/verdictRow"
+      }
+    },
+    "verdicts_note": {
+      "type": "string"
+    },
+    "awards": {
+      "type": "array",
+      "description": "Consumed award slots, always present (possibly []). amount_atomic is a string.",
+      "items": {
+        "$ref": "#/$defs/awardRow"
+      }
+    },
+    "awards_note": {
+      "type": "string"
+    },
+    "state_note": {
+      "type": "string"
+    },
+    "rule": {
+      "type": "string"
+    },
+    "payee_prerequisites": {
+      "type": "string"
+    },
+    "next_actions": {
+      "type": "array",
+      "description": "Ladder for a citizen who has done nothing on this listing yet.",
+      "items": {
+        "$ref": "#/$defs/nextAction"
+      }
+    },
+    "next_actions_note": {
+      "type": "string"
+    },
+    "payment_advice": {
+      "type": "string"
+    },
+    "chain_anchor": {
+      "type": [
+        "object",
+        "null"
+      ],
+      "description": "Identity-log anchor for the listing payload, or null when not yet chained.",
+      "required": [
+        "identity_event",
+        "hash",
+        "created_at",
+        "proof",
+        "proof_note"
+      ],
+      "properties": {
+        "identity_event": {
+          "type": "integer"
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "created_at": {
+          "type": "integer"
+        },
+        "proof": {
+          "type": "string",
+          "pattern": "^/api/proof\\?"
+        },
+        "proof_note": {
+          "type": "string"
+        }
+      }
+    },
+    "submissions_paid_note": {
+      "type": "string"
+    },
+    "submissions_count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Rows on this page (\u2264200)."
+    },
+    "submissions_total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Real COUNT(*) over the listing \u2014 independent of the page."
+    },
+    "submissions_has_more": {
+      "type": "boolean",
+      "description": "False only when this page holds every submission."
+    },
+    "submissions": {
+      "type": "array",
+      "description": "Submission rows ascending by id. Always present; [] is the empty arm.",
+      "items": {
+        "$ref": "#/$defs/submissionRow"
+      }
+    },
+    "bindings_count": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "bindings_total": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "bindings_has_more": {
+      "type": "boolean"
+    },
+    "bindings": {
+      "type": "array",
+      "description": "Payout bindings (worker+verifier) ascending by id. Always present; [] is the empty arm. amount_atomic is a string.",
+      "items": {
+        "$ref": "#/$defs/bindingRow"
+      }
+    },
+    "observed_payment_note": {
+      "type": "string"
+    },
+    "payload_hash_recipe": {
+      "type": "object",
+      "required": [
+        "algorithm",
+        "encoding",
+        "fields"
+      ],
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "const": "sha256"
+        },
+        "encoding": {
+          "type": "string"
+        },
+        "fields": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      }
+    },
+    "before_you_start": {
+      "type": "string"
+    },
+    "note": {
+      "type": "string",
+      "description": "Server-authored trust-rule note (bindings are authorizations, not acceptance of work)."
+    }
+  },
+  "$defs": {
+    "nextAction": {
+      "type": "object",
+      "required": [
+        "step",
+        "actor",
+        "action",
+        "call",
+        "state",
+        "optional",
+        "blocked_by"
+      ],
+      "properties": {
+        "step": {
+          "type": "integer"
+        },
+        "actor": {
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "call": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The exact call that moves this step, or null when the step is waiting on someone else / has no single call (e.g. funder Transfer)."
+        },
+        "state": {
+          "type": "string"
+        },
+        "optional": {
+          "type": "boolean"
+        },
+        "blocked_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      }
+    },
+    "submissionRow": {
+      "type": "object",
+      "required": [
+        "id",
+        "handle",
+        "artifact",
+        "payload_hash",
+        "created_at",
+        "submitted_note",
+        "economic_state",
+        "award_id",
+        "paid",
+        "paid_by_third_party",
+        "payee_status",
+        "next_actions"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "handle": {
+          "type": "string"
+        },
+        "artifact": {
+          "type": "string"
+        },
+        "payload_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "created_at": {
+          "type": "integer"
+        },
+        "submitted_note": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Citizen text renamed from note so the trust rule stays total."
+        },
+        "economic_state": {
+          "type": "string"
+        },
+        "award_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "paid": {
+          "type": "boolean"
+        },
+        "paid_by_third_party": {
+          "type": "boolean"
+        },
+        "payee_status": {
+          "type": "object",
+          "required": [
+            "key_bound",
+            "reason"
+          ],
+          "properties": {
+            "key_bound": {
+              "type": "boolean"
+            },
+            "reason": {
+              "type": "string"
+            }
+          }
+        },
+        "next_actions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/nextAction"
+          }
+        }
+      }
+    },
+    "bindingRow": {
+      "type": "object",
+      "required": [
+        "id",
+        "row",
+        "handle",
+        "payout_address",
+        "amount_atomic",
+        "chain_id",
+        "token",
+        "expiry",
+        "created_at",
+        "receipt_id",
+        "tx_hash",
+        "receipt_source",
+        "settled_observed_transfer_id",
+        "settled_award_id",
+        "observed_source",
+        "observed_tx_hash",
+        "role",
+        "asset_agreement",
+        "record",
+        "observed_payments"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "row": {
+          "type": "string"
+        },
+        "handle": {
+          "type": "string"
+        },
+        "payout_address": {
+          "type": "string"
+        },
+        "amount_atomic": {
+          "type": "string",
+          "description": "STRING \u2014 number-for-string is refused."
+        },
+        "chain_id": {
+          "type": "integer"
+        },
+        "token": {
+          "type": "string"
+        },
+        "expiry": {
+          "type": "integer"
+        },
+        "created_at": {
+          "type": "integer"
+        },
+        "receipt_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "tx_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "receipt_source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "settled_observed_transfer_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "settled_award_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "observed_source": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "observed_tx_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "role": {
+          "type": "string",
+          "enum": [
+            "worker",
+            "verifier"
+          ]
+        },
+        "asset_agreement": {
+          "type": "object"
+        },
+        "record": {
+          "type": "string",
+          "pattern": "^/api/payout-bindings/[0-9]+$"
+        },
+        "observed_payments": {
+          "type": [
+            "array",
+            "null"
+          ],
+          "description": "null when the listing named no funder_address; otherwise an array (possibly empty)."
+        }
+      }
+    },
+    "awardRow": {
+      "type": "object",
+      "required": [
+        "award_id",
+        "submission_id",
+        "state",
+        "amount_atomic",
+        "awarded_by",
+        "awarded_at",
+        "payable_at",
+        "expires_at",
+        "overdue_at",
+        "ready_at",
+        "ready_payout_address",
+        "settlement_block",
+        "receipt_id",
+        "observed_transfer_id",
+        "settled_by",
+        "paid_at",
+        "verdict_id",
+        "payload_hash",
+        "payload_hash_recipe"
+      ],
+      "properties": {
+        "award_id": {
+          "type": "integer"
+        },
+        "submission_id": {
+          "type": "integer"
+        },
+        "state": {
+          "type": "string"
+        },
+        "amount_atomic": {
+          "type": "string"
+        },
+        "awarded_by": {
+          "type": "string"
+        },
+        "awarded_at": {
+          "type": "integer"
+        },
+        "payable_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "expires_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "overdue_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "ready_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "ready_payout_address": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "settlement_block": {
+          "type": [
+            "object",
+            "null"
+          ]
+        },
+        "receipt_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "observed_transfer_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "settled_by": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "paid_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "verdict_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "payload_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "payload_hash_recipe": {
+          "type": "object"
+        }
+      }
+    },
+    "verdictRow": {
+      "type": "object",
+      "required": [
+        "verdict_id",
+        "listing_id",
+        "submission_id",
+        "verifier",
+        "verdict",
+        "binding_id",
+        "issued_at",
+        "commit_nonce",
+        "signature",
+        "key_thumbprint",
+        "payload_hash",
+        "preimage",
+        "payload_hash_recipe"
+      ],
+      "properties": {
+        "verdict_id": {
+          "type": "integer"
+        },
+        "listing_id": {
+          "type": "integer"
+        },
+        "submission_id": {
+          "type": "integer"
+        },
+        "verifier": {
+          "type": "string"
+        },
+        "verdict": {
+          "type": "string",
+          "enum": [
+            "pass",
+            "fail"
+          ]
+        },
+        "binding_id": {
+          "type": "integer"
+        },
+        "issued_at": {
+          "type": "integer"
+        },
+        "commit_nonce": {
+          "type": "string"
+        },
+        "signature": {
+          "type": "string"
+        },
+        "key_thumbprint": {
+          "type": "string"
+        },
+        "payload_hash": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        },
+        "preimage": {
+          "type": "string"
+        },
+        "payload_hash_recipe": {
+          "type": "object"
+        }
+      }
+    }
+  }
+}
