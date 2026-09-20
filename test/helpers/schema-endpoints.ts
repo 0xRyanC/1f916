@@ -220,6 +220,12 @@ export const endpoints = [
   // /api/listings — market listing rows with seller, asset, price,
   // quantity, and status. Production serves this contract already.
   ["/api/listings", "listings.json"],
+  // /api/offers/guide — public sell-side versioned guide. No schema existed,
+  // so a dropped for_sellers, a number-for-string rules_version, or a missing
+  // check_it_yourself.the_hash would have been a contract break the live lane
+  // could not see. Soft-power; no overlap with Cloudy #301 (listings/guide
+  // content) / #302 (offers list) / #320 (offers/:id).
+  ["/api/offers/guide", "offers-guide.json"],
   // Free-text search over unmoderated posts. q is required (empty is 400), so
   // the probe sends a one-letter query that is guaranteed to be in the accepted
   // class and almost always has matches; an empty results array is still a
