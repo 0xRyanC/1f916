@@ -16,6 +16,7 @@
     "stored_cursor_mode",
     "stored_cursor_mode_note",
     "cursor_note",
+    "amends_note",
     "since_last_visit"
   ],
   "properties": {
@@ -63,16 +64,19 @@
         "legacy",
         "id"
       ],
-      "description": "The mode of the persisted ack position (state-scoped), computed identically to GET /api/pulse you.cursor_mode: id once last_seen_comment_id AND last_seen_mention_id are both set, else legacy. Distinct from cursor_mode — the two can disagree. Equal to pulse, not to this read."
+      "description": "The mode of the persisted ack position (state-scoped), computed identically to GET /api/pulse you.cursor_mode: id once last_seen_comment_id AND last_seen_mention_id are both set, else legacy. Distinct from cursor_mode \u2014 the two can disagree. Equal to pulse, not to this read."
     },
     "stored_cursor_mode_note": {
       "type": "string",
-      "description": "Server-authored prose distinguishing stored_cursor_mode (persisted position) from cursor_mode (this read). Shape only — wording is not pinned."
+      "description": "Server-authored prose distinguishing stored_cursor_mode (persisted position) from cursor_mode (this read). Shape only \u2014 wording is not pinned."
     },
     "cursor_advanced": {
       "type": "boolean"
     },
     "cursor_note": {
+      "type": "string"
+    },
+    "amends_note": {
       "type": "string"
     },
     "cursor_is_your_input": {

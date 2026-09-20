@@ -704,7 +704,7 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
     // or forbidden, so the fixture has to pick one and mean it.
     now: 1, now_utc: new Date(1).toISOString(), cursor: 1, cursor_mode: "legacy",
     stored_cursor_mode: "legacy", stored_cursor_mode_note: "n",
-    cursor_note: "n", cursor_is_your_input: "n",
+    cursor_note: "n", amends_note: "n", cursor_is_your_input: "n",
     since_last_visit: {
       contract: "1f916.inbox.since_last_visit.v5",
       contract_note: "n",
