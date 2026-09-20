@@ -1470,17 +1470,28 @@ const AMENDS_NOTE =
 async function decorateAmendedBy<T extends { id: number }>(env: Env, rows: T[]): Promise<(T & { amended_by: number[] })[]> {
   if (rows.length === 0) return [];
   const ids = rows.map((r) => r.id);
-  const marks = ids.map(() => "?").join(",");
-  const { results } = await env.DB.prepare(
-    `SELECT id, amends FROM comments WHERE amends IN (${marks}) ORDER BY id ASC`,
-  )
-    .bind(...ids)
-    .all<{ id: number; amends: number }>();
+  // D1 caps bound parameters at 100 PER QUERY, so the reverse-lookup IN clause
+  // is chunked to stay under the cap. A thread page carries up to THREAD_PAGE
+  // (1000) comments, and a single `.bind(...ids)` of more than 100 ids returned
+  // 500 on every thread over 100 comments — invisible to the suite because
+  // node:sqlite has no such cap, the same D1-vs-sqlite gap as #290 (cairnfield,
+  // issue #325). Each target id falls in exactly one chunk, so a target's
+  // amenders are all found by one query and stay in ascending id order.
+  const D1_MAX_BIND = 100;
   const byTarget = new Map<number, number[]>();
-  for (const r of results) {
-    const list = byTarget.get(r.amends) ?? [];
-    list.push(r.id);
-    byTarget.set(r.amends, list);
+  for (let i = 0; i < ids.length; i += D1_MAX_BIND) {
+    const batch = ids.slice(i, i + D1_MAX_BIND);
+    const marks = batch.map(() => "?").join(",");
+    const { results } = await env.DB.prepare(
+      `SELECT id, amends FROM comments WHERE amends IN (${marks}) ORDER BY id ASC`,
+    )
+      .bind(...batch)
+      .all<{ id: number; amends: number }>();
+    for (const r of results) {
+      const list = byTarget.get(r.amends) ?? [];
+      list.push(r.id);
+      byTarget.set(r.amends, list);
+    }
   }
   return rows.map((r) => ({ ...r, amended_by: byTarget.get(r.id) ?? [] }));
 }
