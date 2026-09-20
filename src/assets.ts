@@ -451,7 +451,18 @@ export interface RpcCall {
 // single public RPC answering null from Workers egress, so one endpoint is not
 // a dependable dependency. Any call that did not answer comes back null, and
 // callers must treat null as "unknown", never as zero.
-export async function batchCall(rpcUrls: string[], calls: RpcCall[], timeoutMs = 3000): Promise<(string | null)[]> {
+// deadline (ms epoch) is the whole-read budget, not a hop timeout. When the
+// caller carries one, the per-hop timeout is clamped to what is left so a
+// degraded window cannot stack hop timeouts past the budget, and the
+// endpoint loop abandons the untried providers the instant the budget is
+// spent. A batch that has already landed some calls is handed back as-is;
+// the holes stay null and the caller says "unknown", never "zero".
+export async function batchCall(
+  rpcUrls: string[],
+  calls: RpcCall[],
+  timeoutMs = 3000,
+  deadline?: number,
+): Promise<(string | null)[]> {
   const payload = calls.map((c, i) => ({
     jsonrpc: "2.0",
     id: i,
@@ -459,8 +470,14 @@ export async function batchCall(rpcUrls: string[], calls: RpcCall[], timeoutMs =
     params: [c.from ? { from: c.from, to: c.to, data: c.data } : { to: c.to, data: c.data }, "latest"],
   }));
   for (const rpc of rpcUrls) {
+    let hopMs = timeoutMs;
+    if (deadline !== undefined) {
+      const left = deadline - Date.now();
+      if (left <= 0) break; // budget spent: untried providers are abandoned, holes stay null
+      hopMs = Math.min(timeoutMs, left);
+    }
     const ctrl = new AbortController();
-    const timer = setTimeout(() => ctrl.abort(), timeoutMs);
+    const timer = setTimeout(() => ctrl.abort(), hopMs);
     try {
       const res = await fetch(rpc, {
         method: "POST",
@@ -504,9 +521,15 @@ export async function batchCallComplete(
   calls: RpcCall[],
   passes = 3,
   chunkSize = 16,
+  deadline?: number,
 ): Promise<(string | null)[]> {
   const out: (string | null)[] = new Array(calls.length).fill(null);
   for (let pass = 0; pass < passes; pass++) {
+    // A caller with a wall-clock budget stops asking the chain once it is
+    // spent: the holes that were going to be re-requested stay null and the
+    // partial array is returned, so readTreasuryAssets can serve the lines that
+    // did land instead of a hung connection that later yields nothing at all.
+    if (deadline !== undefined && deadline - Date.now() <= 0) break;
     const missing: number[] = [];
     out.forEach((v, i) => {
       if (v === null) missing.push(i);
@@ -519,6 +542,8 @@ export async function batchCallComplete(
       const res = await batchCall(
         rotated,
         idx.map((i) => calls[i]),
+        3000,
+        deadline,
       );
       idx.forEach((target, k) => {
         if (res[k] !== null) out[target] = res[k];
@@ -569,6 +594,7 @@ export async function readPoolDepth(
   src: ClaimSource,
   amountIn: bigint,
   rpcUrls: string[],
+  deadline?: number,
 ): Promise<{ depth: PoolDepth | null; error: string | null; checked_at: number }> {
   const key = `${src.poolId}:${amountIn}`;
   if (depthCache && depthCache.key === key && Date.now() - depthCache.cachedAt < DEPTH_TTL_MS) {
@@ -578,7 +604,7 @@ export async function readPoolDepth(
   // first read can occur. Keep those clocks separate: a slow multi-pass walk
   // must not be made younger merely because it took seconds to finish.
   const checkedAt = Date.now();
-  const computed = await readPoolDepthUncached(src, amountIn, rpcUrls);
+  const computed = await readPoolDepthUncached(src, amountIn, rpcUrls, deadline);
   const cachedAt = Date.now();
   // Only a success is cached. A transient RPC failure must not pin "unknown"
   // in front of the next reader for a minute.
@@ -590,15 +616,22 @@ async function readPoolDepthUncached(
   src: ClaimSource,
   amountIn: bigint,
   rpcUrls: string[],
+  deadline?: number,
 ): Promise<{ depth: PoolDepth | null; error: string | null }> {
   const S = SELECTORS;
   const sv = BASE_CONTRACTS.V4_STATE_VIEW;
   const int = (v: number) => BigInt.asUintN(256, BigInt(v)).toString(16).padStart(64, "0");
 
+  // The depth walk is the longest read in the composite and the one that
+  // outruns the outer budget first. Once the deadline lands mid-walk the
+  // batch helpers stop re-requesting and the ladder comes back with holes,
+  // which the null checks below turn into the same "no realizable figure"
+  // answer a fully failed walk gets — the books keep every figure that
+  // actually read.
   const [slot0, liqRaw] = await batchCallComplete(rpcUrls, [
     { to: sv, data: S.getSlot0 + pad(src.poolId) },
     { to: sv, data: S.getLiquidity + pad(src.poolId) },
-  ]);
+  ], 3, 16, deadline);
   if (!slot0 || !liqRaw) return { depth: null, error: "pool slot0/liquidity did not answer; no realizable figure" };
   const sqrtPriceX96 = word(slot0, 0);
   if (sqrtPriceX96 === 0n) {
@@ -616,6 +649,9 @@ async function readPoolDepthUncached(
   const bitmaps = await batchCallComplete(
     rpcUrls,
     wordPositions.map((w) => ({ to: sv, data: S.getTickBitmap + pad(src.poolId) + int(w) })),
+    3,
+    16,
+    deadline,
   );
   if (bitmaps.some((b) => b === null)) return { depth: null, error: "tick bitmap incomplete; no realizable figure" };
   const ticks: number[] = [];
@@ -625,6 +661,9 @@ async function readPoolDepthUncached(
   const netRaw = await batchCallComplete(
     rpcUrls,
     ticks.map((t) => ({ to: sv, data: S.getTickLiquidity + pad(src.poolId) + int(t) })),
+    3,
+    16,
+    deadline,
   );
   if (netRaw.some((r) => r === null)) return { depth: null, error: "tick liquidity incomplete; no realizable figure" };
   // liquidityNet is int128, ABI-encoded sign-extended across the full word.
@@ -776,14 +815,21 @@ export function provenanceFor(h: Pick<Holding, "asset" | "location" | "chain">):
 export async function readBnbHoldings(
   treasuryAddress: string,
   rpcUrls: string[],
+  deadline?: number,
 ): Promise<{ holdings: Holding[]; errors: string[] }> {
   const S = SELECTORS;
   const t = pad(treasuryAddress);
   const errors: string[] = [];
-  const [balRaw, slot0] = await batchCallComplete(rpcUrls, [
-    { to: BNB_CONTRACTS.NVDAB, data: S.balanceOf + t },
-    { to: BNB_CONTRACTS.NVDAB_USDT_POOL, data: S.slot0V3 },
-  ]);
+  const [balRaw, slot0] = await batchCallComplete(
+    rpcUrls,
+    [
+      { to: BNB_CONTRACTS.NVDAB, data: S.balanceOf + t },
+      { to: BNB_CONTRACTS.NVDAB_USDT_POOL, data: S.slot0V3 },
+    ],
+    3,
+    16,
+    deadline,
+  );
 
   // token0 is NVDAB and token1 is BSC-USD. The shared helper returns token0 per
   // token1, so dollars per token is its reciprocal. Both sides are 18 decimals,
@@ -819,11 +865,31 @@ export async function readBnbHoldings(
   return { holdings: [holding], errors };
 }
 
+// A treasury that answers with an empty book on a slow window is worse than
+// a treasury that says "partial". This internal deadline is how
+// readTreasuryAssets bounds itself the way readOnchainUsdcCents bounds its
+// provider walk: long enough that a healthy single-provider window still gets
+// its full answer, short enough to settle BEFORE the outer
+// ASSET_REFRESH_BUDGET_MS race fires — so a degraded read returns the lines
+// it already landed instead of hanging past the budget and being served
+// empty. Callers may override it (a null disables the internal clock).
+const TREASURY_ASSET_DEADLINE_MS = 5_000;
+
 export async function readTreasuryAssets(
   treasuryAddress: string,
   rpcUrls: string[],
   bnbRpcUrls: string[] = [],
+  deadlineMs: number | null = TREASURY_ASSET_DEADLINE_MS,
 ): Promise<AssetReadResult> {
+  // Internal deadline, set inside the outer ASSET_REFRESH_BUDGET_MS race so a
+  // healthy read still settles before the outer timeout fires. This is the
+  // mechanism readOnchainUsdcCents uses to bound its own provider walk: once
+  // this lands, every batch below stops re-requesting and returns what it has,
+  // so the lines that already landed survive a degraded window instead of the
+  // whole composite being abandoned by the outer timeout and served empty.
+  // A null override (tests, or a future binding) disables the internal clock
+  // and leaves the outer race as the only guard.
+  const deadline = deadlineMs === null ? undefined : Date.now() + deadlineMs;
   // Start time is conservative: fallback retries can make a read span seconds,
   // and an older cached pool-depth estimate may move this timestamp back again.
   let checkedAt = Date.now();
@@ -850,7 +916,7 @@ export async function readTreasuryAssets(
     { to: src.feesManager, data: S.collectFees + pad(src.poolId), from: treasuryAddress },
   ];
   const [usdcRaw, wethRaw, roundData, slot0, sharesRaw, cum0Raw, cum1Raw, last0Raw, last1Raw, tokenWalletRaw, collectRaw] =
-    await batchCallComplete(rpcUrls, calls);
+    await batchCallComplete(rpcUrls, calls, 3, 16, deadline);
 
   // ETH/USD from Chainlink, 8 decimals. The update time is carried through so a
   // stale oracle is visible rather than silently trusted — an oracle that
@@ -1058,7 +1124,11 @@ export async function readTreasuryAssets(
   // untouched and simply publishes no realizable value.
   const tier3 = holdings[holdings.length - 1];
   if (claimToken !== null && claimToken > 0n) {
-    const { depth, error, checked_at } = await readPoolDepth(src, claimToken, rpcUrls);
+    // The deadline rides in so a budget-spent window aborts the first depth
+    // batch before it fetches, and the walk degrades to "no realizable figure"
+    // the way it does when a provider fails outright — the mark stands, the
+    // realizable value simply is not on this read.
+    const { depth, error, checked_at } = await readPoolDepth(src, claimToken, rpcUrls, deadline);
     checkedAt = Math.min(checkedAt, checked_at);
     // ADVISORY, not an error. The block comment above promises this failure
     // "leaves every existing figure untouched"; routing it into `errors` broke
