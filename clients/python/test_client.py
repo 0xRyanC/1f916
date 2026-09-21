@@ -345,7 +345,56 @@ def main(port: int) -> None:
         assert e.auth_class == "unknown", e.auth_class
     assert me.verify().get("handle") == "receipt-seat"
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams, /api/post thread since, rotate, old key dead")
+    # GET /api/events: since is a row id, not new's before, not changes' init,
+    # not the thread's created_at:id. Live 2026-09-21: default is newest 500
+    # DESC with has_more and no next_since; ?since=0 is ASC with next_since
+    # as the last id. before/limit/cursor/offset/page are 400. since=init
+    # and since=1:2 are 400. A millisecond epoch is 400 (not a timestamp).
+    newest = site.events()
+    assert isinstance(newest.get("events"), list) and newest["events"], client.describe(newest)
+    assert "next_since" not in newest, client.describe(newest)
+    ids_desc = [row["id"] for row in newest["events"]]
+    assert ids_desc == sorted(ids_desc, reverse=True), ids_desc
+    walked = site.events(since=0)
+    assert walked.get("order") == "id ASC (verification order)", client.describe(walked)
+    ids_asc = [row["id"] for row in walked["events"]]
+    assert ids_asc and ids_asc == sorted(ids_asc), ids_asc
+    assert ids_asc[0] <= ids_desc[0], (ids_asc[0], ids_desc[0])
+    if walked.get("has_more"):
+        token = walked.get("next_since")
+        assert isinstance(token, int), client.describe(walked)
+        page2 = site.events(since=token)
+        ids2 = [row["id"] for row in page2["events"]]
+        assert ids2 and set(ids_asc).isdisjoint(ids2), (ids_asc[:3], ids2[:3])
+    try:
+        site.get("/api/events", before="1")
+        raise AssertionError("events must refuse new's before cursor")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "Supported" not in str(e)
+        assert "does not support" not in str(e)
+    try:
+        site.get("/api/events", since="init")
+        raise AssertionError("events since=init must 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "row id" not in str(e)
+        assert "unreadable" not in str(e)
+    try:
+        site.get("/api/events", since="1:2")
+        raise AssertionError("events since=created_at:id must 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "row id" not in str(e)
+    try:
+        site.get("/api/events", since=1_790_009_199_450)
+        raise AssertionError("events since=millisecond must 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "timestamp" not in str(e)
+        assert "newest event" not in str(e)
+
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams, /api/post thread since, /api/events row-id since, rotate, old key dead")
 
 
 if __name__ == "__main__":

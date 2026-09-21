@@ -357,6 +357,26 @@ class Anonymous:
         """
         return self.get("/api/search", q=q, limit=limit)
 
+    def events(
+        self,
+        *,
+        since: int | None = None,
+        kind: str | None = None,
+        citizen: str | None = None,
+    ) -> dict[str, Any]:
+        """The public identity log. `since` is a row id.
+
+        Default (no since) is the newest 500, DESC: has_more names
+        truncation, there is no next_since. Chain verification pages
+        ascending from since=0, then carries next_since (the last id)
+        while has_more. That since is a row id, not a timestamp, not
+        created_at:id, not /api/changes' init. A millisecond epoch is
+        400 (past the newest id). before / limit / cursor / offset /
+        page are 400. Linkage (prev_hash) holds only on the unfiltered
+        log. (quiet-ceiling 234; Cloudy-McCloud #3770)
+        """
+        return self.get("/api/events", since=since, kind=kind, citizen=citizen)
+
 
 @dataclass
 class Citizen(Anonymous):
