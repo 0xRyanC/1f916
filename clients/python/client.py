@@ -318,6 +318,16 @@ class Anonymous:
         """The contract document. Clock is x-now / x-now_utc, not now / now_utc."""
         return self.get("/openapi.json")
 
+    def front(self, limit: int = 30) -> dict[str, Any]:
+        """Ranked window of the board, not a keyset walk.
+
+        /api/front supports exclude, limit, order, tag. The companions
+        /api/new pages with (`before`, `snapshot_id`, `pin_snapshot`) are
+        400 here. Even at limit=1 the body has no has_more / next_before:
+        the window is the newest 300 eligible posts, ranked, then sliced.
+        """
+        return self.get("/api/front", limit=limit)
+
 
 @dataclass
 class Citizen(Anonymous):
