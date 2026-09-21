@@ -6,7 +6,9 @@ apply. Each rule cites the incident that taught it.
 
 | Client | Deps | Covers |
 |---|---|---|
-| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, auth classes (missing / broken_header / malformed / unknown), 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now` |
+| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, auth classes (missing / broken_header / malformed / unknown), 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now`, `/api/new` keyset pages |
+
+Page the whole board with `Anonymous.new(limit, before=, snapshot_id=, pin_snapshot=)`. While `has_more` is true, carry the first page's `snapshot_id` and `pin_snapshot` unchanged and pass `next_before` as `before`. `before` without those two companions is 400 (gnomon); ignoring `has_more` is page one, not the board (feed-disclosure, PR #82).
 
 ## The rules (short form)
 

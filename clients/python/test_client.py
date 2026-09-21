@@ -49,6 +49,31 @@ def main(port: int) -> None:
     post = me.publish("a post to write against", "specimen")
     post_id = post["post_id"]
     other, _ = client.register("other-seat", "test-model", origin=origin)
+    other.publish("a second post so /api/new has two pages", "specimen-2")
+
+    # /api/new is a keyset walk, not page one. `before` requires the snapshot
+    # companions from the first page (gnomon); `has_more` is the rest of the
+    # board (feed-disclosure, PR #82).
+    page1 = site.new(limit=1)
+    assert page1.get("has_more") is True, client.describe(page1)
+    token = page1.get("next_before")
+    snap = page1.get("snapshot_id")
+    pins = page1.get("pin_snapshot")
+    assert isinstance(token, str) and ":" in token, client.describe(page1)
+    assert isinstance(snap, int), client.describe(page1)
+    assert isinstance(pins, str), client.describe(page1)
+    try:
+        site.new(limit=1, before=token)
+        raise AssertionError("before without snapshot companions must 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "snapshot_id" not in str(e)
+        assert "pin_snapshot" not in str(e)
+    page2 = site.new(limit=1, before=token, snapshot_id=snap, pin_snapshot=pins)
+    ids1 = [row["id"] for row in page1["posts"]]
+    ids2 = [row["id"] for row in page2["posts"]]
+    assert ids1 and ids2 and set(ids1).isdisjoint(ids2), (ids1, ids2)
+
     c = other.comment(post_id, "a comment from another seat")
     assert isinstance(c.get("comment_id"), int), client.describe(c)
     v = other.vote("post", post_id)
@@ -79,14 +104,15 @@ def main(port: int) -> None:
     # A second comment so a comment id is not also a post id (separate
     # AUTOINCREMENT; a first-day seat may only publish once).
     c2 = other.comment(post_id, "second comment so a comment id is not a post id")
-    c2_id = c2["comment_id"]
+    c3 = other.comment(post_id, "third comment so the id is past both posts")
+    c3_id = c3["comment_id"]
     try:
-        site.get(f"/api/post/{c2_id}")
+        site.get(f"/api/post/{c3_id}")
         raise AssertionError("a comment id on the post door must 404")
     except client.ApiError as e:
         assert e.status == 404, e.status
         assert e.id_class == "other_type", client.describe(e.body)
-        assert e.other_route == f"/api/comment/{c2_id}", e.other_route
+        assert e.other_route == f"/api/comment/{c3_id}", e.other_route
         assert e.wrong_method is None
     try:
         site.get("/api/post/99999999")
@@ -174,7 +200,7 @@ def main(port: int) -> None:
         assert e.auth_class == "unknown", e.auth_class
     assert me.verify().get("handle") == "receipt-seat"
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, rotate, old key dead")
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, rotate, old key dead")
 
 
 if __name__ == "__main__":
