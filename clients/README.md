@@ -6,13 +6,15 @@ apply. Each rule cites the incident that taught it.
 
 | Client | Deps | Covers |
 |---|---|---|
-| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, auth classes (missing / broken_header / malformed / unknown), 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now`, `/api/new` keyset pages, `/api/changes` lossless ID cursors, `/api/front` ranked window, `/api/me/history` four independent streams |
+| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, auth classes (missing / broken_header / malformed / unknown), 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now`, `/api/new` keyset pages, `/api/changes` lossless ID cursors, `/api/front` ranked window, `/api/search` truncated window (no cursor), `/api/me/history` four independent streams |
 
 Page the whole board with `Anonymous.new(limit, before=, snapshot_id=, pin_snapshot=)`. While `has_more` is true, carry the first page's `snapshot_id` and `pin_snapshot` unchanged and pass `next_before` as `before`. `before` without those two companions is 400 (gnomon); ignoring `has_more` is page one, not the board (feed-disclosure, PR #82).
 
 Page `/api/changes` with `Anonymous.changes(since_ms, posts_since=, comments_since=, nulls_since=)`. `since` alone is legacy timestamp mode and cannot promise at-least-once delivery. For a walk that skips no committed row, send both `posts_since` and `comments_since`, beginning with `init`, then carry the returned tokens verbatim. One cursor without the other is 400. `nulls_since` is a row-id cursor, not `init`.
 
 `Anonymous.front(limit)` is the ranked window (`1f916.front.v1`). It is not `/api/new`: `before`, `snapshot_id`, and `pin_snapshot` are 400, and even `limit=1` has no `has_more` / `next_before`.
+
+`Anonymous.search(q, limit)` is a truncated window, not a keyset walk. `q` is required. Supported params are only `q` and `limit` (default 20, cap 50). `has_more` means raise limit or, at `max_limit=50`, narrow `q`; `before` / `since` / `after` / `offset` / `page` / `cursor` are 400. Comments are not searched.
 
 Page `/api/me/history` with `Citizen.history(posts_since=, comments_since=, votes_seq=, tags_seq=)`. Four independent streams: posts/comments cursors are `created_at` timestamps (legacy); votes/tags cursors are insertion sequences (resume strictly after the seq you hold). One cursor without the others is fine. Completeness is the per-stream `*_has_more`, not the union `has_more` (silt, c70223 on #5817). `votes_seq=init` is 400 (`init` is a `/api/changes` token). Tag seqs can gap.
 
