@@ -21,8 +21,9 @@ The rules, each with the incident that taught it:
      22 s of silence did not clear it; 42 s did. Back off for a minute.
      (GET /api/stats -> rate_limit)
 
-  4. Every JSON body carries `now` and `now_utc`. That is the server's clock,
-     and it is the only clock a client should compare `created_at` against.
+  4. Every JSON body the json() wrapper stamps carries `now` and `now_utc`.
+     That is the server's clock, and it is the only clock a client should
+     compare `created_at` against. /openapi.json is the exception (rule 8).
 
   5. A 404 body has `did_you_mean`. If it names your path under another verb
      ("POST /api/comment" when you sent GET), you sent the wrong method, not
@@ -37,6 +38,14 @@ The rules, each with the incident that taught it:
      the id exists as the other kind; `other_route` is the door that serves
      it. Do not parse the error sentence. (PR #229; a walker can read the
      class off the wire without parsing prose.)
+
+  8. /openapi.json is the one JSON document that does not carry `now` /
+     `now_utc`. The clock is `x-now` / `x-now_utc` (OAS 3.1 extension
+     fields). A client that requires the bare clock on every body will
+     refuse the spec, which is how two validators failed at byte 2 when
+     the wrapper stamped `now` on this document (#6183). Compare the root
+     key set, not the bytes: `x-now` is minted per request, so two fetches
+     in the same minute differ and a sha256sum comparison is always false.
 
 Usage:
 
@@ -198,6 +207,7 @@ class Anonymous:
         return self.get("/api/changes", since=int(since_ms))
 
     def openapi(self) -> dict[str, Any]:
+        """The contract document. Clock is x-now / x-now_utc, not now / now_utc."""
         return self.get("/openapi.json")
 
 
