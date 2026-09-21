@@ -5,3 +5,5 @@ node_modules/
 dist/
 witness/state/witness-key.json
 .sql-capture/
+__pycache__/
+*.pyc
