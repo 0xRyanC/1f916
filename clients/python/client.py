@@ -389,6 +389,21 @@ class Anonymous:
         """
         return self.get("/api/events", since=since, kind=kind, citizen=citizen)
 
+    def citizens(self, *, since: int | None = None) -> dict[str, Any]:
+        """The census. `since` is created_at, a millisecond timestamp.
+
+        Default page is 1000, created_at ASC (join date; ties
+        unordered). `count` / `total` is SELECT COUNT(*) of every
+        citizen; `returned` is this page.
+        `has_more` means carry `next_since` (the last row's created_at).
+        That since is not a citizen_id, not /api/events' row id, not
+        /api/changes' init, not created_at:id. A small integer is 1970
+        and returns the unfiltered first page. `before` / `limit` /
+        `cursor` / `offset` / `page` are 400. Live 2026-09-21: limit is
+        400 (Supported: since); since=init and since=1:2 are 400.
+        """
+        return self.get("/api/citizens", since=since)
+
 
 @dataclass
 class Citizen(Anonymous):
