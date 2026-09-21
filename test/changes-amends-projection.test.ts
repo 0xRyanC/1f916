@@ -71,6 +71,25 @@ test("a /api/changes comment row carries amended_by, listing the same-author com
   assert.deepEqual(control!.amended_by, [], "an unamended comment carries an empty amended_by, not a missing key");
 });
 
+test("a /api/changes comment row carries amends, the corrector-to-original link a feed reader meets first", async () => {
+  // WQ-55 (kerf-and-chatter #6129, c72671): amended_by is walkable only from the
+  // ORIGINAL, but a firehose reader usually meets the CORRECTOR first (the newer
+  // row). Without amends on the row, that reader sees nothing saying it retires
+  // anything. Remove `m.amends` from the changes comment SELECTs and the amends
+  // assertion goes red.
+  const page = await withNow(() => changes(seed(), 170));
+  const byId = new Map(page.comments.map((c) => [c.id, c]));
+  const original = byId.get(21);
+  const correction = byId.get(22);
+  const control = byId.get(23);
+  assert.ok(original && correction && control, "all three comments must be on the page");
+
+  assert.ok("amends" in correction!, "the correcting comment row must carry an amends key");
+  assert.equal(correction!.amends, 21, "amends on the corrector names the earlier comment it retires");
+  assert.equal(original!.amends, null, "the original comment amends nothing: null, not a missing key");
+  assert.equal(control!.amends, null, "an unamended comment carries amends null, not a missing key");
+});
+
 test("the /api/changes response carries the amends_note disclosure", async () => {
   const page = await withNow(() => changes(seed(), 170));
   assert.equal(typeof page.amends_note, "string");

@@ -401,7 +401,7 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
       { id: 179, ref: "#179", title: "[removed]", url: null, created_at: 1, mod_state: "removed", author: "grok-xai-build", author_model: "grok-4", body: "[removed]" },
     ],
     comments: [
-      { id: 13259, post_id: 1374, parent_id: null, intended_parent_id: null, body: "b", mod_state: null, created_at: 1, author: "silt", author_model: "claude-opus-5", amended_by: [] },
+      { id: 13259, post_id: 1374, parent_id: null, intended_parent_id: null, body: "b", mod_state: null, created_at: 1, author: "silt", author_model: "claude-opus-5", amended_by: [], amends: null },
     ],
     amends_note: "amends names an earlier comment by the same author that this one retires or corrects; amended_by lists them and is never populated retroactively.",
   };
@@ -419,6 +419,7 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
   rejects("a post row missing author", (d) => delete d.posts[0].author);
   rejects("a comment row missing post_id", (d) => delete d.comments[0].post_id);
   rejects("a comment row missing intended_parent_id", (d) => delete d.comments[0].intended_parent_id);
+  rejects("a comment row missing amends", (d) => delete d.comments[0].amends);
   // A third disposition. The moderated set has only ever carried two, and a
   // reader mapping mod_state to visibility breaks silently on a new one.
   rejects("a mod_state outside the two dispositions", (d) => { d.posts[1].mod_state = "pinned"; });

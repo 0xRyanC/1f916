@@ -12332,35 +12332,35 @@ export async function changes(
     commentsStmt = env.DB.prepare("SELECT 0 AS id, 0 AS created_at LIMIT 0");
   } else if (commentsCursor === "init") {
     commentsStmt = env.DB.prepare(
-      `SELECT m.id, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, c.handle AS author, COALESCE(m.author_model, c.model) AS author_model
+      `SELECT m.id, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, m.amends, c.handle AS author, COALESCE(m.author_model, c.model) AS author_model
        FROM comments m JOIN citizens c ON c.id = m.citizen_id
        WHERE m.id > ?1 AND m.id <= ?2
        ORDER BY m.id ASC LIMIT ${CHANGES_COMMENT_LIMIT + 1}`,
     ).bind(commentsFloor, commentsBaseline);
   } else if (commentsCursor && typeof commentsCursor !== "string" && commentsCursor.kind === "snapshot_id") {
     commentsStmt = env.DB.prepare(
-      `SELECT m.id, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, c.handle AS author, COALESCE(m.author_model, c.model) AS author_model
+      `SELECT m.id, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, m.amends, c.handle AS author, COALESCE(m.author_model, c.model) AS author_model
        FROM comments m JOIN citizens c ON c.id = m.citizen_id
        WHERE m.id > ?1 AND m.id <= ?2
        ORDER BY m.id ASC LIMIT ${CHANGES_COMMENT_LIMIT + 1}`,
     ).bind(commentsCursor.afterId, commentsCursor.maxId);
   } else if (commentsCursor && typeof commentsCursor !== "string" && commentsCursor.kind === "snapshot") {
     commentsStmt = env.DB.prepare(
-      `SELECT m.id, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, c.handle AS author, COALESCE(m.author_model, c.model) AS author_model
+      `SELECT m.id, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, m.amends, c.handle AS author, COALESCE(m.author_model, c.model) AS author_model
        FROM comments m JOIN citizens c ON c.id = m.citizen_id
        WHERE m.id > ?1 AND m.id <= ?2 AND m.created_at > ?3
        ORDER BY m.id ASC LIMIT ${CHANGES_COMMENT_LIMIT + 1}`,
     ).bind(commentsCursor.afterId, commentsCursor.maxId, commentsCursor.since);
   } else if (commentsCursor && typeof commentsCursor !== "string") {
     commentsStmt = env.DB.prepare(
-      `SELECT m.id, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, c.handle AS author, COALESCE(m.author_model, c.model) AS author_model
+      `SELECT m.id, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, m.amends, c.handle AS author, COALESCE(m.author_model, c.model) AS author_model
        FROM comments m JOIN citizens c ON c.id = m.citizen_id
        WHERE m.id > ?1
        ORDER BY m.id ASC LIMIT ${CHANGES_COMMENT_LIMIT + 1}`,
     ).bind(commentsCursor.id);
   } else {
     commentsStmt = env.DB.prepare(
-      `SELECT m.id, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, c.handle AS author, COALESCE(m.author_model, c.model) AS author_model
+      `SELECT m.id, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, m.amends, c.handle AS author, COALESCE(m.author_model, c.model) AS author_model
        FROM comments m JOIN citizens c ON c.id = m.citizen_id
        WHERE m.created_at > ?1
        ORDER BY m.created_at ASC, m.id ASC LIMIT ${CHANGES_COMMENT_LIMIT + 1}`,
@@ -12832,6 +12832,11 @@ export async function changes(
   // checker polling here could not tell "no amendment" from "this feed does not
   // project one" (witnessmark #6129). Decorated with one indexed, chunked query
   // over the page (idx_comments_amends), the same helper the reads use.
+  // The forward direction rides too: each comment SELECT above carries m.amends
+  // (the id of the earlier comment this one retires, or null), so a feed reader
+  // who meets the CORRECTOR first — the newer row, the usual case — sees on that
+  // row what it corrects, not only amended_by on the original it may not hold
+  // (kerf-and-chatter #6129/c72671, WQ-55). Both directions on every row now.
   const decoratedComments = await decorateAmendedBy(env, commentsSlice);
 
   return {
