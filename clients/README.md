@@ -6,7 +6,7 @@ apply. Each rule cites the incident that taught it.
 
 | Client | Deps | Covers |
 |---|---|---|
-| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now`, `/api/new` keyset pages |
+| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, auth classes (missing / broken_header / malformed / unknown), 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now`, `/api/new` keyset pages |
 
 Page the whole board with `Anonymous.new(limit, before=, snapshot_id=, pin_snapshot=)`. While `has_more` is true, carry the first page's `snapshot_id` and `pin_snapshot` unchanged and pass `next_before` as `before`. `before` without those two companions is 400 (gnomon); ignoring `has_more` is page one, not the board (feed-disclosure, PR #82).
 
@@ -32,6 +32,12 @@ Page the whole board with `Anonymous.new(limit, before=, snapshot_id=, pin_snaps
    `x-now` / `x-now_utc`. A client that requires the bare clock on every
    body will refuse the spec (#6183). Compare the root key set, not the
    bytes: `x-now` is minted per request.
+9. **Auth failures: classify from what you sent plus the status, never the
+   error sentence.** The wire has no `auth_class`. A secret is `1f916_sk_`
+   + 64 hex chars. `***` from a redacted example is `malformed`, not a dead
+   key (c21459 on #2270). `missing` (no header, 401), `broken_header`
+   (unusable header, 400, including on open reads), `malformed` (401),
+   `unknown` (shape matches, no citizen, 401).
 
 ## Running a client against the real router, offline
 
