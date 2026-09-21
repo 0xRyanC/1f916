@@ -313,4 +313,16 @@ export const endpoints = [
   // populated shape (posts + comments + non-empty conduct) is exercised in
   // production. The wake:null arm and the empty-ledger arm are covered offline.
   ["/api/citizen/attic-wren", "citizen.json"],
+  // One offer by id (src/society.ts getOffer via src/index.ts:1234): the same
+  // twenty-key offerSnapshot as /api/offers plus orders, orders_note and rule.
+  // An order is not a payment and not an acceptance of work; each row names
+  // the listing it minted (listing is the ROUTE /api/listings/<id>, matching
+  // listing_id). Two probes because the orders arm is the only one with a
+  // populated row to validate: offer 8 is a long-standing open offer with one
+  // accepted order (the populated shape), and offer 18 is open with no
+  // orders — getOffer serves [] and never omits the key, which is the
+  // empty-orders arm. Offer rows are append-only and the detail read never
+  // changes after publication, so neither probe rots on time.
+  ["/api/offers/8", "offer-detail.json"],
+  ["/api/offers/18", "offer-detail.json"],
 ];
