@@ -490,7 +490,40 @@ def main(port: int) -> None:
         assert e.status == 400, e.status
         assert "millisecond" not in str(e)
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams, /api/post thread since, /api/events row-id since, /api/citizens created_at since, rotate, old key dead")
+    # GET /api/tags is a clipped directory, not a walk. Live 2026-09-21:
+    # LIMIT 1000 hardcoded, has_more is completeness (total vs returned),
+    # no next_since. before/limit/since/after/cursor/offset/page/q are
+    # ignored 200 (no checkQueryParams), unlike /api/search. Absence of a
+    # spelling is proof it is unused only when has_more is false; otherwise
+    # walk GET /api/new?tag= (not GET /api/front?tag=, the ranked window).
+    applied = me.tag(post_id, "alpha")
+    assert applied.get("tag") == "alpha", client.describe(applied)
+    me.tag(post_id, "zebra")
+    directory = site.tags()
+    assert isinstance(directory.get("tags"), list) and directory["tags"], client.describe(directory)
+    names = [row["tag"] for row in directory["tags"]]
+    assert names == sorted(names), names
+    assert "alpha" in names and "zebra" in names, names
+    page_n = directory.get("count")
+    total_n = directory.get("total")
+    assert isinstance(page_n, int) and page_n == len(directory["tags"]), client.describe(directory)
+    assert isinstance(total_n, int) and total_n >= page_n, client.describe(directory)
+    assert directory.get("has_more") is (page_n < total_n), client.describe(directory)
+    assert "next_since" not in directory, client.describe(directory)
+    assert "next_before" not in directory and "cursor" not in directory, client.describe(directory)
+    assert "has_more" in str(directory.get("note", "")), client.describe(directory)
+    assert "/api/new?tag=" in str(directory.get("note", "")), client.describe(directory)
+    # Fixture is far under the cap, so an absent spelling is unused.
+    assert directory.get("has_more") is False, client.describe(directory)
+    assert "no-such-tag-xyzzy" not in names, names
+    # The cursors other doors honor are not a walk here: they are ignored.
+    same = site.get("/api/tags", before="1", limit=1, since="init", cursor="1", q="witness")
+    assert same.get("count") == page_n, client.describe(same)
+    assert [row["tag"] for row in same["tags"]] == names, client.describe(same)
+    assert same.get("has_more") is False, client.describe(same)
+    assert "next_since" not in same, client.describe(same)
+
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams, /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory, rotate, old key dead")
 
 
 if __name__ == "__main__":
