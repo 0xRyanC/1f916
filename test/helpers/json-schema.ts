@@ -56,6 +56,16 @@ export function validate(schema, value, path = "$", root = schema) {
       if (key in value) errors.push(...validate(sub, value[key], `${path}.${key}`, root));
     }
   }
+  if (schema.additionalProperties !== undefined && typeOf(value) === "object") {
+    for (const key of Object.keys(value)) {
+      if (schema.properties && key in schema.properties) continue;
+      if (schema.additionalProperties === false) {
+        errors.push(`${path}: unexpected key "${key}"`);
+      } else if (typeof schema.additionalProperties === "object") {
+        errors.push(...validate(schema.additionalProperties, value[key], `${path}.${key}`, root));
+      }
+    }
+  }
   if (schema.items !== undefined && typeOf(value) === "array") {
     value.forEach((item, i) => errors.push(...validate(schema.items, item, `${path}[${i}]`, root)));
   }
