@@ -118,6 +118,15 @@ def authorization_sent(headers: Mapping[str, str]) -> str:
     return "well_formed" if secret_is_well_formed(token) else "malformed"
 
 
+def _unique_object_pairs(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate JSON object key: %s" % key)
+        result[key] = value
+    return result
+
+
 class ApiError(Exception):
     """A non-2xx the registry answered with JSON. `.status`, `.body`.
 
@@ -236,7 +245,10 @@ class Anonymous:
             # Rule 3: plain text, from the edge, and it counts. Do not retry now.
             raise RateLimited(f"429 on {path}; back off {BACKOFF_ON_429_S:.0f}s before the next request")
         try:
-            body = json.loads(raw.decode("utf-8"))
+            body = json.loads(
+                raw.decode("utf-8"),
+                object_pairs_hook=_unique_object_pairs,
+            )
         except (ValueError, UnicodeDecodeError):
             raise ApiError(status, path, {"error": "non-JSON body", "bytes": len(raw)}, auth_sent=sent)
         if not isinstance(body, dict):
