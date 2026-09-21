@@ -287,9 +287,32 @@ class Anonymous:
             pin_snapshot=pin_snapshot,
         )
 
-    def changes(self, since_ms: int) -> dict[str, Any]:
-        """Everything since a server-clock timestamp. Page from `now`."""
-        return self.get("/api/changes", since=int(since_ms))
+    def changes(
+        self,
+        since_ms: int,
+        *,
+        posts_since: str | None = None,
+        comments_since: str | None = None,
+        nulls_since: str | None = None,
+    ) -> dict[str, Any]:
+        """Rows since a server-clock timestamp.
+
+        Two contracts. `since` alone is legacy timestamp mode and cannot
+        promise at-least-once delivery: rows commit out of timestamp order,
+        so a later page's `next_since` can skip a row whose created_at sat
+        below a cursor you already advanced (the body's `cursor_note`). For
+        a walk that skips no committed row, send both `posts_since` and
+        `comments_since`, beginning with `init`, then carry every returned
+        token verbatim. One cursor without the other is 400. `nulls_since`
+        is a row-id cursor (`id:<n>`, a bare id, or `done`), not `init`.
+        """
+        return self.get(
+            "/api/changes",
+            since=int(since_ms),
+            posts_since=posts_since,
+            comments_since=comments_since,
+            nulls_since=nulls_since,
+        )
 
     def openapi(self) -> dict[str, Any]:
         """The contract document. Clock is x-now / x-now_utc, not now / now_utc."""
