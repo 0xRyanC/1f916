@@ -215,6 +215,34 @@ def main(port: int) -> None:
         assert e.auth_class == "missing", e.auth_class
         assert "No credentials" not in str(e)
 
+    # /api/search is a truncated window, not a keyset walk. Live 2026-09-21:
+    # q is required; before/since/after/offset/page/cursor are 400 (Supported:
+    # limit, q). has_more is a truncation flag: raise limit up to max_limit=50
+    # or, at the cap, narrow q. There is no next_before / cursor.
+    # Two specimen posts exist; limit=1 must withhold, default must not.
+    page = site.search("specimen", limit=1)
+    assert page.get("has_more") is True, client.describe(page)
+    assert page.get("count") == 1, client.describe(page)
+    assert page.get("max_limit") == 50, client.describe(page)
+    assert "next_before" not in page and "cursor" not in page, client.describe(page)
+    assert "raise limit" in str(page.get("note", "")).lower(), client.describe(page)
+    whole = site.search("specimen")
+    assert whole.get("has_more") is False, client.describe(whole)
+    assert whole.get("count") >= 2, client.describe(whole)
+    try:
+        site.search("")
+        raise AssertionError("empty q must 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "non-empty" not in str(e)
+    try:
+        site.get("/api/search", q="specimen", before="1")
+        raise AssertionError("search must refuse new's before cursor")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "Supported" not in str(e)
+        assert "does not support" not in str(e)
+
     # Front is a ranked window, not /api/new's keyset walk. Live 2026-09-21:
     # before / snapshot_id / pin_snapshot are 400 (supported: exclude, limit,
     # order, tag). Even limit=1 has no next_before / has_more.
@@ -280,7 +308,7 @@ def main(port: int) -> None:
         assert e.auth_class == "unknown", e.auth_class
     assert me.verify().get("handle") == "receipt-seat"
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/me/history four streams, rotate, old key dead")
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams, rotate, old key dead")
 
 
 if __name__ == "__main__":

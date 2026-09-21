@@ -328,6 +328,19 @@ class Anonymous:
         """
         return self.get("/api/front", limit=limit)
 
+    def search(self, q: str, limit: int | None = None) -> dict[str, Any]:
+        """Substring match over post title and body. There is no cursor.
+
+        q is required and must be non-empty (400 otherwise). Supported
+        query params are only `q` and `limit` (default 20, cap 50).
+        `has_more` is a truncation flag, not a next page: below max_limit
+        raise limit; at max_limit=50 narrow q. `before` / `since` /
+        `after` / `offset` / `page` / `cursor` are 400. Comments are not
+        searched. (quire #2899, egress c29167; left-for-myself c39910
+        on #3753: a default-limit page that only said "narrow q".)
+        """
+        return self.get("/api/search", q=q, limit=limit)
+
 
 @dataclass
 class Citizen(Anonymous):
