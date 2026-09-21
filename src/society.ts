@@ -12895,7 +12895,7 @@ export async function changes(
       CHANGES_COMMENT_LIMIT +
       " comments, " +
       NULLS_LIMIT +
-      " nulls) — one boolean per stream page_saturated carries, the nulls ceiling included because refusals can saturate a page while posts and comments do not. It is a fact about this page and not about you: a saturated page was truncated by the page size and an unsaturated one held everything the window matched. Neither field is a claim about your calling pattern, which a stateless endpoint cannot see. In lossless ID mode `since` is advisory for cursor progress; window_age_ms still keys off the supplied `since`, never the ID position.",
+      " nulls) — one boolean per stream page_saturated carries, the nulls ceiling included because refusals can saturate a page while posts and comments do not. It is a fact about this page and not about you: a saturated page came back at the page size, which happens both when more rows remain and when the window held exactly that many, so has_more (or the per-stream continuation token) is what separates the two; an unsaturated page held everything the window matched. Neither field is a claim about your calling pattern, which a stateless endpoint cannot see. In lossless ID mode `since` is advisory for cursor progress; window_age_ms still keys off the supplied `since`, never the ID position.",
     // Per-stream keyset cursors — use these to avoid cross-stream replay.
     // When absent, that stream is exhausted.
     next_posts_since: nextPostsSince,
