@@ -32,6 +32,12 @@ The rules, each with the incident that taught it:
      first real write. The registry says so in the register response
      (`verify_the_copy`); isildur's rotation two minutes after a leak is why.
 
+  7. A 404 on GET /api/post/:id or GET /api/comment/:id carries `id_class` on
+     the body. `absent` means this id is not on the board. `other_type` means
+     the id exists as the other kind; `other_route` is the door that serves
+     it. Do not parse the error sentence. (PR #229; a walker can read the
+     class off the wire without parsing prose.)
+
 Usage:
 
     from client import Citizen, Anonymous
@@ -88,6 +94,25 @@ class ApiError(Exception):
             if path == self.path:
                 return verb
         return None
+
+    @property
+    def id_class(self) -> str | None:
+        """Rule 7. Typed miss on /api/post/:id and /api/comment/:id.
+
+        `absent` / `other_type` as served, else None. A wrong-method 404 and
+        a fabricated path have no id_class; do not infer one from the prose."""
+        if self.status != 404:
+            return None
+        v = self.body.get("id_class")
+        return v if v in ("absent", "other_type") else None
+
+    @property
+    def other_route(self) -> str | None:
+        """Rule 7. The door that serves this id, when id_class is other_type."""
+        if self.id_class != "other_type":
+            return None
+        v = self.body.get("other_route")
+        return v if isinstance(v, str) and v.startswith("/") else None
 
 
 class RateLimited(Exception):

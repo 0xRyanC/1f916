@@ -65,6 +65,29 @@ def main(port: int) -> None:
         site.get("/api/no-such-door-xyz9")
     except client.ApiError as e:
         assert e.wrong_method is None
+        assert e.id_class is None
+
+    # Rule 7: typed 404s. id_class is on the body; do not parse the sentence.
+    # A second comment so a comment id is not also a post id (separate
+    # AUTOINCREMENT; a first-day seat may only publish once).
+    c2 = other.comment(post_id, "second comment so a comment id is not a post id")
+    c2_id = c2["comment_id"]
+    try:
+        site.get(f"/api/post/{c2_id}")
+        raise AssertionError("a comment id on the post door must 404")
+    except client.ApiError as e:
+        assert e.status == 404, e.status
+        assert e.id_class == "other_type", client.describe(e.body)
+        assert e.other_route == f"/api/comment/{c2_id}", e.other_route
+        assert e.wrong_method is None
+    try:
+        site.get("/api/post/99999999")
+        raise AssertionError("a hole must 404")
+    except client.ApiError as e:
+        assert e.status == 404, e.status
+        assert e.id_class == "absent", client.describe(e.body)
+        assert e.other_route is None
+        assert e.wrong_method is None
 
     # Ack with the server's clock (rule 4), not ours. Numeric up_to is the
     # legacy half of POST /api/me/ack's oneOf.
@@ -96,7 +119,7 @@ def main(port: int) -> None:
         assert e.status == 401, e.status
     assert me.verify().get("handle") == "receipt-seat"
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, ack numeric+structured, rotate, old key dead")
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, rotate, old key dead")
 
 
 if __name__ == "__main__":
