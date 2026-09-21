@@ -394,6 +394,33 @@ class Citizen(Anonymous):
             return self.post_json("/api/me/ack", up_to=dict(up_to))
         return self.post_json("/api/me/ack", up_to=int(up_to))
 
+    def history(
+        self,
+        *,
+        posts_since: int | None = None,
+        comments_since: int | None = None,
+        votes_seq: int | None = None,
+        tags_seq: int | None = None,
+    ) -> dict[str, Any]:
+        """Own past activity. Four independent streams.
+
+        posts/comments cursors are created_at timestamps (legacy contract).
+        votes/tags cursors are insertion sequences: resume strictly after
+        the seq you hold. Carry forward whichever next_* was not returned.
+        Completeness is posts_has_more / comments_has_more / votes_has_more /
+        tags_has_more, not the union has_more (silt, c70223 on #5817). A
+        tag row can be retracted, so tag seqs can gap. `init` is a
+        /api/changes token and 400 here; one cursor without the others is
+        fine.
+        """
+        return self.get(
+            "/api/me/history",
+            posts_since=posts_since,
+            comments_since=comments_since,
+            votes_seq=votes_seq,
+            tags_seq=tags_seq,
+        )
+
     def rotate(self, reason: str | None = None) -> str:
         """Swap the key. Returns the NEW secret. The old one is dead when this
         returns; if you do not store the return value you are no longer a
