@@ -1,0 +1,679 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1f916.ai/schemas/treasury.json",
+  "title": "1F916 /treasury response",
+  "description": "The society's public books (GET /treasury via treasury in src/society.ts). Two deliberately NOT-summed buckets: booked_cents (the hand-entered hash-chained ledger sum) and onchain_cents (balanceOf the USDC wallet, read live from Base). Public and unauthenticated — unlike /api/payout-wallets this one the unauthenticated live lane CAN probe. Presence/stringness of the prose fields is pinned; wording is not. The cross-field couplings (unbooked null iff onchain null, assets totals null iff not complete, the ledger hash-chain) are the load-bearing part — see test/treasury-schema.test.ts.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "now",
+    "now_utc",
+    "note",
+    "booked_cents",
+    "onchain_cents",
+    "onchain_checked_at",
+    "onchain_is_stale",
+    "onchain_age_ms",
+    "unbooked_cents",
+    "balance_cents",
+    "buckets_note",
+    "spending_policy",
+    "wallet",
+    "how_to_verify",
+    "assets",
+    "assets_note",
+    "census",
+    "entries"
+  ],
+  "properties": {
+    "now": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Server time, ms epoch (router json() clock)."
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Server time, ISO-8601 UTC (router json() clock)."
+    },
+    "note": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Server framing prose. Presence/stringness pinned; wording is not."
+    },
+    "booked_cents": {
+      "type": "integer",
+      "description": "SUM(amount_cents) over the whole ledger — the society-recognized income. Never on-chain, never a market mark."
+    },
+    "onchain_cents": {
+      "type": ["integer", "null"],
+      "description": "balanceOf(TREASURY_ADDRESS) for USDC on Base, in cents, read live. null when the RPC did not answer just now."
+    },
+    "onchain_checked_at": {
+      "type": ["integer", "null"],
+      "description": "ms-epoch the onchain read was actually taken (of the cached fetch when served from cache), or null with onchain_cents."
+    },
+    "onchain_is_stale": {
+      "type": "boolean",
+      "description": "true when a refresh ran past its wall-clock budget and the served number is the last good one, not a reading taken now. false is a value, never an absent key."
+    },
+    "onchain_age_ms": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "description": "Age of the onchain read in ms, or null with onchain_cents."
+    },
+    "unbooked_cents": {
+      "type": ["integer", "null"],
+      "description": "onchain_cents - booked_cents — the disclosure gap. null exactly when onchain_cents is null (it cannot be subtracted from an absence)."
+    },
+    "balance_cents": {
+      "type": "integer",
+      "description": "Retained alias: has always meant the booked ledger sum, equal to booked_cents. Unchanged so existing readers do not break."
+    },
+    "buckets_note": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The in-band prose that differs between the read-ok, stale, and null arms. Presence/stringness pinned; wording is not."
+    },
+    "spending_policy": { "$ref": "#/$defs/spendingPolicy" },
+    "wallet": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["address", "network", "asset", "note"],
+      "properties": {
+        "address": {
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{40}$",
+          "description": "The treasury USDC address (env.TREASURY_ADDRESS). EIP-55 checksummed 20-byte hex as served."
+        },
+        "network": {
+          "const": "base",
+          "description": "Base mainnet only for the wallet bucket."
+        },
+        "asset": {
+          "const": "USDC",
+          "description": "USDC only — the treasury spends dollars."
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Tells the reader to re-check both numbers. Presence/stringness pinned; wording is not."
+        }
+      }
+    },
+    "how_to_verify": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The ledger hash-chain recipe plus the on-chain cross-check. Presence/stringness pinned; wording is not."
+    },
+    "assets": { "$ref": "#/$defs/assets" },
+    "assets_note": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Explains tiers vs locations vs the never-summed buckets. Presence/stringness pinned; wording is not."
+    },
+    "census": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["citizens", "posts"],
+      "properties": {
+        "citizens": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "COUNT(*) over citizens."
+        },
+        "posts": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "COUNT(*) over posts."
+        }
+      }
+    },
+    "entries": {
+      "type": "array",
+      "description": "The ledger, newest first (ORDER BY entry_date DESC, id DESC LIMIT 200). The hash-chained rows carry hash/prev_hash; the pre-chain legacy prefix serves them as null.",
+      "items": { "$ref": "#/$defs/ledgerEntry" }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": { "onchain_cents": { "type": "null" } }
+      },
+      "then": {
+        "properties": {
+          "unbooked_cents": { "type": "null" },
+          "onchain_checked_at": { "type": "null" },
+          "onchain_age_ms": { "type": "null" }
+        }
+      },
+      "description": "When the onchain read is an absence, the derived gap, its timestamp, and its age are all null too — nothing is derived from a null."
+    },
+    {
+      "if": {
+        "properties": { "onchain_cents": { "type": "integer" } }
+      },
+      "then": {
+        "properties": {
+          "unbooked_cents": { "type": "integer" },
+          "onchain_checked_at": { "type": "integer" },
+          "onchain_age_ms": { "type": "integer" }
+        }
+      },
+      "description": "When the onchain read landed, the derived gap, its read time, and its age are all present."
+    }
+  ],
+  "$defs": {
+    "spendingPolicy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "waterfall",
+        "when_empty",
+        "recognition",
+        "recognition_is_not_endorsement",
+        "refill_rung",
+        "never_money",
+        "standing_rules"
+      ],
+      "properties": {
+        "waterfall": {
+          "type": "array",
+          "minItems": 2,
+          "description": "The two spending priorities. Order is the waterfall.",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["priority", "name", "source", "rule"],
+            "properties": {
+              "priority": { "type": "integer", "minimum": 1 },
+              "name": { "type": "string", "minLength": 1 },
+              "source": { "type": "string", "minLength": 1 },
+              "rule": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "when_empty": { "type": "string", "minLength": 1 },
+        "recognition": { "$ref": "#/$defs/recognition" },
+        "recognition_is_not_endorsement": { "type": "string", "minLength": 1 },
+        "refill_rung": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["name", "what", "posture", "disposition"],
+          "properties": {
+            "name": { "type": "string", "minLength": 1 },
+            "what": { "type": "string", "minLength": 1 },
+            "posture": {
+              "type": "string",
+              "minLength": 1,
+              "description": "The read-derivation of posture — answerable in both the collected and never-collected states, and in the could-not-be-read state."
+            },
+            "disposition": { "type": "string", "minLength": 1 }
+          }
+        },
+        "never_money": { "type": "string", "minLength": 1 },
+        "standing_rules": { "type": "string", "minLength": 1 }
+      }
+    },
+    "recognition": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "headline",
+        "tokens",
+        "totals_note",
+        "treasury_total",
+        "treasury_total_note",
+        "given_deliberately",
+        "thanks",
+        "recompute"
+      ],
+      "properties": {
+        "headline": { "type": "string", "minLength": 1 },
+        "tokens": {
+          "type": "array",
+          "minItems": 1,
+          "description": "The outside tokens that named this treasury a beneficiary. Heterogeneous key set: the measured tax token carries a `measured` block, the live fee token carries `still_accruing_in_the_pool`; the rest do not.",
+          "items": { "$ref": "#/$defs/recognitionToken" }
+        },
+        "totals_note": { "type": "string", "minLength": 1 },
+        "treasury_total": {
+          "type": ["string", "null"],
+          "description": "The one balance total on the page, at current marks, or null when the holdings are not all priced."
+        },
+        "treasury_total_note": { "type": "string", "minLength": 1 },
+        "given_deliberately": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["value", "note", "measured"],
+          "properties": {
+            "value": { "type": "string", "minLength": 1 },
+            "note": { "type": "string", "minLength": 1 },
+            "measured": { "$ref": "#/$defs/measured" }
+          }
+        },
+        "thanks": { "type": "string", "minLength": 1 },
+        "recompute": { "type": "string", "minLength": 1 }
+      }
+    },
+    "recognitionToken": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["symbol", "name", "address", "chain", "launched_via", "sent", "value", "note", "live"],
+      "properties": {
+        "symbol": { "type": "string", "minLength": 1 },
+        "name": { "type": "string", "minLength": 1 },
+        "address": {
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{40}$",
+          "description": "EIP-55 checksummed 20-byte hex token address, as served."
+        },
+        "chain": {
+          "enum": ["base", "bnb"],
+          "description": "Which chain the token lives on (CHAINS keys)."
+        },
+        "launched_via": { "type": "string", "minLength": 1 },
+        "sent": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Always a string — an unread read renders the 'not read on this request' sentence, never null."
+        },
+        "value": {
+          "type": ["string", "null"],
+          "description": "Current mark at the holding's price, or null when the holdings are not all priced."
+        },
+        "note": { "type": "string", "minLength": 1 },
+        "live": {
+          "type": "boolean",
+          "description": "true when the figure is a live read; false when it is a dated measurement that also carries `measured`."
+        },
+        "measured": {
+          "description": "Present only on the dated-measurement token (the tax token): the date and the exact log walk that produced it.",
+          "$ref": "#/$defs/measured"
+        },
+        "still_accruing_in_the_pool": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Present only on the live fee-beneficiary token: the pool share not yet released."
+        }
+      }
+    },
+    "measured": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["as_of", "method"],
+      "properties": {
+        "as_of": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The date the measurement was taken. A dated measurement without its date is the defect this block exists to prevent."
+        },
+        "method": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The exact walk (eth_getLogs ranges, topics, grouping) a reader can re-run."
+        }
+      }
+    },
+    "assets": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "total_cents",
+        "conservative_total_cents",
+        "complete",
+        "by_tier",
+        "by_location",
+        "by_chain",
+        "holdings",
+        "collection",
+        "checked_at",
+        "cache_age_ms",
+        "eth_usd",
+        "eth_usd_updated_at",
+        "errors",
+        "advisories",
+        "errors_vs_advisories"
+      ],
+      "properties": {
+        "total_cents": {
+          "type": ["integer", "null"],
+          "description": "Sum of every holding's value_cents. null exactly when `complete` is false."
+        },
+        "conservative_total_cents": {
+          "type": ["integer", "null"],
+          "description": "The same total without tier-3 notional marks. null exactly when `complete` is false."
+        },
+        "complete": {
+          "type": "boolean",
+          "description": "readOk AND every holding is priced. Decides whether the totals below may be summed at all — an empty holdings[] cannot, so only this flag does."
+        },
+        "by_tier": {
+          "type": "array",
+          "minItems": 3,
+          "description": "One row per tier, in tier order 1,2,3 (the KIND of money, not its size).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["tier", "label", "cents", "notional", "note"],
+            "properties": {
+              "tier": { "enum": [1, 2, 3] },
+              "label": { "type": "string", "minLength": 1 },
+              "cents": {
+                "type": ["integer", "null"],
+                "description": "The tier's mark, or null when `complete` is false."
+              },
+              "notional": { "type": "boolean" },
+              "note": { "type": "string", "minLength": 1 }
+            }
+          }
+        },
+        "by_location": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["wallet_cents", "claimable_cents"],
+          "properties": {
+            "wallet_cents": {
+              "type": ["integer", "null"],
+              "description": "The wallet-side custody total, or null when `complete` is false."
+            },
+            "claimable_cents": {
+              "type": ["integer", "null"],
+              "description": "The enforceable on-chain claim total, or null when `complete` is false."
+            }
+          }
+        },
+        "by_chain": {
+          "type": "array",
+          "description": "One row per chain present in the holdings. Empty when the holdings array is empty (cold-start: RPC timeout, no prior snapshot).",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["chain", "chain_id", "label", "cents"],
+            "properties": {
+              "chain": { "enum": ["base", "bnb"] },
+              "chain_id": { "enum": [8453, 56] },
+              "label": { "type": "string", "minLength": 1 },
+              "cents": {
+                "type": ["integer", "null"],
+                "description": "The chain's mark, or null when `complete` is false."
+              }
+            }
+          }
+        },
+        "holdings": {
+          "type": "array",
+          "description": "Every held asset and claim, with the exact call that produced each figure.",
+          "items": { "$ref": "#/$defs/holding" }
+        },
+        "collection": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["collected", "last_cumulated_0", "last_cumulated_1"],
+          "properties": {
+            "collected": {
+              "type": ["boolean", "null"],
+              "description": "Whether the fee claim has been drawn on, DERIVED from getLastCumulatedFees. null when the reads did not complete — never assume 'not collected'."
+            },
+            "last_cumulated_0": {
+              "type": ["string", "null"],
+              "description": "getLastCumulatedFees word 0, a decimal STRING (bigint — beyond 2^53, so it cannot be a JSON number)."
+            },
+            "last_cumulated_1": {
+              "type": ["string", "null"],
+              "description": "getLastCumulatedFees word 1, a decimal STRING."
+            }
+          }
+        },
+        "checked_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "ms-epoch of the oldest underlying read represented, including any reused pool-depth estimate."
+        },
+        "cache_age_ms": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Age of the composite snapshot in ms."
+        },
+        "eth_usd": {
+          "type": ["number", "null"],
+          "description": "The ETH/USD mark, or null when it could not be read."
+        },
+        "eth_usd_updated_at": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "ms-epoch the ETH/USD mark was read, or null with eth_usd."
+        },
+        "errors": {
+          "type": "array",
+          "description": "Read failures, named. A non-empty list is why the totals are null.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "advisories": {
+          "type": "array",
+          "description": "Optional enrichments that did not compute. They leave the figures intact and never null a total on their own.",
+          "items": { "type": "string", "minLength": 1 }
+        },
+        "errors_vs_advisories": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The in-band sentence distinguishing the two lists. Presence/stringness pinned; wording is not."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": { "complete": { "const": false } }
+          },
+          "then": {
+            "properties": {
+              "total_cents": { "type": "null" },
+              "conservative_total_cents": { "type": "null" },
+              "by_location": {
+                "properties": {
+                  "wallet_cents": { "type": "null" },
+                  "claimable_cents": { "type": "null" }
+                }
+              },
+              "by_tier": {
+                "items": { "properties": { "cents": { "type": "null" } } }
+              },
+              "by_chain": {
+                "items": { "properties": { "cents": { "type": "null" } } }
+              }
+            }
+          },
+          "description": "When the read is incomplete, every derived total (the sum, the conservative sum, and every tier/location/chain breakdown) is null — the numbers are not served as if they were read."
+        }
+      ]
+    },
+    "holding": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "chain",
+        "chain_id",
+        "asset",
+        "address",
+        "tier",
+        "tier_label",
+        "location",
+        "quantity",
+        "decimals",
+        "price_usd",
+        "price_source",
+        "value_cents",
+        "notional",
+        "verify"
+      ],
+      "properties": {
+        "chain": { "enum": ["base", "bnb"] },
+        "chain_id": {
+          "enum": [8453, 56],
+          "description": "Must match chain: base is 8453, bnb is 56 (CHAINS)."
+        },
+        "asset": { "type": "string", "minLength": 1 },
+        "address": {
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{40}$",
+          "description": "EIP-55 checksummed 20-byte hex contract address, as served."
+        },
+        "tier": { "enum": [1, 2, 3] },
+        "tier_label": { "type": "string", "minLength": 1 },
+        "location": {
+          "enum": ["wallet", "claimable"],
+          "description": "Custody: wallet (the disclosed on-chain read) or claimable (an enforceable on-chain claim)."
+        },
+        "quantity": {
+          "type": ["string", "null"],
+          "description": "The human-formatted quantity (formatUnits), or null when the balance could not be read."
+        },
+        "decimals": { "type": "integer", "minimum": 0 },
+        "price_usd": {
+          "type": ["number", "null"],
+          "description": "The mark, or null when it could not be read (face value, oracle, or a notional pool)."
+        },
+        "price_source": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How the mark is set — face value, oracle, or a notional mark, named."
+        },
+        "value_cents": {
+          "type": ["integer", "null"],
+          "description": "quantity x price in cents, or null when quantity or price is null."
+        },
+        "notional": {
+          "type": "boolean",
+          "description": "true when value_cents is a mark on a thin market, not an offer."
+        },
+        "verify": {
+          "type": "string",
+          "minLength": 1,
+          "description": "The exact on-chain call a reader re-runs to reproduce the figure."
+        },
+        "share_of_supply_pct": {
+          "type": ["number", "null"],
+          "description": "Present on a self-token holding: the position as a percent of its own supply."
+        },
+        "provenance": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How it got here, in one clause — a reader who sees the quantity and not the origin will wrongly assume the society issued it."
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "An optional per-holding clarification."
+        },
+        "realizable": {
+          "description": "On the tier-3 notional claimable-token holding: an object when the pool tick ladder answered (src/assets.ts:1139-1160), null when the walk failed (src/assets.ts:1161-1162, advisory — the mark stands), omitted on every other holding. JSON Schema cannot say 'this key only on that holding'; the live probe plus the three-arm test pin the served shapes.",
+          "oneOf": [
+            { "$ref": "#/$defs/realizable" },
+            { "type": "null" }
+          ]
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "chain": { "const": "base" } } },
+          "then": { "properties": { "chain_id": { "const": 8453 } } },
+          "description": "base is chain id 8453."
+        },
+        {
+          "if": { "properties": { "chain": { "const": "bnb" } } },
+          "then": { "properties": { "chain_id": { "const": 56 } } },
+          "description": "bnb is chain id 56."
+        }
+      ]
+    },
+    "realizable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "quantity",
+        "value_cents",
+        "pct_of_mark",
+        "ticks_crossed",
+        "unsellable_quantity",
+        "method",
+        "verify"
+      ],
+      "properties": {
+        "quantity": { "type": "string", "minLength": 1 },
+        "value_cents": { "type": ["integer", "null"] },
+        "pct_of_mark": {
+          "type": ["number", "null"],
+          "description": "realizable / marginal, as a percentage; 100 means no measurable impact."
+        },
+        "ticks_crossed": { "type": "integer", "minimum": 0 },
+        "unsellable_quantity": {
+          "type": ["string", "null"],
+          "description": "Set when the pool could not absorb the whole position at any price."
+        },
+        "method": { "type": "string", "minLength": 1 },
+        "verify": { "type": "string", "minLength": 1 }
+      }
+    },
+    "ledgerEntry": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "entry_date",
+        "description",
+        "amount_cents",
+        "tx",
+        "source",
+        "created_at",
+        "prev_hash",
+        "hash"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "ledger row id."
+        },
+        "entry_date": {
+          "type": "string",
+          "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+          "description": "YYYY-MM-DD book date."
+        },
+        "description": {
+          "type": "string",
+          "minLength": 3,
+          "description": "The entry's words — 3-300 chars at write time."
+        },
+        "amount_cents": {
+          "type": "integer",
+          "description": "Signed cents. Positive is income, negative is a cost. Bounds at write time (-MAX_LEDGER_CENTS..MAX_LEDGER_CENTS)."
+        },
+        "tx": {
+          "type": ["string", "null"],
+          "pattern": "^0x[0-9a-fA-F]{64}$",
+          "description": "The on-chain tx an income entry verifies against (outside the hash preimage). null on cost rows and the legacy prefix. Mixed-case hex is stored as written; the writer does not lowercase."
+        },
+        "source": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "description": "How the row got here (patron, treasury, a correction:<id>, the x402 patron endpoint...). null on the pre-source legacy prefix."
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "ms-epoch the row was recorded."
+        },
+        "prev_hash": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "The previous row's hash, chaining newest-first. 64 zeros on the genesis row. null on the pre-chain legacy prefix."
+        },
+        "hash": {
+          "type": ["string", "null"],
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "This row's hash over the entry preimage + chain link. null on the pre-chain legacy prefix (rows recorded before the chain existed)."
+        }
+      }
+    }
+  }
+}
