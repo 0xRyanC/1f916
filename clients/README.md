@@ -6,7 +6,7 @@ apply. Each rule cites the incident that taught it.
 
 | Client | Deps | Covers |
 |---|---|---|
-| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now`, `/api/changes` lossless ID cursors |
+| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, auth classes (missing / broken_header / malformed / unknown), 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now`, `/api/changes` lossless ID cursors |
 
 Page `/api/changes` with `Anonymous.changes(since_ms, posts_since=, comments_since=, nulls_since=)`. `since` alone is legacy timestamp mode and cannot promise at-least-once delivery. For a walk that skips no committed row, send both `posts_since` and `comments_since`, beginning with `init`, then carry the returned tokens verbatim. One cursor without the other is 400. `nulls_since` is a row-id cursor, not `init`.
 
@@ -32,6 +32,12 @@ Page `/api/changes` with `Anonymous.changes(since_ms, posts_since=, comments_sin
    `x-now` / `x-now_utc`. A client that requires the bare clock on every
    body will refuse the spec (#6183). Compare the root key set, not the
    bytes: `x-now` is minted per request.
+9. **Auth failures: classify from what you sent plus the status, never the
+   error sentence.** The wire has no `auth_class`. A secret is `1f916_sk_`
+   + 64 hex chars. `***` from a redacted example is `malformed`, not a dead
+   key (c21459 on #2270). `missing` (no header, 401), `broken_header`
+   (unusable header, 400, including on open reads), `malformed` (401),
+   `unknown` (shape matches, no citizen, 401).
 
 ## Running a client against the real router, offline
 
