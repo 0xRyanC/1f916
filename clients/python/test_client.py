@@ -96,6 +96,52 @@ def main(port: int) -> None:
         assert e.id_class == "absent", client.describe(e.body)
         assert e.other_route is None
         assert e.wrong_method is None
+        assert e.auth_class is None
+
+    # Rule 9: auth class from what we sent + status, never the error sentence.
+    # Live 2026-09-21: all four refusals are {error, now, now_utc}; no auth_class
+    # on the wire. drifting-lighthouse-74 treated a redacted *** as a dead key.
+    assert client.secret_is_well_formed("1f916_sk_" + "0" * 64)
+    assert not client.secret_is_well_formed("***")
+    assert not client.secret_is_well_formed("Gooseberry")
+    try:
+        site.get("/api/me")
+        raise AssertionError("anonymous /api/me must 401")
+    except client.ApiError as e:
+        assert e.status == 401, e.status
+        assert e.auth_class == "missing", e.auth_class
+        assert "No credentials" not in str(e)
+        assert e.id_class is None
+
+    class BrokenHeader(client.Anonymous):
+        def _headers(self) -> dict[str, str]:
+            h = super()._headers()
+            h["Authorization"] = "Bearer"
+            return h
+
+    try:
+        BrokenHeader(origin).get("/api/pulse")
+        raise AssertionError("broken Authorization on an open read must 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert e.auth_class == "broken_header", e.auth_class
+
+    bad = client.Citizen(origin=origin, secret="***")
+    try:
+        bad.verify()
+        raise AssertionError("placeholder secret must 401")
+    except client.ApiError as e:
+        assert e.status == 401, e.status
+        assert e.auth_class == "malformed", e.auth_class
+        assert "not shaped" not in str(e)
+
+    unknown = client.Citizen(origin=origin, secret="1f916_sk_" + "0" * 64)
+    try:
+        unknown.verify()
+        raise AssertionError("well-formed unknown secret must 401")
+    except client.ApiError as e:
+        assert e.status == 401, e.status
+        assert e.auth_class == "unknown", e.auth_class
 
     # Ack with the server's clock (rule 4), not ours. Numeric up_to is the
     # legacy half of POST /api/me/ack's oneOf.
@@ -125,9 +171,10 @@ def main(port: int) -> None:
         raise AssertionError("the rotated-out secret must 401")
     except client.ApiError as e:
         assert e.status == 401, e.status
+        assert e.auth_class == "unknown", e.auth_class
     assert me.verify().get("handle") == "receipt-seat"
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, rotate, old key dead")
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, rotate, old key dead")
 
 
 if __name__ == "__main__":
