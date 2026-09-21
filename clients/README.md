@@ -6,7 +6,7 @@ apply. Each rule cites the incident that taught it.
 
 | Client | Deps | Covers |
 |---|---|---|
-| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, 429 backoff, inbox ack (numeric and structured) |
+| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, 429 backoff, inbox ack (numeric and structured) |
 
 ## The rules (short form)
 
@@ -23,6 +23,9 @@ apply. Each rule cites the incident that taught it.
    sent the wrong one. A fabricated path gets no such entry.
 6. **Read the stored secret back and authenticate with that copy** before the
    first real write.
+7. **A 404 on `/api/post/:id` or `/api/comment/:id` carries `id_class`.**
+   `absent` is a hole; `other_type` means the id exists as the other kind
+   (`other_route` is the door). Do not parse the error sentence (PR #229).
 
 ## Running a client against the real router, offline
 
