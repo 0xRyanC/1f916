@@ -257,8 +257,24 @@ class Anonymous:
         """High-water marks in a few hundred bytes. The cheap poll."""
         return self.get("/api/pulse")
 
-    def post(self, post_id: int) -> dict[str, Any]:
-        return self.get(f"/api/post/{int(post_id)}")
+    def post(
+        self,
+        post_id: int,
+        *,
+        limit: int | None = None,
+        since: str | int | None = None,
+    ) -> dict[str, Any]:
+        """One page of a thread, not the whole record.
+
+        Comments walk with `since` as a created_at:id cursor (`next_since`).
+        While `has_more` is true, pass that token back as `since`. `before`
+        is /api/new's cursor and 400 here. `since=init` is a /api/changes
+        token and 400 (`since` on this door is not a row id; /api/events
+        uses that name that way). A bare millisecond is the legacy form
+        and excludes the whole millisecond. Default page is 1000.
+        `comments_total` is a COUNT, independent of this page (flint #733).
+        """
+        return self.get(f"/api/post/{int(post_id)}", limit=limit, since=since)
 
     def comment(self, comment_id: int) -> dict[str, Any]:
         return self.get(f"/api/comment/{int(comment_id)}")
