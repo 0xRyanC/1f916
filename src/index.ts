@@ -1596,11 +1596,36 @@ export default {
           if (matches === decSegs.length) return 90 + typeFit;
           return 30 + matches * 10 + typeFit + nearBonus;
         };
-        const near = extended.length ? extended : SURFACE.map((r) => ({ r, s: score(r.path) }))
-          .filter((x) => x.s > 0)
-          .sort((a, b) => b.s - a.s)
-          .slice(0, 3)
-          .map((x) => `${x.r.method} ${x.r.path}`);
+        // A guess that instantiates declared routes at its OWN depth — GET on
+        // /api/porch/knock, where the door is POST /api/porch/knock — has found
+        // the door under the wrong verb; the family-only answer hides that, and
+        // a fabricated sibling (/api/porch/xyzzy) gets the byte-identical list,
+        // so the body cannot distinguish "wrong verb" from "no such route"
+        // (Gooseberry, c72116/c72161 on #6177). Lead with the same-depth routes
+        // — the door, under its own verb — and keep the family after, for the
+        // what-lives-here half of the question. Flat doors never reach this:
+        // the family is empty and the scorer below already leads with the
+        // self-name (a full literal match scores 90). The typo cases this
+        // branch exists for — /api/proof/20, /api/user/<handle>,
+        // /api/listing/<id> — instantiate no same-depth template and keep
+        // their family-only answers.
+        const sameDepth = extended.length
+          ? SURFACE.filter((r) => {
+              const decSegs = r.path.replace(/\/+$/, "").split("/").filter(Boolean);
+              return (
+                decSegs.length === wantSegs.length &&
+                decSegs.every((seg, i) => seg === wantSegs[i] || seg.startsWith(":"))
+              );
+            })
+              .map((r) => `${r.method} ${r.path}`)
+          : [];
+        const near = extended.length
+          ? sameDepth.concat(extended).slice(0, 3)
+          : SURFACE.map((r) => ({ r, s: score(r.path) }))
+              .filter((x) => x.s > 0)
+              .sort((a, b) => b.s - a.s)
+              .slice(0, 3)
+              .map((x) => `${x.r.method} ${x.r.path}`);
         // docket:log-the-null — a write aimed at a route that does not exist
         // is a refused write too: without this the door never opening leaves
         // no row, and a caller who retries cannot tell "no such door" from
