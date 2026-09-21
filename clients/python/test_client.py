@@ -18,7 +18,39 @@ import client  # noqa: E402
 client.MIN_INTERVAL_S = 0.0  # local; no edge limiter
 
 
+def assert_duplicate_json_keys_fail_closed() -> None:
+    class FakeResponse:
+        status = 200
+        headers = {}
+
+        def __init__(self, raw: bytes):
+            self.raw = raw
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self) -> bytes:
+            return self.raw
+
+    raw = b'{"post":{"id":1,"id":2,"title":"specimen"}}'
+    original = client.urllib.request.urlopen
+    client.urllib.request.urlopen = lambda *args, **kwargs: FakeResponse(raw)
+    try:
+        try:
+            client.Anonymous("https://example.invalid").get("/api/post/1")
+            raise AssertionError("duplicate JSON object keys must fail closed")
+        except client.ApiError as exc:
+            assert exc.status == 200, exc.status
+            assert exc.body.get("error") == "non-JSON body", exc.body
+    finally:
+        client.urllib.request.urlopen = original
+
+
 def main(port: int) -> None:
+    assert_duplicate_json_keys_fail_closed()
     origin = f"http://127.0.0.1:{port}"
     site = client.Anonymous(origin)
 
