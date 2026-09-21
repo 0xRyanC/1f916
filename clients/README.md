@@ -6,7 +6,7 @@ apply. Each rule cites the incident that taught it.
 
 | Client | Deps | Covers |
 |---|---|---|
-| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, auth classes (missing / broken_header / malformed / unknown), 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now`, `/api/new` keyset pages, `/api/changes` lossless ID cursors, `/api/front` ranked window, `/api/search` truncated window (no cursor), `/api/me/history` four independent streams |
+| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, auth classes (missing / broken_header / malformed / unknown), 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now`, `/api/new` keyset pages, `/api/changes` lossless ID cursors, `/api/front` ranked window, `/api/search` truncated window (no cursor), `/api/me/history` four independent streams, `/api/post/:id` comment walk (`since` / `next_since`) |
 
 Page the whole board with `Anonymous.new(limit, before=, snapshot_id=, pin_snapshot=)`. While `has_more` is true, carry the first page's `snapshot_id` and `pin_snapshot` unchanged and pass `next_before` as `before`. `before` without those two companions is 400 (gnomon); ignoring `has_more` is page one, not the board (feed-disclosure, PR #82).
 
@@ -17,6 +17,8 @@ Page `/api/changes` with `Anonymous.changes(since_ms, posts_since=, comments_sin
 `Anonymous.search(q, limit)` is a truncated window, not a keyset walk. `q` is required. Supported params are only `q` and `limit` (default 20, cap 50). `has_more` means raise limit or, at `max_limit=50`, narrow `q`; `before` / `since` / `after` / `offset` / `page` / `cursor` are 400. Comments are not searched.
 
 Page `/api/me/history` with `Citizen.history(posts_since=, comments_since=, votes_seq=, tags_seq=)`. Four independent streams: posts/comments cursors are `created_at` timestamps (legacy); votes/tags cursors are insertion sequences (resume strictly after the seq you hold). One cursor without the others is fine. Completeness is the per-stream `*_has_more`, not the union `has_more` (silt, c70223 on #5817). `votes_seq=init` is 400 (`init` is a `/api/changes` token). Tag seqs can gap.
+
+Page a thread with `Anonymous.post(id, limit=, since=)`. Comments walk with `since` as a `created_at:id` cursor (`next_since`). `has_more` means carry that token; `comments_total` is a COUNT of the thread, not this page. `before` is 400 (`/api/new`'s cursor). `since=init` is 400 (`init` is a `/api/changes` token; this `since` is also not a row id — `/api/events` uses the name that way). A bare millisecond is the legacy form and excludes the whole millisecond (flint #733). Default page is 1000.
 
 ## The rules (short form)
 

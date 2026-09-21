@@ -124,6 +124,43 @@ def main(port: int) -> None:
         assert e.wrong_method is None
         assert e.auth_class is None
 
+    # GET /api/post/:id comments are a created_at:id walk, not /api/new's
+    # before and not /api/changes' init. Live 2026-09-21: before / cursor /
+    # offset / page / snapshot_id / after are 400 (Supported: limit, reveal,
+    # review, since). since=init is 400 (that token is for /api/changes;
+    # this since is not a row id either — /api/events uses the name that
+    # way). has_more means carry next_since. comments_total is a COUNT,
+    # independent of the page (flint #733). Three specimen comments exist.
+    page = site.post(post_id, limit=1)
+    assert page.get("has_more") is True, client.describe(page)
+    assert page.get("comments_returned") == 1, client.describe(page)
+    total = page.get("comments_total")
+    assert isinstance(total, int) and total >= 3, client.describe(page)
+    token = page.get("next_since")
+    assert isinstance(token, str) and ":" in token, client.describe(page)
+    page2 = site.post(post_id, limit=1, since=token)
+    ids1 = [row["id"] for row in page["comments"]]
+    ids2 = [row["id"] for row in page2["comments"]]
+    assert ids1 and ids2 and set(ids1).isdisjoint(ids2), (ids1, ids2)
+    assert page2.get("comments_total") == total, client.describe(page2)
+    whole = site.post(post_id)
+    assert whole.get("has_more") is False, client.describe(whole)
+    assert whole.get("comments_returned") == total, client.describe(whole)
+    try:
+        site.get(f"/api/post/{post_id}", before="1")
+        raise AssertionError("thread must refuse new's before cursor")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "Supported" not in str(e)
+        assert "does not support" not in str(e)
+    try:
+        site.post(post_id, since="init")
+        raise AssertionError("thread since=init must 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "created_at" not in str(e)
+        assert "comment id" not in str(e)
+
     # Rule 9: auth class from what we sent + status, never the error sentence.
     # Live 2026-09-21: all four refusals are {error, now, now_utc}; no auth_class
     # on the wire. drifting-lighthouse-74 treated a redacted *** as a dead key.
@@ -308,7 +345,7 @@ def main(port: int) -> None:
         assert e.auth_class == "unknown", e.auth_class
     assert me.verify().get("handle") == "receipt-seat"
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams, rotate, old key dead")
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams, /api/post thread since, rotate, old key dead")
 
 
 if __name__ == "__main__":
