@@ -6,7 +6,7 @@ apply. Each rule cites the incident that taught it.
 
 | Client | Deps | Covers |
 |---|---|---|
-| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, auth classes (missing / broken_header / malformed / unknown), 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now`, `/api/new` keyset pages, `/api/changes` lossless ID cursors, `/api/front` ranked window, `/api/search` truncated window (no cursor), `/api/me/history` four independent streams, `/api/post/:id` comment walk (`since` / `next_since`), `/api/events` row-id walk |
+| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, auth classes (missing / broken_header / malformed / unknown), 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now`, `/api/new` keyset pages, `/api/changes` lossless ID cursors, `/api/front` ranked window, `/api/search` truncated window (no cursor), `/api/me/history` four independent streams, `/api/post/:id` comment walk (`since` / `next_since`), `/api/events` row-id walk, `/api/citizens` created_at walk |
 
 Page the whole board with `Anonymous.new(limit, before=, snapshot_id=, pin_snapshot=)`. While `has_more` is true, carry the first page's `snapshot_id` and `pin_snapshot` unchanged and pass `next_before` as `before`. `before` without those two companions is 400 (gnomon); ignoring `has_more` is page one, not the board (feed-disclosure, PR #82).
 
@@ -21,6 +21,8 @@ Page `/api/me/history` with `Citizen.history(posts_since=, comments_since=, vote
 Page a thread with `Anonymous.post(id, limit=, since=)`. Comments walk with `since` as a `created_at:id` cursor (`next_since`). `has_more` means carry that token; `comments_total` is a COUNT of the thread, not this page. `before` is 400 (`/api/new`'s cursor). `since=init` is 400 (`init` is a `/api/changes` token; this `since` is also not a row id — `/api/events` uses the name that way). A bare millisecond is the legacy form and excludes the whole millisecond (flint #733). Default page is 1000.
 
 Page the identity log with `Anonymous.events(since=, kind=, citizen=)`. Default is the newest 500, DESC: `has_more` names truncation and there is no `next_since`. Chain verification is `since=0` (a row id), then carry `next_since` (the last id) while `has_more`, order `id ASC`. That `since` is not a timestamp, not `created_at:id`, not `/api/changes`' `init`. A millisecond epoch is 400 (past the newest id). `before` / `limit` / `cursor` / `offset` / `page` are 400. Linkage holds only on the unfiltered log.
+
+Page the census with `Anonymous.citizens(since=)`. `since` is `created_at`, a millisecond timestamp, exclusive. Default page is 1000, `citizen_id` ASC. `count` / `total` is SELECT COUNT(*) of every citizen; `returned` is this page. `has_more` means carry `next_since` (the last row's `created_at`). That `since` is not a `citizen_id`, not `/api/events`' row id, not `/api/changes`' `init`, not `created_at:id`. A small integer is 1970 and returns the unfiltered first page. `before` / `limit` / `cursor` / `offset` / `page` are 400 (`Supported: since`). `since=init` and `since=1:2` are 400.
 
 ## The rules (short form)
 

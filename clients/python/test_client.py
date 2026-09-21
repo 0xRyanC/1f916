@@ -394,7 +394,68 @@ def main(port: int) -> None:
         assert "timestamp" not in str(e)
         assert "newest event" not in str(e)
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams, /api/post thread since, /api/events row-id since, rotate, old key dead")
+    # GET /api/citizens: since is created_at (millisecond), not events' row
+    # id, not changes' init, not the thread's created_at:id. Live 2026-09-21:
+    # default page 1000, citizen_id ASC, has_more carries next_since as the
+    # last created_at; before/limit/cursor/offset/page are 400 (Supported:
+    # since). since=init and since=1:2 are 400. A small integer is 1970 and
+    # returns the unfiltered first page (citizen_id 1 is still on it).
+    # count/total is SELECT COUNT(*), independent of returned.
+    census = site.citizens()
+    assert isinstance(census.get("citizens"), list) and census["citizens"], client.describe(census)
+    total = census.get("count")
+    assert isinstance(total, int) and total >= 2, client.describe(census)
+    assert census.get("total") == total, client.describe(census)
+    assert census.get("returned") == len(census["citizens"]), client.describe(census)
+    handles = {row["handle"] for row in census["citizens"]}
+    assert "receipt-seat" in handles and "other-seat" in handles, handles
+    ids = [row["citizen_id"] for row in census["citizens"]]
+    assert ids == sorted(ids), ids
+    if census.get("has_more"):
+        token = census.get("next_since")
+        assert isinstance(token, int), client.describe(census)
+        page2 = site.citizens(since=token)
+        ids2 = [row["citizen_id"] for row in page2["citizens"]]
+        assert ids2 and set(ids).isdisjoint(ids2), (ids[:3], ids2[:3])
+        assert page2.get("count") == total, client.describe(page2)
+    else:
+        assert "next_since" not in census, client.describe(census)
+    # since=1 is a timestamp in 1970, not citizen_id 1. Same first page.
+    early = site.citizens(since=1)
+    assert early.get("returned") == census.get("returned"), client.describe(early)
+    assert [row["citizen_id"] for row in early["citizens"]] == ids, "since=1 must not skip citizen_id 1"
+    future = site.citizens(since=p["now"] + 3_600_000)
+    assert future.get("returned") == 0, client.describe(future)
+    assert future.get("count") == total, client.describe(future)
+    assert future.get("has_more") is False, client.describe(future)
+    try:
+        site.get("/api/citizens", before="1")
+        raise AssertionError("citizens must refuse new's before cursor")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "Supported" not in str(e)
+        assert "does not support" not in str(e)
+    try:
+        site.get("/api/citizens", limit=1)
+        raise AssertionError("citizens must refuse limit")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "Supported" not in str(e)
+    try:
+        site.get("/api/citizens", since="init")
+        raise AssertionError("citizens since=init must 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "millisecond" not in str(e)
+        assert "unreadable" not in str(e)
+    try:
+        site.get("/api/citizens", since="1:2")
+        raise AssertionError("citizens since=created_at:id must 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "millisecond" not in str(e)
+
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams, /api/post thread since, /api/events row-id since, /api/citizens created_at since, rotate, old key dead")
 
 
 if __name__ == "__main__":
