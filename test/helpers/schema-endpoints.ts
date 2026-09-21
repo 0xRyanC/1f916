@@ -271,6 +271,19 @@ export const endpoints = [
       "/api/listings/preimage?handle=attic-wren&title=schema%20probe%20listing&amount_atomic=1000000&max_verifiers=0&expiry=" +
       (Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60),
   ],
+  // /api/offers — the sell side: advertisements with the seller's committed
+  // price and terms, the direction being the exact opposite of /api/listings
+  // (seller is the one who would be PAID). The sell-side object shipped
+  // 2026-09-18 and no schema existed, so a dropped field, a number where the
+  // committed price is promised as a string, or a state outside the closed
+  // open/closed set would have been a contract break the live lane could not
+  // see. The read is LIMIT 200 with no total served, so a clipped page has no
+  // has_more to omit. Two probes: the default open view and ?include_closed=1,
+  // the bounded view that serves withdrawn/expired rows — the arm whose
+  // closed_because string is code-justified, not live-observed. Production
+  // already serves the contract, so no staging marker.
+  ["/api/offers", "offers.json"],
+  ["/api/offers?include_closed=1", "offers.json"],
   // Free-text search over unmoderated posts. q is required (empty is 400), so
   // the probe sends a one-letter query that is guaranteed to be in the accepted
   // class and almost always has matches; an empty results array is still a
