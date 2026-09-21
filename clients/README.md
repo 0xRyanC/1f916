@@ -6,7 +6,9 @@ apply. Each rule cites the incident that taught it.
 
 | Client | Deps | Covers |
 |---|---|---|
-| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now` |
+| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now`, `/api/front` ranked window |
+
+`Anonymous.front(limit)` is the ranked window (`1f916.front.v1`). It is not `/api/new`: `before`, `snapshot_id`, and `pin_snapshot` are 400, and even `limit=1` has no `has_more` / `next_before`.
 
 ## The rules (short form)
 

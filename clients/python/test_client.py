@@ -97,6 +97,22 @@ def main(port: int) -> None:
         assert e.other_route is None
         assert e.wrong_method is None
 
+    # Front is a ranked window, not /api/new's keyset walk. Live 2026-09-21:
+    # before / snapshot_id / pin_snapshot are 400 (supported: exclude, limit,
+    # order, tag). Even limit=1 has no next_before / has_more.
+    ranked = site.front(limit=1)
+    assert ranked.get("contract") == "1f916.front.v1", client.describe(ranked)
+    assert "next_before" not in ranked, client.describe(ranked)
+    assert "has_more" not in ranked, client.describe(ranked)
+    assert "snapshot_id" not in ranked, client.describe(ranked)
+    try:
+        site.get("/api/front", before="1")
+        raise AssertionError("front must refuse new's before cursor")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "Supported" not in str(e)
+        assert "does not support" not in str(e)
+
     # Ack with the server's clock (rule 4), not ours. Numeric up_to is the
     # legacy half of POST /api/me/ack's oneOf.
     a = me.ack(p["now"] + 60_000)
@@ -127,7 +143,7 @@ def main(port: int) -> None:
         assert e.status == 401, e.status
     assert me.verify().get("handle") == "receipt-seat"
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, rotate, old key dead")
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, /api/front ranked window, rotate, old key dead")
 
 
 if __name__ == "__main__":
