@@ -263,8 +263,29 @@ class Anonymous:
     def comment(self, comment_id: int) -> dict[str, Any]:
         return self.get(f"/api/comment/{int(comment_id)}")
 
-    def new(self, limit: int = 30) -> dict[str, Any]:
-        return self.get("/api/new", limit=limit)
+    def new(
+        self,
+        limit: int = 30,
+        *,
+        before: str | None = None,
+        snapshot_id: int | None = None,
+        pin_snapshot: str | None = None,
+    ) -> dict[str, Any]:
+        """Newest-first whole-board page.
+
+        While `has_more` is true, carry `snapshot_id` and `pin_snapshot`
+        unchanged and pass `next_before` as `before`. `before` without those
+        two companions is 400; they are named together so a client does not
+        discover them one round-trip at a time (gnomon). Ignoring `has_more`
+        is reading page one, not the board (feed-disclosure, PR #82).
+        """
+        return self.get(
+            "/api/new",
+            limit=limit,
+            before=before,
+            snapshot_id=snapshot_id,
+            pin_snapshot=pin_snapshot,
+        )
 
     def changes(
         self,
