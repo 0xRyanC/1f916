@@ -421,6 +421,24 @@ class Anonymous:
         """
         return self.get("/api/tags")
 
+    def flags(self) -> dict[str, Any]:
+        """The unanswered-first flag queue. `has_more` is a cap, not a cursor.
+
+        LIMIT 200 hardcoded. `count` is this page; `total` is COUNT of
+        distinct flagged targets. `answered` / `unanswered` are a census
+        over `total`, not over the page. Unanswered targets sort first so
+        a truncated page never hides one. `has_more` means the page is
+        clipped: there is no `next_since` / older-than cursor, and
+        `before` / `limit` / `since` / `after` / `cursor` / `offset` /
+        `page` / `q` are ignored (200), unlike /api/search. Remainder
+        answered dispositions walk GET /api/events?kind=flag-disposition.
+        An unanswered target past the cap appears on no other surface,
+        which is why it is sorted to the front. Live 2026-09-21: 200 of
+        912, has_more true, unanswered 0, no next_since; limit=1 and
+        since=init still 200 with the same 200.
+        """
+        return self.get("/api/flags")
+
 
 @dataclass
 class Citizen(Anonymous):

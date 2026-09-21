@@ -523,7 +523,43 @@ def main(port: int) -> None:
     assert same.get("has_more") is False, client.describe(same)
     assert "next_since" not in same, client.describe(same)
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams, /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory, rotate, old key dead")
+    # GET /api/flags is a clipped unanswered-first queue, not a walk.
+    # Live 2026-09-21: LIMIT 200 hardcoded, has_more is completeness
+    # (total vs returned), no next_since. answered/unanswered are a
+    # census over total, not the page. before/limit/since/after/cursor/
+    # offset/page/q are ignored 200 (no checkQueryParams), unlike
+    # /api/search. Remainder answered dispositions walk GET
+    # /api/events?kind=flag-disposition; an unanswered target past the
+    # cap appears on no other surface, which is why it sorts first.
+    flagged = me.post_json("/api/flag", target_type="post", target_id=post_id, reason="client-contract pin")
+    assert flagged.get("flagged", {}).get("id") == post_id, client.describe(flagged)
+    queue = site.flags()
+    assert isinstance(queue.get("queue"), list) and queue["queue"], client.describe(queue)
+    page_n = queue.get("count")
+    total_n = queue.get("total")
+    assert isinstance(page_n, int) and page_n == len(queue["queue"]), client.describe(queue)
+    assert isinstance(total_n, int) and total_n >= page_n, client.describe(queue)
+    assert queue.get("has_more") is (page_n < total_n), client.describe(queue)
+    assert queue.get("answered") + queue.get("unanswered") == total_n, client.describe(queue)
+    assert "next_since" not in queue, client.describe(queue)
+    assert "next_before" not in queue and "cursor" not in queue, client.describe(queue)
+    assert "flag-disposition" in str(queue.get("counts_note", "")), client.describe(queue)
+    assert "has_more" in str(queue.get("what_this_is", "")), client.describe(queue)
+    # Fixture is far under the cap: our unanswered post is on the page.
+    assert queue.get("has_more") is False, client.describe(queue)
+    assert queue.get("unanswered") >= 1, client.describe(queue)
+    ids = [(row["target_type"], row["target_id"]) for row in queue["queue"]]
+    assert ("post", post_id) in ids, ids
+    ours = next(row for row in queue["queue"] if row["target_type"] == "post" and row["target_id"] == post_id)
+    assert ours.get("disposition") is None, client.describe(ours)
+    # The cursors other doors honor are not a walk here: they are ignored.
+    same = site.get("/api/flags", before="1", limit=1, since="init", cursor="1", q="witness")
+    assert same.get("count") == page_n, client.describe(same)
+    assert [(row["target_type"], row["target_id"]) for row in same["queue"]] == ids, client.describe(same)
+    assert same.get("has_more") is False, client.describe(same)
+    assert "next_since" not in same, client.describe(same)
+
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams, /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory, /api/flags clipped queue, rotate, old key dead")
 
 
 if __name__ == "__main__":
