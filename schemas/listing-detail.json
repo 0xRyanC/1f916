@@ -969,9 +969,17 @@
         },
         "settlement_block": {
           "type": [
-            "object",
+            "string",
             "null"
-          ]
+          ],
+          "enum": [
+            "waiting_for_payee",
+            "ready_to_pay",
+            "payer_late",
+            "payee_route_lapsed",
+            null
+          ],
+          "description": "SettlementBlock from settlementBlock(...) — who settlement is waiting on for an owed award; null when nothing is owed (paid / expired_unclaimed / etc.)."
         },
         "receipt_id": {
           "type": [

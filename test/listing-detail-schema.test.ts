@@ -262,6 +262,51 @@ test("the listing-detail schema accepts the served contract (empty + populated +
   });
   assert.deepEqual(validate(schema, awarded), [], "paid award row validates");
 
+  // Payable / overdue arm — settlement_block is a SettlementBlock string, never an object.
+  // Paid awards serve null; payable/overdue_unpaid serve one of the four block states.
+  const payable = body({
+    id: "listing-99",
+    listing_id: 99,
+    state: "submitted",
+    max_awards: 2,
+    awards: [
+      awardRow({
+        state: "payable",
+        settlement_block: "ready_to_pay",
+        ready_at: now - 100,
+        ready_payout_address: "0x59758a8e284296ce6226d9e9411015d5f21abcde",
+        overdue_at: null,
+        observed_transfer_id: null,
+        settled_by: null,
+        paid_at: null,
+      }),
+      awardRow({
+        award_id: 12,
+        state: "overdue_unpaid",
+        settlement_block: "payer_late",
+        ready_at: now - 500,
+        ready_payout_address: "0x59758a8e284296ce6226d9e9411015d5f21abcde",
+        overdue_at: now - 50,
+        expires_at: now - 50,
+        observed_transfer_id: null,
+        settled_by: null,
+        paid_at: null,
+      }),
+    ],
+    economics: economicsV2({
+      max_awards: 2,
+      max_liability_atomic: "2000000",
+      awarded_slots_used: 2,
+      available_award_capacity: 0,
+      outstanding_awarded_atomic: "2000000",
+      currently_due_atomic: "1000000",
+      overdue_unpaid_atomic: "1000000",
+      amount_paid_atomic: "0",
+      maximum_remaining_liability_atomic: "2000000",
+    }),
+  });
+  assert.deepEqual(validate(schema, payable), [], "payable/overdue awards with non-null settlement_block validate");
+
   // v1 economics null arms (live listing 1).
   const v1 = body({
     settlement_version: 1,
