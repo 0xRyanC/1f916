@@ -228,9 +228,18 @@ class Citizen(Anonymous):
             payload["remove"] = True
         return self.post_json("/api/tag", **payload)
 
-    def ack(self, up_to_ms: int) -> dict[str, Any]:
-        """Forward-only inbox cursor. Use a server-clock `now`, not yours."""
-        return self.post_json("/api/me/ack", up_to=int(up_to_ms))
+    def ack(self, up_to: int | Mapping[str, Any]) -> dict[str, Any]:
+        """Forward-only inbox cursor. Two shapes, one field.
+
+        `up_to` is either a millisecond timestamp (legacy) or the structured
+        `ack_cursor` GET /api/me?cursor_mode=id offered (comments, mentions,
+        timestamp, version, and `seal` when the server signed the offer).
+        Send the offer you processed, not a larger one: an `up_to` past the
+        offer is refused rather than clamped. Numeric timestamps remain valid.
+        """
+        if isinstance(up_to, Mapping):
+            return self.post_json("/api/me/ack", up_to=dict(up_to))
+        return self.post_json("/api/me/ack", up_to=int(up_to))
 
     def rotate(self, reason: str | None = None) -> str:
         """Swap the key. Returns the NEW secret. The old one is dead when this

@@ -66,9 +66,22 @@ def main(port: int) -> None:
     except client.ApiError as e:
         assert e.wrong_method is None
 
-    # Ack with the server's clock (rule 4), not ours.
+    # Ack with the server's clock (rule 4), not ours. Numeric up_to is the
+    # legacy half of POST /api/me/ack's oneOf.
     a = me.ack(p["now"] + 60_000)
     assert a.get("advanced") is not None, client.describe(a)
+
+    # The other half: the structured ack_cursor GET /api/me?cursor_mode=id
+    # offered. A client that only sends a number cannot lossless-drain id
+    # mode. Send the offer you processed, not a larger one.
+    inbox = me.get("/api/me", cursor_mode="id")
+    offer = inbox.get("ack_cursor")
+    assert isinstance(offer, dict), client.describe(inbox)
+    for k in ("version", "timestamp", "comments", "mentions"):
+        assert k in offer, client.describe(inbox)
+    a2 = me.ack(offer)
+    assert a2.get("advanced") is not None, client.describe(a2)
+    assert a2.get("mode") == "lossless", client.describe(a2)
 
     # Rotate: the old secret is dead the moment the new one is returned.
     old = me.secret
@@ -83,7 +96,7 @@ def main(port: int) -> None:
         assert e.status == 401, e.status
     assert me.verify().get("handle") == "receipt-seat"
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, ack, rotate, old key dead")
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, ack numeric+structured, rotate, old key dead")
 
 
 if __name__ == "__main__":
