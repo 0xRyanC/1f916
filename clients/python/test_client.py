@@ -559,7 +559,55 @@ def main(port: int) -> None:
     assert same.get("has_more") is False, client.describe(same)
     assert "next_since" not in same, client.describe(same)
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams, /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory, /api/flags clipped queue, rotate, old key dead")
+    # GET /api/attestations pages on `since_id` (`id >`), oldest-first,
+    # LIMIT 200. `has_more` is `count == ATTESTATION_PAGE`
+    # (src/society.ts:7732), not "rows remain". Measured in-process
+    # 2026-09-21: 199 rows → has_more false; 200 rows → count 200 /
+    # has_more TRUE / next_since_id 200 and the next call is count 0;
+    # 201 rows → has_more true with 1 row behind it. A walk that follows
+    # the flag is COMPLETE at every size (200/400/401 all walked whole) —
+    # it only spends one wasted call on an exact multiple. The flag's
+    # real defect is as an answer to "are there more?": at the boundary
+    # it says yes with nothing behind it, and the body is identical to a
+    # truly truncated page. So page to an empty page, and never surface
+    # has_more as "more exist". Live the store is 166 of 166, which is
+    # why only a seeded boundary shows it.
+    ledger = site.attestations()
+    assert isinstance(ledger.get("attestations"), list), client.describe(ledger)
+    page_n = ledger.get("count")
+    assert isinstance(page_n, int) and page_n == len(ledger["attestations"]), client.describe(ledger)
+    assert ledger.get("has_more") is (page_n == 200), client.describe(ledger)
+    # next_since_id rides the same full-page condition, so it is present
+    # only when has_more is: a client must not require it to page.
+    assert ("next_since_id" in ledger) is (page_n == 200), client.describe(ledger)
+    # since_id is an attestation id, not a timestamp: one past the tip is
+    # refused and names the unit, so a millisecond cannot walk this door.
+    if ledger["attestations"]:
+        tip = ledger["attestations"][-1]["id"]
+        exhausted = site.attestations(since_id=tip)
+        assert exhausted.get("count") == 0, client.describe(exhausted)
+        assert exhausted.get("has_more") is False, client.describe(exhausted)
+        try:
+            site.attestations(since_id=tip + 1)
+            raise AssertionError("since_id past the tip must be 400")
+        except client.ApiError as e:
+            assert e.status == 400, client.describe(e.body)
+            assert "not a timestamp" in str(e.body.get("error", "")), client.describe(e.body)
+    # The walk terminates on the empty page and never double-counts.
+    walked = site.walk_attestations()
+    ids = [row["id"] for row in walked]
+    assert ids == sorted(ids), "oldest-first"
+    assert len(ids) == len(set(ids)), "no row twice"
+    # Unsupported spellings are refused here (checkQueryParams), unlike
+    # /api/tags and /api/flags which ignore them.
+    try:
+        site.get("/api/attestations", limit=5)
+        raise AssertionError("limit must be 400 on /api/attestations")
+    except client.ApiError as e:
+        assert e.status == 400, client.describe(e.body)
+        assert "does not support query parameter" in str(e.body.get("error", "")), client.describe(e.body)
+
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams, /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory, /api/flags clipped queue, /api/attestations full-page has_more, rotate, old key dead")
 
 
 if __name__ == "__main__":

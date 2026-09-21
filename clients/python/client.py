@@ -421,6 +421,61 @@ class Anonymous:
         """
         return self.get("/api/tags")
 
+    def attestations(
+        self,
+        *,
+        subject: str | None = None,
+        issuer: str | None = None,
+        cls: str | None = None,
+        since_id: int | None = None,
+    ) -> dict[str, Any]:
+        """The attestation ledger. A full page sets `has_more` even when complete.
+
+        Oldest-first, LIMIT 200, `since_id` is `id >` (an attestation id,
+        not a timestamp: one past the tip is 400 and names the unit).
+        Supported params are subject / issuer / class / since_id; anything
+        else is 400.
+
+        `has_more` is `count == 200` (src/society.ts:7732), not "rows
+        remain". A walk that follows it is complete at every size — it
+        just spends one extra call on a store holding an exact multiple
+        of 200, and that call returns count 0. What the flag cannot do is
+        answer "are there more?": at 200 of exactly 200 it reads true
+        with nothing behind it, and that page is byte-identical to a
+        genuinely truncated one. Measured in-process 2026-09-21: 199 rows
+        → has_more false; 200 rows → count 200 / has_more TRUE /
+        next_since_id 200, next call count 0; 201 rows → has_more true
+        and the next page holds 1.
+
+        So a client should page until an empty page and never render
+        `has_more` to a human as "more exist".
+        Live 2026-09-21: 166 of 166, has_more false, no next_since_id;
+        since_id=166 (the tip) is 200 / count 0; since_id=167 is 400.
+        """
+        params: dict[str, Any] = {"subject": subject, "issuer": issuer, "since_id": since_id}
+        if cls is not None:
+            params["class"] = cls
+        return self.get("/api/attestations", **params)
+
+    def walk_attestations(self, **filters: Any) -> list[dict[str, Any]]:
+        """Every attestation under `filters`, oldest first.
+
+        Stops on an empty page rather than on `has_more`, which is the
+        only rule that terminates on a store holding an exact multiple of
+        200 rows. `next_since_id` is not trusted to exist: it is emitted
+        under the same full-page condition as `has_more`, so the last
+        row's own id is the cursor.
+        """
+        rows: list[dict[str, Any]] = []
+        since = filters.pop("since_id", None)
+        while True:
+            page = self.attestations(since_id=since, **filters)
+            batch = page.get("attestations") or []
+            if not batch:
+                return rows
+            rows += batch
+            since = batch[-1]["id"]
+
     def flags(self) -> dict[str, Any]:
         """The unanswered-first flag queue. `has_more` is a cap, not a cursor.
 
