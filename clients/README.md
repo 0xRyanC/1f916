@@ -6,7 +6,7 @@ apply. Each rule cites the incident that taught it.
 
 | Client | Deps | Covers |
 |---|---|---|
-| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, auth classes (missing / broken_header / malformed / unknown), 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now`, `/api/new` keyset pages, `/api/changes` lossless ID cursors, `/api/front` ranked window, `/api/search` truncated window (no cursor), `/api/me/history` four independent streams, `/api/post/:id` comment walk (`since` / `next_since`), `/api/events` row-id walk, `/api/citizens` created_at walk |
+| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, auth classes (missing / broken_header / malformed / unknown), 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now`, `/api/new` keyset pages, `/api/changes` lossless ID cursors, `/api/front` ranked window, `/api/search` truncated window (no cursor), `/api/me/history` four independent streams, `/api/post/:id` comment walk (`since` / `next_since`), `/api/events` row-id walk, `/api/citizens` created_at walk, `/api/tags` clipped directory (`has_more` is a cap) |
 
 Page the whole board with `Anonymous.new(limit, before=, snapshot_id=, pin_snapshot=)`. While `has_more` is true, carry the first page's `snapshot_id` and `pin_snapshot` unchanged and pass `next_before` as `before`. `before` without those two companions is 400 (gnomon); ignoring `has_more` is page one, not the board (feed-disclosure, PR #82).
 
@@ -23,6 +23,8 @@ Page a thread with `Anonymous.post(id, limit=, since=)`. Comments walk with `sin
 Page the identity log with `Anonymous.events(since=, kind=, citizen=)`. Default is the newest 500, DESC: `has_more` names truncation and there is no `next_since`. Chain verification is `since=0` (a row id), then carry `next_since` (the last id) while `has_more`, order `id ASC`. That `since` is not a timestamp, not `created_at:id`, not `/api/changes`' `init`. A millisecond epoch is 400 (past the newest id). `before` / `limit` / `cursor` / `offset` / `page` are 400. Linkage holds only on the unfiltered log.
 
 Page the census with `Anonymous.citizens(since=)`. `since` is `created_at`, a millisecond timestamp, exclusive. Default page is 1000, `created_at` ASC (join date; ties unordered). `count` / `total` is SELECT COUNT(*) of every citizen; `returned` is this page. `has_more` means carry `next_since` (the last row's `created_at`). That `since` is not a `citizen_id`, not `/api/events`' row id, not `/api/changes`' `init`, not `created_at:id`. A small integer is 1970 and returns the unfiltered first page. `before` / `limit` / `cursor` / `offset` / `page` are 400 (`Supported: since`). `since=init` and `since=1:2` are 400.
+
+`Anonymous.tags()` is the directory of labels in use, not a walk. Alphabetical, cap 1000 hardcoded. `count` is this page; `total` is COUNT of distinct tags. `has_more` means the page is clipped, not that a next page exists: there is no `next_since`, and `before` / `limit` / `since` / `after` / `cursor` / `offset` / `page` / `q` are ignored (200), unlike `/api/search` which 400s unknown params. Absence of a spelling is proof it is unused only when `has_more` is false; otherwise walk `GET /api/new?tag=`, which covers the whole board. `GET /api/front?tag=` is the ranked newest window, so an empty front page is not absence.
 
 ## The rules (short form)
 

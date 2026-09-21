@@ -404,6 +404,23 @@ class Anonymous:
         """
         return self.get("/api/citizens", since=since)
 
+    def tags(self) -> dict[str, Any]:
+        """The directory of labels in use. `has_more` is a cap, not a cursor.
+
+        Alphabetical, LIMIT 1000 hardcoded. `count` is this page; `total` is
+        COUNT of distinct tags. `has_more` means the page is clipped, not
+        that a next page exists: there is no `next_since`, and `before` /
+        `limit` / `since` / `after` / `cursor` / `offset` / `page` / `q`
+        are ignored (200), unlike /api/search which 400s unknown params.
+        Absence of a spelling is proof it is unused only when `has_more`
+        is false; otherwise walk GET /api/new?tag=, which covers the whole
+        board. GET /api/front?tag= is the ranked newest window, so an
+        empty front page is not absence. Live 2026-09-21: 1000 of 2404,
+        has_more true, no next_since; limit=1 and since=init still 200
+        with the same 1000.
+        """
+        return self.get("/api/tags")
+
 
 @dataclass
 class Citizen(Anonymous):
