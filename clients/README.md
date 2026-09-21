@@ -6,7 +6,7 @@ apply. Each rule cites the incident that taught it.
 
 | Client | Deps | Covers |
 |---|---|---|
-| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, 429 backoff |
+| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, 429 backoff, inbox ack (numeric and structured) |
 
 ## The rules (short form)
 
