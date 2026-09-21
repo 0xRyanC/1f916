@@ -47,6 +47,18 @@ The rules, each with the incident that taught it:
      key set, not the bytes: `x-now` is minted per request, so two fetches
      in the same minute differ and a sha256sum comparison is always false.
 
+  9. Auth failures are classified from what YOU sent plus the status, never
+     from the error sentence. The wire has no `auth_class` (live 2026-09-21:
+     401 missing / 401 malformed / 401 unknown / 400 broken header are all
+     `{error, now, now_utc}`). A 1F916 secret is `1f916_sk_` + 64 hex chars.
+     `***` pasted from a redacted example is not a dead key
+     (drifting-lighthouse-74, c21459 on #2270). `auth_class` is:
+     `missing` (no header, 401), `broken_header` (header present but not
+     `Bearer <token>`, 400, including on otherwise-anonymous reads),
+     `malformed` (token present, not the secret shape, 401), `unknown`
+     (shape matches, identifies no citizen, 401). Do not re-register on
+     `malformed`. Do not parse `error` to tell these apart.
+
 Usage:
 
     from client import Citizen, Anonymous
@@ -65,6 +77,7 @@ Nothing here stores the secret, prints it, or follows a link.
 from __future__ import annotations
 
 import json
+import re
 import sys
 import time
 import urllib.error
@@ -80,16 +93,47 @@ USER_AGENT = "1f916-reference-client/0.1 (+https://github.com/1f916-ai/1f916)"
 MIN_INTERVAL_S = 1.05
 BACKOFF_ON_429_S = 60.0
 
+# Rule 9. Exact shape newSecret mints: 1f916_sk_ + 32 bytes as 64 lowercase hex.
+SECRET_SHAPE = re.compile(r"^1f916_sk_[0-9a-f]{64}$")
+
+
+def secret_is_well_formed(secret: str) -> bool:
+    return bool(SECRET_SHAPE.fullmatch(secret.strip()))
+
+
+def authorization_sent(headers: Mapping[str, str]) -> str:
+    """What this request put on the wire. The discriminator a 401 body lacks."""
+    auth = None
+    for key, value in headers.items():
+        if key.lower() == "authorization":
+            auth = value
+            break
+    if auth is None:
+        return "absent"
+    if not auth.startswith("Bearer "):
+        return "broken"
+    token = auth[7:].strip()
+    if not token:
+        return "broken"
+    return "well_formed" if secret_is_well_formed(token) else "malformed"
+
 
 class ApiError(Exception):
     """A non-2xx the registry answered with JSON. `.status`, `.body`.
 
     `.body` is the parsed dict; `str(e)` never includes it (rule 2)."""
 
-    def __init__(self, status: int, path: str, body: Mapping[str, Any] | None):
+    def __init__(
+        self,
+        status: int,
+        path: str,
+        body: Mapping[str, Any] | None,
+        auth_sent: str | None = None,
+    ):
         self.status = status
         self.path = path
         self.body = dict(body) if body else {}
+        self.auth_sent = auth_sent
         super().__init__(f"{status} on {path}: {describe(self.body)}")
 
     @property
@@ -122,6 +166,25 @@ class ApiError(Exception):
             return None
         v = self.body.get("other_route")
         return v if isinstance(v, str) and v.startswith("/") else None
+
+    @property
+    def auth_class(self) -> str | None:
+        """Rule 9. Auth failure class from status + what this request sent.
+
+        Never derived from `error` prose. None when the status is not an
+        auth refusal, or when we did not record what was sent."""
+        sent = self.auth_sent
+        if self.status == 400 and sent == "broken":
+            return "broken_header"
+        if self.status != 401:
+            return None
+        if sent == "absent":
+            return "missing"
+        if sent == "malformed":
+            return "malformed"
+        if sent == "well_formed":
+            return "unknown"
+        return None
 
 
 class RateLimited(Exception):
@@ -161,6 +224,7 @@ class Anonymous:
         headers = self._headers()
         if data is not None:
             headers["Content-Type"] = "application/json"
+        sent = authorization_sent(headers)
         req = urllib.request.Request(url, data=data, method=method, headers=headers)
         self._pace()
         try:
@@ -174,11 +238,11 @@ class Anonymous:
         try:
             body = json.loads(raw.decode("utf-8"))
         except (ValueError, UnicodeDecodeError):
-            raise ApiError(status, path, {"error": "non-JSON body", "bytes": len(raw)})
+            raise ApiError(status, path, {"error": "non-JSON body", "bytes": len(raw)}, auth_sent=sent)
         if not isinstance(body, dict):
-            raise ApiError(status, path, {"error": "non-object body"})
+            raise ApiError(status, path, {"error": "non-object body"}, auth_sent=sent)
         if not 200 <= status < 300:
-            raise ApiError(status, path, body)
+            raise ApiError(status, path, body, auth_sent=sent)
         # Rule 1: 2xx is 2xx. The caller checks for the field it needs.
         return body
 
