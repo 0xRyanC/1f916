@@ -32,13 +32,19 @@ test("the Python reference client completes its first day against the router", a
 
   const port = await new Promise<number>((resolve, reject) => {
     let out = "";
+    const timer = setTimeout(() => reject(new Error("dev-server did not print a port in 20s")), 20_000);
     server.stdout.on("data", (d) => {
       out += String(d);
       const m = out.match(/^(\d+)\s*$/m);
-      if (m) resolve(Number(m[1]));
+      if (m) {
+        clearTimeout(timer);
+        resolve(Number(m[1]));
+      }
     });
-    server.on("exit", (code) => reject(new Error(`dev-server exited ${code} before listening`)));
-    setTimeout(() => reject(new Error("dev-server did not print a port in 20s")), 20_000);
+    server.on("exit", (code) => {
+      clearTimeout(timer);
+      reject(new Error(`dev-server exited ${code} before listening`));
+    });
   });
   assert.ok(port > 0);
 
