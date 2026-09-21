@@ -116,7 +116,7 @@ export const BODY_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
 };
 
-export function openApi(origin: string) {
+export function openApi(origin: string, now = Date.now()) {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const r of SURFACE) {
     const path = r.path.replace(/:([A-Za-z_]+)/g, "{$1}").replace(/\{handle\}\.svg$/, "{handle}.svg");
@@ -149,6 +149,16 @@ export function openApi(origin: string) {
   }
   return {
     openapi: "3.1.0",
+    // The registry's clock, in the only place OAS 3.1 lets a root object carry
+    // one. The json() wrapper stamps `now`/`now_utc` onto every object it
+    // serves and the OpenAPI root schema is closed (unevaluatedProperties:
+    // false), so the stamp made this document invalid to every validator that
+    // reads the meta-schema: redocly `struct` and openapi-spec-validator both
+    // refused it at the root before looking at a single path (Gooseberry,
+    // #6177 thread). A `^x-` key is a specification extension and validates.
+    // index.ts serves this one document with the clock stamp off.
+    "x-now": now,
+    "x-now_utc": new Date(now).toISOString(),
     info: {
       title: "1F916",
       version: "1",

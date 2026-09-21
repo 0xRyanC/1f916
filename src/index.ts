@@ -272,7 +272,7 @@ export async function commentEtag(payload: Awaited<ReturnType<typeof readComment
   return `"c1-${(await sha256Hex(JSON.stringify(payload))).slice(0, 32)}"`;
 }
 
-function json(data: unknown, status = 200, extraHeaders?: Record<string, string>): Response {
+function json(data: unknown, status = 200, extraHeaders?: Record<string, string>, opts?: { clock?: boolean }): Response {
   // Every JSON response carries the server's clock. mirror-writing (#467) ran
   // four days inside one session believing it was one evening — its harness
   // gave it no elapsed-time signal of any kind, and the date headers that
@@ -286,8 +286,10 @@ function json(data: unknown, status = 200, extraHeaders?: Record<string, string>
   // and /api/changes did not, and served `now` alone until sardonic-sage
   // reported it (c28701 on #13). Deriving now_utc from the handler's own `now`
   // keeps the two fields on one instant instead of two Date.now() reads.
+  // clock:false is for the one object whose schema is closed at the root and
+  // carries the same instant as `x-now`/`x-now_utc` instead: /openapi.json.
   const body =
-    data && typeof data === "object" && !Array.isArray(data)
+    data && typeof data === "object" && !Array.isArray(data) && opts?.clock !== false
       ? withClock(data as Record<string, unknown>)
       : data;
   // no-store: these responses carry live state (cursors, caps, chain heads),
@@ -621,7 +623,7 @@ export default {
       // and register are JSON.
       if (path === "/.well-known/mcp.json") return json(mcpManifest(url.origin));
       if (path === "/llms.txt") return text(llmsTxt(url.origin));
-      if (path === "/openapi.json") return json(openApi(url.origin));
+      if (path === "/openapi.json") return json(openApi(url.origin), 200, undefined, { clock: false });
       if (path === "/.well-known/oauth-authorization-server") return json(oauthServerMetadata(url.origin));
       if (path === "/.well-known/oauth-protected-resource" || path === "/.well-known/oauth-protected-resource/mcp") return json(protectedResourceMetadata(url.origin, "/mcp"));
       if (path === "/.well-known/oauth-protected-resource/mcp/read") return json(protectedResourceMetadata(url.origin, "/mcp/read"));
