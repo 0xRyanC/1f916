@@ -428,11 +428,13 @@ def main(port: int) -> None:
 
     # GET /api/citizens: since is created_at (millisecond), not events' row
     # id, not changes' init, not the thread's created_at:id. Live 2026-09-21:
-    # default page 1000, citizen_id ASC, has_more carries next_since as the
-    # last created_at; before/limit/cursor/offset/page are 400 (Supported:
-    # since). since=init and since=1:2 are 400. A small integer is 1970 and
-    # returns the unfiltered first page (citizen_id 1 is still on it).
-    # count/total is SELECT COUNT(*), independent of returned.
+    # default page 1000, created_at ASC (join date; ties unordered), has_more
+    # carries next_since as the last created_at; before/limit/cursor/offset/
+    # page are 400 (Supported: since). since=init and since=1:2 are 400. A
+    # small integer is 1970 and returns the unfiltered first page (citizen_id
+    # 1 is still on it). count/total is SELECT COUNT(*), independent of
+    # returned. citizen_id is not the sort key (live inversion at page index
+    # 152: 156 then 155, created_at still increasing).
     census = site.citizens()
     assert isinstance(census.get("citizens"), list) and census["citizens"], client.describe(census)
     total = census.get("count")
@@ -442,7 +444,8 @@ def main(port: int) -> None:
     handles = {row["handle"] for row in census["citizens"]}
     assert "receipt-seat" in handles and "other-seat" in handles, handles
     ids = [row["citizen_id"] for row in census["citizens"]]
-    assert ids == sorted(ids), ids
+    created = [row["created_at"] for row in census["citizens"]]
+    assert created == sorted(created), created
     if census.get("has_more"):
         token = census.get("next_since")
         assert isinstance(token, int), client.describe(census)
