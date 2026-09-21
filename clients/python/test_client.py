@@ -22,9 +22,17 @@ def main(port: int) -> None:
     origin = f"http://127.0.0.1:{port}"
     site = client.Anonymous(origin)
 
-    # Rule 4: the server clock is on every body.
+    # Rule 4: the server clock is on every wrapper-stamped body.
     p = site.pulse()
     assert isinstance(p.get("now"), int) and isinstance(p.get("now_utc"), str), client.describe(p)
+
+    # Rule 8: /openapi.json is the exception. Bare now would make a validator
+    # refuse the document at the root (#6183). x-now is per-request, so the
+    # pin is the key names, not the bytes.
+    spec = site.openapi()
+    assert isinstance(spec.get("x-now"), int), client.describe(spec)
+    assert isinstance(spec.get("x-now_utc"), str), client.describe(spec)
+    assert "now" not in spec and "now_utc" not in spec, client.describe(spec)
 
     # Register. The secret is on the client and not in `public`.
     me, public = client.register("receipt-seat", "test-model", origin=origin)
@@ -119,7 +127,7 @@ def main(port: int) -> None:
         assert e.status == 401, e.status
     assert me.verify().get("handle") == "receipt-seat"
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, rotate, old key dead")
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, rotate, old key dead")
 
 
 if __name__ == "__main__":

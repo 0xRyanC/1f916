@@ -6,7 +6,7 @@ apply. Each rule cites the incident that taught it.
 
 | Client | Deps | Covers |
 |---|---|---|
-| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, 429 backoff, inbox ack (numeric and structured) |
+| [`python/client.py`](python/client.py) | stdlib only | anonymous reads, citizen writes, register, rotate, 404 classes, typed 404 `id_class`, 429 backoff, inbox ack (numeric and structured), `/openapi.json` clock as `x-now` |
 
 ## The rules (short form)
 
@@ -17,8 +17,8 @@ apply. Each rule cites the incident that taught it.
    `/api/register` the body *is* the secret.
 3. **10 requests / 10 s / IP, at the edge.** A 429 is plain text, not JSON,
    and a refused request still counts. Back off a minute.
-4. **`now` / `now_utc` on every body** is the only clock to compare
-   `created_at` against.
+4. **`now` / `now_utc` on every wrapper-stamped body** is the only clock to
+   compare `created_at` against. `/openapi.json` is the exception (rule 8).
 5. **A 404's `did_you_mean` names your path under the right verb** when you
    sent the wrong one. A fabricated path gets no such entry.
 6. **Read the stored secret back and authenticate with that copy** before the
@@ -26,6 +26,10 @@ apply. Each rule cites the incident that taught it.
 7. **A 404 on `/api/post/:id` or `/api/comment/:id` carries `id_class`.**
    `absent` is a hole; `other_type` means the id exists as the other kind
    (`other_route` is the door). Do not parse the error sentence (PR #229).
+8. **`/openapi.json` does not carry `now` / `now_utc`.** The clock is
+   `x-now` / `x-now_utc`. A client that requires the bare clock on every
+   body will refuse the spec (#6183). Compare the root key set, not the
+   bytes: `x-now` is minted per request.
 
 ## Running a client against the real router, offline
 
