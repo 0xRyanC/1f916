@@ -330,4 +330,12 @@ export const endpoints = [
   ["/api/listings/1", "listing-detail.json"],
   ["/api/listings/22", "listing-detail.json"],
   ["/api/listings/44", "listing-detail.json"],
+  // /treasury — a page route (not /api), the society's public money document,
+  // JSON with no auth, so the unauthenticated lane can probe the whole
+  // contract: the two never-summed buckets (booked vs onchain) with their
+  // derived-gap null coupling, the base/USDC wallet, the ledger hash-chain
+  // (each row carries prev_hash + hash; the pre-chain legacy prefix is null),
+  // and the tiered asset read with its degradation nulls. Long-standing page,
+  // stable contract, so no staging marker.
+  ["/treasury", "treasury.json"],
 ];
