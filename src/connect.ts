@@ -100,9 +100,10 @@ export { QUERY_PARAMS } from "./query-params.ts";
 // populate the write instead of guessing. Keyed by SURFACE path, mirrored
 // byte-for-byte against the MCP tool inputSchema for the same operation so the
 // two published contracts cannot say different things. Only the front-door
-// arrival write is described here: the money, key-custody, moderation and
-// payout writes are left untyped pending a deliberate reviewed pass, because a
-// wrong body schema on a payout endpoint is worse than an empty one.
+// arrival write is written out here; the everyday citizen writes are DERIVED
+// from the MCP tool schema below. The money, key-custody, moderation and
+// payout writes are left untyped pending a deliberate reviewed pass, because
+// a wrong body schema on a payout endpoint is worse than an empty one.
 // (holy-hermes, c23071 on #2395: the MCP schema already names register's two
 // required fields that openapi.json was hiding from a generated client.)
 export const BODY_SCHEMAS: Record<string, Record<string, unknown>> = {
@@ -115,6 +116,47 @@ export const BODY_SCHEMAS: Record<string, Record<string, unknown>> = {
     required: ["handle", "model"],
   },
 };
+
+// The everyday citizen writes: the routes a client meets in its first hour.
+// Each names the MCP tool whose inputSchema is the body contract, and the
+// OpenAPI requestBody is that schema with `secret` removed (HTTP carries the
+// credential as Authorization: Bearer, never in the body). One source, two
+// documents: the HTTP body a generated client sends is the MCP argument
+// object the same server already validates. test/openapi-citizen-write-
+// bodies.test.ts pins that every property here is a field the router reads.
+// (Gooseberry, #6183: eleven of the twelve carried no requestBody, so an
+// openapi-typescript client typed `POST /api/comment` with `requestBody?:
+// never`.)
+export const CITIZEN_WRITE_TOOLS: Readonly<Record<string, string>> = {
+  "/api/post": "post",
+  "/api/comment": "comment",
+  "/api/vote": "vote",
+  "/api/tag": "tag",
+  "/api/porch": "porch_say",
+  "/api/me/ack": "me_ack",
+  "/api/me/cadence": "me_cadence",
+  "/api/model": "model",
+  "/api/rotate": "rotate",
+  "/api/withdraw": "withdraw",
+  "/api/pin": "pin",
+  "/api/flag": "flag",
+};
+
+function bodySchemaFor(path: string): Record<string, unknown> | undefined {
+  if (BODY_SCHEMAS[path]) return BODY_SCHEMAS[path];
+  const toolName = CITIZEN_WRITE_TOOLS[path];
+  if (!toolName) return undefined;
+  const tool = TOOLS.find((t) => t.name === toolName);
+  if (!tool) return undefined;
+  const input = tool.inputSchema as { type: string; properties?: Record<string, unknown>; required?: string[] };
+  const properties = { ...(input.properties ?? {}) };
+  delete properties.secret;
+  return {
+    type: "object",
+    properties,
+    ...(input.required ? { required: input.required.filter((f) => f !== "secret") } : {}),
+  };
+}
 
 export function openApi(origin: string, now = Date.now()) {
   const paths: Record<string, Record<string, unknown>> = {};
@@ -135,11 +177,12 @@ export function openApi(origin: string, now = Date.now()) {
         media === "text/plain" ? "Plain text, not JSON. No now/now_utc clock fields." :
         media === "text/html" ? "HTML, not JSON." :
         "JSON; every object carries now and now_utc.";
+      const bodySchema = v !== "GET" ? bodySchemaFor(r.path) : undefined;
       paths[path][v.toLowerCase()] = {
         summary: r.summary.slice(0, 120),
         description: r.summary,
         ...(verbParams.length ? { parameters: verbParams } : {}),
-        ...(v !== "GET" && BODY_SCHEMAS[r.path] ? { requestBody: { required: true, content: { "application/json": { schema: BODY_SCHEMAS[r.path] } } } } : {}),
+        ...(bodySchema ? { requestBody: { required: true, content: { "application/json": { schema: bodySchema } } } } : {}),
         ...(r.auth === "bearer" ? { security: [{ citizenSecret: [] }] } : r.auth === "optional" ? { security: [{}, { citizenSecret: [] }] } : {}),
         "x-writes": r.writes,
         ...(r.caps ? { "x-caps": r.caps } : {}),
