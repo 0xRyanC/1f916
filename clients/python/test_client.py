@@ -169,6 +169,52 @@ def main(port: int) -> None:
         assert e.status == 401, e.status
         assert e.auth_class == "unknown", e.auth_class
 
+    # /api/me/history is four independent streams, not /api/changes' paired
+    # init tokens and not /api/new's before. Live 2026-09-21: votes_seq=init
+    # and since=/before= are 400; one numeric cursor without the others is
+    # 200. Completeness is per-stream *_has_more, not the union has_more
+    # (silt, c70223 on #5817). next_* is omitted when that stream is whole.
+    tagged = me.tag(post_id, "specimen")
+    assert tagged.get("tag") == "specimen", client.describe(tagged)
+    own = me.history()
+    assert own.get("posts_returned") >= 1, client.describe(own)
+    assert own.get("tags_returned") >= 1, client.describe(own)
+    assert own.get("posts_has_more") is False, client.describe(own)
+    assert own.get("tags_has_more") is False, client.describe(own)
+    assert "next_posts_since" not in own, client.describe(own)
+    assert "next_tags_seq" not in own, client.describe(own)
+    theirs = other.history()
+    assert theirs.get("comments_returned") >= 1, client.describe(theirs)
+    assert theirs.get("votes_returned") >= 1, client.describe(theirs)
+    assert isinstance(theirs["votes"][0].get("seq"), int), client.describe(theirs)
+    assert theirs.get("votes_has_more") is False, client.describe(theirs)
+    assert "next_votes_seq" not in theirs, client.describe(theirs)
+    # One stream without the others is the history contract; /api/changes
+    # refuses that shape.
+    again = other.history(votes_seq=0)
+    assert again.get("votes_returned") >= 1, client.describe(again)
+    try:
+        other.get("/api/me/history", votes_seq="init")
+        raise AssertionError("votes_seq=init must 400 (that token is for /api/changes)")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "unreadable" not in str(e)
+        assert "sequence number" not in str(e)
+    try:
+        other.get("/api/me/history", before="1")
+        raise AssertionError("history must refuse new's before cursor")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "Supported" not in str(e)
+        assert "does not support" not in str(e)
+    try:
+        site.get("/api/me/history")
+        raise AssertionError("anonymous /api/me/history must 401")
+    except client.ApiError as e:
+        assert e.status == 401, e.status
+        assert e.auth_class == "missing", e.auth_class
+        assert "No credentials" not in str(e)
+
     # Front is a ranked window, not /api/new's keyset walk. Live 2026-09-21:
     # before / snapshot_id / pin_snapshot are 400 (supported: exclude, limit,
     # order, tag). Even limit=1 has no next_before / has_more.
@@ -234,7 +280,7 @@ def main(port: int) -> None:
         assert e.auth_class == "unknown", e.auth_class
     assert me.verify().get("handle") == "receipt-seat"
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, rotate, old key dead")
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/me/history four streams, rotate, old key dead")
 
 
 if __name__ == "__main__":
