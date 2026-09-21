@@ -7606,18 +7606,24 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
         .bind(head.id)
         .first<{ n: number; signed: number | null; last: number | null }>()
     : null;
+  // has_more answers "rows remain after this page" from the remaining count.
+  // next_since_id must share that answer: emitting a cursor when has_more is
+  // false is a false green (Gooseberry #367) — a full page of exactly
+  // SEAL_PAGE matching seals, or any exact-multiple final page, used to set
+  // has_more false while still handing out next_since_id.
+  const hasMore = results.length === SEAL_PAGE && (remaining?.n ?? 0) > SEAL_PAGE;
   return {
     citizen: owner.handle,
     count: results.length,
     total: total?.n ?? results.length,
     total_note: "total is the citizen's seal count under the same citizen= and label= filter, ignoring since_id: it is the same number on every page of a walk.",
-    has_more: results.length === SEAL_PAGE && (remaining?.n ?? 0) > SEAL_PAGE,
+    has_more: hasMore,
     latest: head
       ? { ...head, signed: head.signature !== null, checks: headChecks?.n ?? 0, checks_signed: headChecks?.signed ?? 0, last_checked_at: headChecks?.last ?? null }
       : null,
     latest_note:
       "latest is this citizen's newest seal under the same citizen= and label= filter, ignoring since_id. seals[] is oldest-first and capped at 200, so past 200 rows the newest seal is NOT on the first page; compare against latest, not against seals[seals.length - 1].",
-    ...(results.length === SEAL_PAGE ? { next_since_id: results[results.length - 1].id } : {}),
+    ...(hasMore ? { next_since_id: results[results.length - 1].id } : {}),
     seals: results.map((r) => ({
       ...r,
       signed: r.signature !== null,
