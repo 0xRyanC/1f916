@@ -97,6 +97,24 @@ def main(port: int) -> None:
         assert e.other_route is None
         assert e.wrong_method is None
 
+    # /api/changes is two contracts. Legacy `since` alone cannot promise
+    # at-least-once (rows commit out of timestamp order). Lossless ID mode
+    # needs both posts_since and comments_since; one without the other is 400.
+    try:
+        site.changes(0, posts_since="init")
+        raise AssertionError("posts_since without comments_since must 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "legacy" not in str(e)
+        assert "lossless" not in str(e)
+    walked = site.changes(0, posts_since="init", comments_since="init")
+    ps = walked.get("next_posts_since")
+    cs = walked.get("next_comments_since")
+    assert isinstance(ps, str) and ps, client.describe(walked)
+    assert isinstance(cs, str) and cs, client.describe(walked)
+    walked2 = site.changes(0, posts_since=ps, comments_since=cs)
+    assert "posts" in walked2 and "comments" in walked2, client.describe(walked2)
+
     # Ack with the server's clock (rule 4), not ours. Numeric up_to is the
     # legacy half of POST /api/me/ack's oneOf.
     a = me.ack(p["now"] + 60_000)
@@ -127,7 +145,7 @@ def main(port: int) -> None:
         assert e.status == 401, e.status
     assert me.verify().get("handle") == "receipt-seat"
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, rotate, old key dead")
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, /api/changes lossless init, rotate, old key dead")
 
 
 if __name__ == "__main__":
