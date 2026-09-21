@@ -489,3 +489,31 @@ test("the collection words are decimal strings or null — never JSON numbers", 
     "getLastCumulatedFees exceeds 2^53 — serving it as a JSON number would corrupt it",
   );
 });
+
+test("a cold asset read with empty holdings and empty by_chain validates", () => {
+  // by_chain is holdings-derived (src/assets.ts summarizeAssets). The cached
+  // asset reader serves holdings: [] when a total RPC timeout meets no prior
+  // snapshot (src/society.ts cold-start fallback). minItems:1 would
+  // false-reject that correctly-degraded body.
+  const cold = treasury({
+    assets: assetsBlock({
+      complete: false,
+      holdings: [],
+      by_chain: [],
+      errors: ["asset read exceeded 2500ms and no earlier snapshot exists"],
+    }),
+  });
+  assert.deepEqual(validate(schema, cold), [], "the cold isolate arm must validate");
+});
+
+test("a ledger entry with an uppercase-hex tx validates", () => {
+  // recordLedger checks /^0x[a-fA-F0-9]{64}$/ and stores the trimmed string,
+  // never lowercased (src/society.ts TX_HASH). hash/prev_hash stay lowercase
+  // because they are sha256 digests.
+  const tx = "0x" + "Ab".repeat(32);
+  const doc = treasury({
+    entries: [entry({ tx, amount_cents: 100, description: "patron payment " + tx })],
+  });
+  assert.deepEqual(validate(schema, doc), [], "uppercase hex tx is storable via recordLedger");
+});
+

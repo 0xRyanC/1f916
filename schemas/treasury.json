@@ -385,8 +385,7 @@
         },
         "by_chain": {
           "type": "array",
-          "minItems": 1,
-          "description": "One row per chain present in the holdings.",
+          "description": "One row per chain present in the holdings. Empty when the holdings array is empty (cold-start: RPC timeout, no prior snapshot).",
           "items": {
             "type": "object",
             "additionalProperties": false,
@@ -651,8 +650,8 @@
         },
         "tx": {
           "type": ["string", "null"],
-          "pattern": "^0x[0-9a-f]{64}$",
-          "description": "The on-chain tx an income entry verifies against (outside the hash preimage). null on cost rows and the legacy prefix."
+          "pattern": "^0x[0-9a-fA-F]{64}$",
+          "description": "The on-chain tx an income entry verifies against (outside the hash preimage). null on cost rows and the legacy prefix. Mixed-case hex is stored as written; the writer does not lowercase."
         },
         "source": {
           "type": ["string", "null"],
