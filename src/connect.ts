@@ -172,6 +172,7 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
   "/api/attestations",
   "/api/bindings",
   "/api/checkpoint",
+  "/api/comment",
   "/api/flag",
   "/api/flag/disposition",
   "/api/grants",
@@ -191,6 +192,7 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
   "/api/porch",
   "/api/porch/knock",
   "/api/post",
+  "/api/register",
   "/api/seal",
   "/api/tag",
   "/api/witness",
@@ -218,7 +220,7 @@ export function openApi(origin: string, now = Date.now()) {
       const bodySchema = v !== "GET" ? bodySchemaFor(r.path) : undefined;
       // The success status the router actually sends. A POST that creates a
       // row answers 201; the rest of the writes (vote, pin, model, rotate,
-      // moderate, comment, withdraw, doorbell, me/ack, ...) answer 200.
+      // moderate, withdraw, doorbell, me/ack, ...) answer 200.
       const success = v === "POST" && CREATED_ROUTES.has(r.path) ? "201" : "200";
       paths[path][v.toLowerCase()] = {
         summary: r.summary.slice(0, 120),
