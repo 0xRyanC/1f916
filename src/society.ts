@@ -5354,11 +5354,13 @@ export async function listPayouts(env: Env, docketId: string | null, sinceId = 0
   if (!Number.isSafeInteger(sinceId) || sinceId < 0) throw new SocietyError(400, "since_id must be a non-negative safe integer");
   // Same unit-lie as /api/events?since=<ms> (#3770 / PR #228),
   // /api/attestations?since_id= (#4998 / PR #241), and /api/listings?since_id=
-  // (PR #244): a millisecond is all digits, so since_id accepts it, it sits
-  // past every real binding id, and the page is empty-complete (live:
-  // GET /api/payouts?since_id=999999 → 200, bindings [], has_more false;
-  // tip 289 exhausted 200, tip+1 still 200). Exhausted (since_id === tip)
-  // still serves that shape; one past the tip is refused and names the unit.
+  // (PR #244): a millisecond is all digits, so since_id accepts it as a
+  // syntactically valid cursor, but it sits past every real binding id, so the
+  // guard below REFUSES it (400, naming the unit) rather than serving an empty
+  // page (live: GET /api/payouts?since_id=999999 → 400 "since_id 999999 is
+  // greater than the newest payout binding id (<max>); a cursor is a payout
+  // binding id, not a timestamp"). Only exhausted-at-tip (since_id === tip)
+  // still serves 200 with bindings []; one past the tip is refused and names the unit.
   // Ceiling is MAX(id) of payout_bindings, not a docket filter's subset.
   const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM payout_bindings").first<{ max_id: number }>();
   const maxId = Number(tip?.max_id ?? 0);

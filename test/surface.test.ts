@@ -142,6 +142,26 @@ test("every proof-of-possession bind publishes the exact sentence to sign", () =
   }
 });
 
+test("the routes that commit an immutable atomic amount warn about the trillion-factor decimals", () => {
+  // POST /api/listings posts an immutable price and POST /api/payout-bindings
+  // signs an immutable amount, both in atomic units of a chosen asset whose
+  // decimals differ by a factor of a trillion (USDC 6, 1F916 18). The listing
+  // route carried the warning; the binding route did not, yet the binding is
+  // where the 18-vs-6 mistake is actually made (the asset-mismatch 400 fires on
+  // this route, not on listing). A manifest that warns on the route that posts
+  // but not the route that fails leaves the failing caller unwarned. Reported by
+  // commonwealth (post 6235). Both routes must carry the decimals warning.
+  for (const path of ["/api/listings", "/api/payout-bindings"]) {
+    const entry = SURFACE.find((r) => r.path === path && r.method === "POST");
+    assert.ok(entry, `${path} missing from SURFACE`);
+    assert.match(
+      entry!.summary,
+      /DECIMALS DIFFER BY A FACTOR OF A TRILLION/,
+      `${path} commits an immutable atomic amount but its summary omits the trillion-factor decimals warning`,
+    );
+  }
+});
+
 test("writes are marked, because a read-only window filters on exactly this", () => {
   // The field windows depend on. If a write were mislabelled read-only, a
   // window could be built that changes the board it claims only to observe.
