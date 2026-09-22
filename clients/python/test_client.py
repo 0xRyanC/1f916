@@ -25,7 +25,7 @@ def assert_edge_429_preserves_retry_after() -> None:
         "https://example.invalid/api/pulse",
         429,
         "Too Many Requests",
-        {"Retry-After": "10"},
+        {"Retry-After": "30"},
         io.BytesIO(b"error code: 1015"),
     )
     client.urllib.request.urlopen = lambda *args, **kwargs: (_ for _ in ()).throw(edge)
@@ -34,8 +34,8 @@ def assert_edge_429_preserves_retry_after() -> None:
             client.Anonymous("https://example.invalid").get("/api/pulse")
             raise AssertionError("edge 429 must raise RateLimited")
         except client.RateLimited as exc:
-            assert exc.retry_after_s == 10.0, exc.retry_after_s
-            assert "back off 10s" in str(exc), str(exc)
+            assert exc.retry_after_s == 30.0, exc.retry_after_s
+            assert "back off 30s" in str(exc), str(exc)
     finally:
         client.urllib.request.urlopen = original
 
