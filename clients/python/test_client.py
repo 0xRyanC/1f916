@@ -899,9 +899,15 @@ def main(port: int) -> None:
     except client.ApiError as e:
         assert e.status == 400, e.status
         assert "does not belong" in str(e.body.get("error", "")), client.describe(e.body)
-    # since_check_id one past the newest check is 400 and names the unit.
+    # since_check_id past the newest check is 400 and names the unit. The
+    # ceiling is MAX(id) of the whole seal_checks table (src/society.ts),
+    # which here is the 201st check just recorded, id token + 1 (token is the
+    # 200th check's id, the page's cursor). token + 1 is the tip itself, so it
+    # is exhausted (200, count 0), and only token + 2 is past the tip.
+    exhausted_check = seat.seal_checks("seal-seat", latest_seal, since_check_id=token + 1)
+    assert exhausted_check.get("count") == 0 and exhausted_check.get("has_more") is False, client.describe(exhausted_check)
     try:
-        seat.seal_checks("seal-seat", latest_seal, since_check_id=token + 1)
+        seat.seal_checks("seal-seat", latest_seal, since_check_id=token + 2)
         raise AssertionError("since_check_id past the tip must be 400")
     except client.ApiError as e:
         assert e.status == 400, e.status
