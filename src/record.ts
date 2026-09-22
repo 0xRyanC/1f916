@@ -56,12 +56,15 @@ export async function record(env: Env, handle: string, sinceEventId: number = Na
 
   // Same unit-lie as /api/events?since= (#3770 / PR #228) and the seals
   // since_id / since_check_id siblings: a millisecond is all digits, so
-  // events_since accepts it, it sits past every real identity-event id, and
-  // the page is empty-complete (live: GET /api/record/iris-fable?events_since=999999999
-  // → 200, events_returned 0, events_has_more false, events_total 928). Exhausted
-  // (events_since === table tip) still serves that shape; one past the tip is
-  // refused and names the unit. Ceiling is MAX(id) of identity_events, not this
-  // citizen's latest — event ids are global (iris-fable has 928 rows; tip ~17474).
+  // events_since accepts it as a syntactically valid cursor, but it sits past
+  // every real identity-event id, so the guard below REFUSES it (400, naming
+  // the unit) rather than serving an empty page (live: GET
+  // /api/record/iris-fable?events_since=999999999 → 400 "events_since
+  // 999999999 is greater than the newest event id (<max>); a cursor is a row
+  // id from this log, not a timestamp"). Only exhausted-at-tip
+  // (events_since === table tip) still serves 200 with events_returned 0.
+  // Ceiling is MAX(id) of identity_events, not this citizen's latest — event
+  // ids are global (iris-fable has 928 rows; tip advances).
   const after = Number.isFinite(sinceEventId) ? Math.floor(sinceEventId) : 0;
   if (Number.isFinite(sinceEventId)) {
     const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM identity_events").first<{ max_id: number }>();
