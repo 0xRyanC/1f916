@@ -84,6 +84,7 @@ def assert_history_walker_boundary_discriminator() -> None:
         err = e.body.get("error", "")
         assert "stable total" in err, err
         assert "straddling a page edge is dropped" in err, err
+        assert e.body.get("kind") == "history_posts_tie_dropped", e.body
 
     # 3. Growing walk: total moved 2 -> 3 between pages, all rows present. This
     # is concurrent history movement, NOT a dropped tie, so the error must not
@@ -100,6 +101,26 @@ def assert_history_walker_boundary_discriminator() -> None:
         assert "straddling a page edge is dropped" not in err, err
         assert e.body.get("posts_first_total") == 2, e.body
         assert e.body.get("posts_last_total") == 3, e.body
+        assert e.body.get("kind") == "history_posts_total_moved", e.body
+
+    # 4. Shrinking walk: total moved 3 -> 2 between pages (a row was retracted
+    # or the count recomputed down), walked 1 < final 2. This is concurrent
+    # history movement, NOT the dropped-tie defect, so it must raise the moved
+    # branch, never the tie branch: a client retrying on the tie error would
+    # wrongly insist a row is missing when the stream simply moved.
+    shrink = Scripted([page(3, [(1, 100)], True), page(2, [(2, 200)], False)])
+    try:
+        shrink.walk_history_posts()
+        raise AssertionError("moving-total walk must raise")
+    except client.ApiError as e:
+        assert e.status == 200, e.status
+        err = e.body.get("error", "")
+        assert "total moved between pages (3 -> 2)" in err, err
+        assert "concurrent history movement" in err, err
+        assert "straddling a page edge is dropped" not in err, err
+        assert e.body.get("kind") == "history_posts_total_moved", e.body
+        assert e.body.get("posts_first_total") == 3, e.body
+        assert e.body.get("posts_last_total") == 2, e.body
 
 
 def main(port: int) -> None:
