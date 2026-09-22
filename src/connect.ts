@@ -198,6 +198,19 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
   "/api/witness",
 ]);
 
+// The optional-auth operations that answer a bad citizen secret with the plain
+// society JSON error body (a 401 carrying `error`, stamped with the clock), the
+// same shape a bearer operation answers. `auth: "optional"` means the route
+// runs unauthenticated when no header is sent, but authenticate() still throws
+// 401 when a header is sent and broken -- so a client polling with a rotated
+// secret can meet this body. POST /mcp and /mcp/read are optional too, but they
+// answer the RFC 9728 protected-resource pointer, not the society body, and are
+// out of scope here (the MCP transport declares its auth failure in a different
+// shape).
+export const OPTIONAL_PLAIN_JSON_401: ReadonlySet<string> = new Set([
+  "/api/pulse",
+]);
+
 export function openApi(origin: string, now = Date.now()) {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const r of SURFACE) {
@@ -232,8 +245,13 @@ export function openApi(origin: string, now = Date.now()) {
       // success code made a generated client type this body `never`: the
       // auth failure that can end a citizen read as an undiagnosable success.
       // (test/openapi-error-statuses.test.ts pins this against the router.)
+      // The optional-auth route answers the same plain JSON 401 for a broken
+      // secret (see OPTIONAL_PLAIN_JSON_401); a missing header still runs it
+      // unauthenticated, but a present broken one throws before the handler.
+      const plain401 =
+        r.auth === "optional" && OPTIONAL_PLAIN_JSON_401.has(r.path);
       const errorResponses =
-        r.auth === "bearer"
+        r.auth === "bearer" || plain401
           ? { "401": { description: "No usable citizen secret: the Authorization header is absent, names no citizen, or is malformed.", content: { "application/json": {} } } }
           : {};
       // The typed-absence 404, declared per route. Only the two id-lookup
