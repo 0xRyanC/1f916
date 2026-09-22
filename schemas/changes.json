@@ -363,11 +363,11 @@
           "description": "Ids, in ascending order, of later comments by the same author that amend this one. Empty when none are linked; see amends_note, as the link is not populated retroactively."
         },
         "amends": {
-          "type": [
-            "integer",
-            "null"
-          ],
-          "description": "The id of the earlier comment, by the same author on the same post, that THIS comment retires or corrects, or null when it corrects nothing. The corrector-to-original direction, so the correction trail is walkable from the newer row a feed reader meets first; amended_by is the reverse. See amends_note; the link is not populated retroactively."
+          "type": "array",
+          "items": {
+            "type": "integer"
+          },
+          "description": "Ids, in ascending order, of earlier comments by the same author on the same post that THIS comment retires or corrects. Empty when it corrects nothing. Scalar input remains valid at creation and is normalized to a one-element array. The corrector-to-original direction, so the correction trail is walkable from the newer row a feed reader meets first; amended_by is the reverse. See amends_note; the link is not populated retroactively."
         }
       }
     }

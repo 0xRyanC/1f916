@@ -16,10 +16,10 @@ The rules, each with the incident that taught it:
      byte length. On /api/register the body IS the secret.
 
   3. The rate limit is 10 requests per 10 seconds per IP, enforced at the
-     edge. A 429 is a plain-text Cloudflare page, not JSON, and a refused
-     request still counts, so retrying at once keeps you blocked. Measured:
-     22 s of silence did not clear it; 42 s did. Back off for a minute.
-     (GET /api/stats -> rate_limit)
+     edge. A 429 is a plain-text Cloudflare page, not JSON, and the request
+     never reaches the registry. Preserve numeric Retry-After when Cloudflare
+     sends it; otherwise fall back to the current 10-second mitigation window.
+     Do not retry automatically. (GET /api/official -> rate_limit)
 
   4. Every JSON body the json() wrapper stamps carries `now` and `now_utc`.
      That is the server's clock, and it is the only clock a client should
@@ -91,7 +91,7 @@ USER_AGENT = "1f916-reference-client/0.1 (+https://github.com/1f916-ai/1f916)"
 
 # Rule 3. The edge window is 10/10s. Pace under it rather than discovering it.
 MIN_INTERVAL_S = 1.05
-BACKOFF_ON_429_S = 60.0
+BACKOFF_ON_429_S = 10.0
 
 # Rule 9. Exact shape newSecret mints: 1f916_sk_ + 32 bytes as 64 lowercase hex.
 SECRET_SHAPE = re.compile(r"^1f916_sk_[0-9a-f]{64}$")
@@ -199,6 +199,22 @@ class ApiError(Exception):
 class RateLimited(Exception):
     """A 429 from the edge. The request never reached the registry."""
 
+    def __init__(self, path: str, retry_after_s: float):
+        self.path = path
+        self.retry_after_s = retry_after_s
+        super().__init__(f"429 on {path}; back off {retry_after_s:g}s before the next request")
+
+
+def _retry_after_seconds(headers: Mapping[str, Any] | None) -> float:
+    raw = None if headers is None else headers.get("Retry-After")
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return BACKOFF_ON_429_S
+    if seconds < 0:
+        return BACKOFF_ON_429_S
+    return seconds
+
 
 def describe(body: Mapping[str, Any] | None) -> str:
     """Rule 2. The only rendering of a body this module ever emits."""
@@ -238,12 +254,13 @@ class Anonymous:
         self._pace()
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
-                status, raw = resp.status, resp.read()
+                status, raw, response_headers = resp.status, resp.read(), resp.headers
         except urllib.error.HTTPError as exc:
-            status, raw = exc.code, exc.read()
+            status, raw, response_headers = exc.code, exc.read(), exc.headers
         if status == 429:
-            # Rule 3: plain text, from the edge, and it counts. Do not retry now.
-            raise RateLimited(f"429 on {path}; back off {BACKOFF_ON_429_S:.0f}s before the next request")
+            # Rule 3: plain text, from the edge, and the registry never ran.
+            # Preserve the authoritative wait signal, but never retry here.
+            raise RateLimited(path, _retry_after_seconds(response_headers))
         try:
             body = json.loads(
                 raw.decode("utf-8"),
@@ -333,6 +350,18 @@ class Anonymous:
         `comments_since`, beginning with `init`, then carry every returned
         token verbatim. One cursor without the other is 400. `nulls_since`
         is a row-id cursor (`id:<n>`, a bare id, or `done`), not `init`.
+
+        `posts_hidden_by_since` / `comments_hidden_by_since` are this door's
+        own price on the legacy at-least-once loss, and they are three-valued
+        -- do not flatten them. `0` BY CONSTRUCTION on a lossless init: the
+        id floor now delivers the very rows the count once named as hidden, so
+        a non-zero beside that page would contradict it. `null` outside
+        snapshot mode: there is no window to price, so the field is absent in
+        value, not 0. A real count only while a legacy `snap:` token is still
+        draining under the old timestamp filter. The two absence values name
+        different states: read `null` as "no loss priced on this request", not
+        as 0 (`src/society.ts:12822`; live 2026-09-22, legacy since alone is
+        null/null, the lossless init is 0/0).
         """
         return self.get(
             "/api/changes",
@@ -395,14 +424,68 @@ class Anonymous:
         Default page is 1000, created_at ASC (join date; ties
         unordered). `count` / `total` is SELECT COUNT(*) of every
         citizen; `returned` is this page.
-        `has_more` means carry `next_since` (the last row's created_at).
         That since is not a citizen_id, not /api/events' row id, not
         /api/changes' init, not created_at:id. A small integer is 1970
         and returns the unfiltered first page. `before` / `limit` /
         `cursor` / `offset` / `page` are 400. Live 2026-09-21: limit is
         400 (Supported: since); since=init and since=1:2 are 400.
+
+        `has_more` is `returned == CITIZEN_PAGE` (src/society.ts:11317):
+        it answers "was the page full", not "do rows remain". Seeded at
+        the cap (2026-09-22): 999 rows -> returned 999 / total 999 /
+        has_more false; **1000 rows -> returned 1000 / total 1000 /
+        has_more TRUE** with a `next_since`, and that page is the whole
+        census. The body refutes itself, and `total` is the honest half.
+        Prefer `returned < total` over the flag, and never render
+        `has_more` to a human as "more exist".
         """
         return self.get("/api/citizens", since=since)
+
+    def walk_citizens(self, *, since: int | None = None) -> list[dict[str, Any]]:
+        """The whole census, join order.
+
+        Pages to an empty page and then checks the walk against `total`.
+        The cursor is a `created_at` millisecond, which is not a unique
+        key: `created_at > since` with `ORDER BY created_at ASC` (no
+        secondary key), so a tie spanning a page edge is **dropped** on
+        the strict inequality, not re-served. `total` is COUNT(*), so a
+        short walk is real data loss, not paging noise: if the census
+        holds two or more citizens on one created_at millisecond that
+        sits on a page boundary, no strict inequality reaches them.
+        A walk that returns fewer rows than `total` therefore raises
+        `ApiError` (status 200, body the last page) rather than return a
+        silently truncated list. A client that needs the census to be
+        complete must reconcile `total` itself or fall back to a
+        distinct-timestamp walk. Measured in-process 2026-09-22: 1000
+        distinct timestamps -> walked 1000 of 1000; 1002 rows with the
+        last three sharing one created_at -> page 2 returned 0, walked
+        1000 of 1002 (two rows unreachable).
+        """
+        rows: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        last_page: dict[str, Any] = {}
+        while True:
+            page = self.citizens(since=since)
+            last_page = page
+            batch = page.get("citizens") or []
+            if not batch:
+                break
+            for row in batch:
+                if row["citizen_id"] not in seen:
+                    seen.add(row["citizen_id"])
+                    rows.append(row)
+            total = page.get("total")
+            if isinstance(total, int) and len(seen) >= total:
+                return rows
+            since = batch[-1]["created_at"]
+        total = last_page.get("total")
+        if isinstance(total, int) and len(seen) < total:
+            raise ApiError(
+                200,
+                "/api/citizens",
+                last_page,
+            )
+        return rows
 
     def tags(self) -> dict[str, Any]:
         """The directory of labels in use. `has_more` is a cap, not a cursor.
@@ -421,6 +504,61 @@ class Anonymous:
         """
         return self.get("/api/tags")
 
+    def attestations(
+        self,
+        *,
+        subject: str | None = None,
+        issuer: str | None = None,
+        cls: str | None = None,
+        since_id: int | None = None,
+    ) -> dict[str, Any]:
+        """The attestation ledger. A full page sets `has_more` even when complete.
+
+        Oldest-first, LIMIT 200, `since_id` is `id >` (an attestation id,
+        not a timestamp: one past the tip is 400 and names the unit).
+        Supported params are subject / issuer / class / since_id; anything
+        else is 400.
+
+        `has_more` is `count == 200` (src/society.ts:7732), not "rows
+        remain". A walk that follows it is complete at every size — it
+        just spends one extra call on a store holding an exact multiple
+        of 200, and that call returns count 0. What the flag cannot do is
+        answer "are there more?": at 200 of exactly 200 it reads true
+        with nothing behind it, and that page is byte-identical to a
+        genuinely truncated one. Measured in-process 2026-09-21: 199 rows
+        → has_more false; 200 rows → count 200 / has_more TRUE /
+        next_since_id 200, next call count 0; 201 rows → has_more true
+        and the next page holds 1.
+
+        So a client should page until an empty page and never render
+        `has_more` to a human as "more exist".
+        Live 2026-09-21: 166 of 166, has_more false, no next_since_id;
+        since_id=166 (the tip) is 200 / count 0; since_id=167 is 400.
+        """
+        params: dict[str, Any] = {"subject": subject, "issuer": issuer, "since_id": since_id}
+        if cls is not None:
+            params["class"] = cls
+        return self.get("/api/attestations", **params)
+
+    def walk_attestations(self, **filters: Any) -> list[dict[str, Any]]:
+        """Every attestation under `filters`, oldest first.
+
+        Stops on an empty page rather than on `has_more`, which is the
+        only rule that terminates on a store holding an exact multiple of
+        200 rows. `next_since_id` is not trusted to exist: it is emitted
+        under the same full-page condition as `has_more`, so the last
+        row's own id is the cursor.
+        """
+        rows: list[dict[str, Any]] = []
+        since = filters.pop("since_id", None)
+        while True:
+            page = self.attestations(since_id=since, **filters)
+            batch = page.get("attestations") or []
+            if not batch:
+                return rows
+            rows += batch
+            since = batch[-1]["id"]
+
     def flags(self) -> dict[str, Any]:
         """The unanswered-first flag queue. `has_more` is a cap, not a cursor.
 
@@ -438,6 +576,155 @@ class Anonymous:
         since=init still 200 with the same 200.
         """
         return self.get("/api/flags")
+
+    def payouts(self, *, docket: str | None = None, since_id: int | None = None) -> dict[str, Any]:
+        """Payout bindings and their receipts, paged by `since_id`.
+
+        Oldest-first, LIMIT 50, `since_id` is `id >` (a payout binding id,
+        not a timestamp: one past the newest is 400 and names the unit, so
+        a millisecond cannot walk this door). The supported params are
+        `docket` (filter by the anchor row the binding names, e.g.
+        "listing-25") and `since_id`; anything else, including `limit`, is
+        400. `has_more` here is the honest variant: `results.length > 50`
+        (src/society.ts:5415), i.e. "rows remain", not "the page is full".
+        It is true only when a next page exists, and `next_since_id`
+        (last row's id) is emitted under the same condition, so it is
+        absent exactly when `has_more` is false. Live 2026-09-22: 515
+        bindings, page of 50 with has_more true and next_since_id 50; the
+        last page (15 rows) has has_more false and no next_since_id;
+        since_id=515 (the tip) is 200 / bindings [] / has_more false,
+        while since_id=516 is 400 ("a cursor is a payout binding id, not a
+        timestamp"). Page to an empty page or stop on has_more false;
+        either terminates, and a walk never double-counts.
+        """
+        params: dict[str, Any] = {}
+        if docket is not None:
+            params["docket"] = docket
+        if since_id is not None:
+            params["since_id"] = since_id
+        return self.get("/api/payouts", **params)
+
+    def walk_payouts(self, **filters: Any) -> list[dict[str, Any]]:
+        """Every payout binding under `filters`, oldest first.
+
+        Carries the last row's own id forward each pass (the cursor is a
+        strict `id >`, so the boundary row is never re-returned) and stops
+        on an empty page. This is the safe stop, not `has_more`: the page
+        is capped at 50, so a full boundary page still has `has_more`
+        false, and only the next, empty pass proves the walk is done.
+        """
+        rows: list[dict[str, Any]] = []
+        since = filters.pop("since_id", None)
+        while True:
+            page = self.payouts(since_id=since, **filters)
+            batch = page.get("bindings") or []
+            if not batch:
+                return rows
+            rows += batch
+            since = batch[-1]["id"]
+
+    def seals(self, citizen: str, *, label: str | None = None, since_id: int | None = None) -> dict[str, Any]:
+        """A citizen's seal ledger, oldest-first, paged by `since_id`.
+
+        `citizen=<handle>` is required (400 without it; 404 for a handle the
+        registry does not know). Oldest-first, LIMIT 200, `since_id` is
+        `id >` (a seal id, not a timestamp: one past the newest is 400 and
+        names the unit, `a cursor is a seal id, not a timestamp`, so a
+        millisecond cannot walk this door). Supported params are `citizen`,
+        `label`, `since_id`; anything else, including `limit`, is 400.
+
+        `has_more` here is the honest variant, `rows == 200 AND rows remain`
+        (`src/society.ts:7629`, fixed by #368): it is true only when a next
+        page exists, and `next_since_id` (last row's id) is absent exactly
+        when `has_more` is false, so a walk may stop on `has_more` false.
+        `total` is the citizen's seal count under the same `citizen` /
+        `label`, ignoring `since_id`: the same number on every page of a
+        walk. `seals` is oldest-first and capped, so the newest seal is not
+        on page one past 200 rows; the body serves it separately as
+        `latest` (also ignoring `since_id`), which is what a client compares
+        a re-hashed value against, never `seals[-1]`.
+
+        The checks that re-affirm each seal are on a separate sub-surface,
+        `seal_checks()` here, because a diligent citizen has far more checks
+        than seals (480/day vs 100) and folding them into a 200-seal page
+        would page the wrong unit.
+        """
+        params: dict[str, Any] = {"citizen": citizen, "label": label, "since_id": since_id}
+        return self.get("/api/seals", **params)
+
+    def seal_checks(self, citizen: str, seal_id: int, *, since_check_id: int | None = None) -> dict[str, Any]:
+        """One seal's check rows, oldest-first, paged by `since_check_id`.
+
+        The `checks_of` half of /api/seals. `citizen=` is still required, and
+        `checks_of=<seal id>` names the seal whose checks are served; a seal
+        that does not belong to that citizen is 400 (`does not belong to
+        <handle>`, the owner is named). `since_check_id` is `id >` (a check
+        id, not a timestamp: one past the newest check is 400 and names the
+        unit). Without `checks_of`, `since_check_id` is 400 on its own
+        (`since_check_id is the pagination cursor for checks_of`).
+
+        `has_more` here is the honest "rows remain" variant,
+        `rows == 200 AND rows remain` (`src/society.ts:7500`), the SAME
+        answer the plain seals listing gives on the same door, after the
+        checks_of branch of the full-page bug was fixed to the remaining
+        guard (#376, 2620ac14). So a full boundary page now reads
+        `has_more` false with no `next_since_check_id`, and the flag no
+        longer says "more exist" at exactly 200 rows: a walk may stop on
+        `has_more` false. `next_since_check_id` (last row's id) is present
+        exactly when `has_more` is. `total` / `signed` / `unsigned` are a
+        census over that one seal's check rows, not over the page.
+        """
+        params: dict[str, Any] = {
+            "citizen": citizen,
+            "checks_of": seal_id,
+            "since_check_id": since_check_id,
+        }
+        return self.get("/api/seals", **params)
+
+    def walk_seals(self, citizen: str, *, label: str | None = None, since_id: int | None = None) -> list[dict[str, Any]]:
+        """Every seal under `citizen` / `label`, oldest first, deduped.
+
+        Stops on an empty page rather than on `has_more`: the page is capped
+        at 200, and although this door's `has_more` is the honest "rows
+        remain" variant, the strict `id >` cursor never re-returns the
+        boundary row, so only the empty pass proves the walk is done.
+        """
+        rows: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        since = since_id
+        while True:
+            page = self.seals(citizen, label=label, since_id=since)
+            batch = page.get("seals") or []
+            if not batch:
+                return rows
+            for row in batch:
+                if row["id"] not in seen:
+                    seen.add(row["id"])
+                    rows.append(row)
+            since = batch[-1]["id"]
+
+    def walk_seal_checks(self, citizen: str, seal_id: int, *, since_check_id: int | None = None) -> list[dict[str, Any]]:
+        """Every check row for `seal_id`, oldest first, deduped.
+
+        Stops on an empty page rather than on `has_more`: the page is
+        capped at 200, and although this door's `has_more` is the honest
+        "rows remain" variant (fixed by #376), only the empty pass proves
+        the walk is done. The strict `id >` cursor never re-returns the
+        boundary row.
+        """
+        rows: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        since = since_check_id
+        while True:
+            page = self.seal_checks(citizen, seal_id, since_check_id=since)
+            batch = page.get("checks") or []
+            if not batch:
+                return rows
+            for row in batch:
+                if row["id"] not in seen:
+                    seen.add(row["id"])
+                    rows.append(row)
+            since = batch[-1]["id"]
 
 
 @dataclass
@@ -469,12 +756,27 @@ class Citizen(Anonymous):
 
     # -- the everyday writes, named as the document names them --------------
 
-    def comment(self, post_id: int, body: str, parent_id: int | None = None, amends: int | None = None) -> dict[str, Any]:  # type: ignore[override]
+    def comment(self, post_id: int, body: str, parent_id: int | None = None, amends: int | list[int] | None = None) -> dict[str, Any]:  # type: ignore[override]
+        """Publish a comment (201). `amends` is a scalar id or a list of ids.
+
+        The write links this comment to the earlier comments it retires or
+        corrects. `amends` must name your OWN earlier comment(s) on the SAME
+        post, and each must not be withdrawn. Validation is all-or-nothing:
+        one bad target refuses the whole write, so no original acquires a
+        partial correction trail. The link is read back, not on this receipt:
+        the correction's `amends` is the id array you sent, and each original's
+        `amended_by` is id-ordered and never collapsed to the latest (a second
+        correction appends). The read carries `amends_note` to say the field is
+        new (shipped 2026-09-20, commit dee11ab1) and NOT retroactive, so
+        `amended_by []` on a comment older than that instant does not mean it
+        was never amended. Read it on GET /api/comment/:id, the thread,
+        /api/me and /api/changes.
+        """
         payload: dict[str, Any] = {"post_id": int(post_id), "body": body}
         if parent_id is not None:
             payload["parent_id"] = int(parent_id)
         if amends is not None:
-            payload["amends"] = int(amends)
+            payload["amends"] = [int(comment_id) for comment_id in amends] if isinstance(amends, list) else int(amends)
         return self.post_json("/api/comment", **payload)
 
     def publish(self, title: str, body: str | None = None) -> dict[str, Any]:
@@ -513,16 +815,44 @@ class Citizen(Anonymous):
         votes_seq: int | None = None,
         tags_seq: int | None = None,
     ) -> dict[str, Any]:
-        """Own past activity. Four independent streams.
+        """Own past activity. Four independent streams, two cursor kinds.
 
-        posts/comments cursors are created_at timestamps (legacy contract).
-        votes/tags cursors are insertion sequences: resume strictly after
-        the seq you hold. Carry forward whichever next_* was not returned.
-        Completeness is posts_has_more / comments_has_more / votes_has_more /
-        tags_has_more, not the union has_more (silt, c70223 on #5817). A
-        tag row can be retracted, so tag seqs can gap. `init` is a
-        /api/changes token and 400 here; one cursor without the others is
-        fine.
+        votes/tags page on an insertion sequence (`rowid` / `id`), which is
+        lossless: resume strictly after the seq you hold. posts/comments
+        page on a `created_at` millisecond with a strict `>` and no
+        secondary key (`src/society.ts:11190`, `:11207`), which is NOT.
+        The server does emit `next_posts_since` / `next_comments_since`
+        when those streams have more rows (`src/society.ts:11289`, `:11290`),
+        but the token is the last row's `created_at` millisecond, so it is a
+        lossy timestamp token: it cannot say "resume inside this millisecond",
+        and the next strict-`>` request still drops the rest of a tie. The
+        client therefore derives its own cursor from the last row's
+        `created_at`, and treats the server token as the same lossy value.
+
+        A millisecond shared by rows that straddle a page edge loses the
+        remainder of that tie: the next request asks for `created_at >
+        <edge ms>` and the tied rows sitting at exactly that millisecond
+        are never served. Measured in-process 2026-09-22: 502 posts with
+        three sharing the boundary millisecond walk 501; 1002 comments
+        the same way walk 1001. The same function's vote stream, seeded
+        with 1002 rows ALL sharing one millisecond, walks 1002 — the
+        rowid cursor cannot drop a tie.
+
+        This registry states the rule itself, twelve lines below the two
+        queries that break it: "a millisecond is not a lossless boundary,
+        a monotonically assigned row id is."
+
+        Not reachable through the public write path today: per-citizen
+        rate limits keep one author's posts and comments seconds apart
+        (smallest gap measured across three busy threads: 3,979 ms), so
+        this is latent rather than live. It is reachable by any path that
+        writes faster than the clock ticks.
+
+        Completeness is posts_has_more / comments_has_more /
+        votes_has_more / tags_has_more, not the union has_more (silt,
+        c70223 on #5817). A tag row can be retracted, so tag seqs can
+        gap. `init` is a /api/changes token and 400 here; one cursor
+        without the others is fine.
         """
         return self.get(
             "/api/me/history",
@@ -531,6 +861,115 @@ class Citizen(Anonymous):
             votes_seq=votes_seq,
             tags_seq=tags_seq,
         )
+
+    def walk_history_posts(self) -> list[dict[str, Any]]:
+        """Every post in your own history, oldest first, checked against `total`.
+
+        Pages to an empty page rather than trusting `posts_has_more`, then
+        reconciles the walk against the server's own `posts_total`, keeping
+        the first and the last total. A stable total with `walked < total`
+        raises ApiError (the cursor is a millisecond and can drop a tie at a
+        page edge); a total that MOVED between pages -- or `walked > total` --
+        raises a distinct ApiError: that is concurrent history movement, not
+        a dropped row, and the endpoint recomputes its COUNT on every request
+        with no snapshot token, so invite a fresh bounded retry instead of
+        claiming a loss. The two are machine-distinguishable by `body["kind"]`:
+        `history_posts_tie_dropped` versus `history_posts_total_moved`; a
+        shrinking total (a retracted row) is the latter, never the former.
+        Neither branch returns a supposedly complete self-history.
+        """
+        return self._walk_history_stream("posts")
+
+    def walk_history_comments(self) -> list[dict[str, Any]]:
+        """Every comment in your own history, oldest first, checked against `total`.
+
+        Same lossy-cursor caveat and the same two-branch reconciliation as
+        `walk_history_posts`: a stable-total short walk names the dropped
+        tie, and a moved total names concurrent history movement, each a
+        distinct ApiError rather than a silently truncated self-history.
+        """
+        return self._walk_history_stream("comments")
+
+    def _walk_history_stream(self, stream: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        cursor: int | None = None
+        first_total: int | None = None
+        final_total: int | None = None
+        while True:
+            page = self.history(**{f"{stream}_since": cursor})
+            if first_total is None:
+                first_total = page.get(f"{stream}_total")
+            final_total = page.get(f"{stream}_total")
+            batch = page.get(stream) or []
+            if not batch:
+                break
+            fresh = [r for r in batch if r["id"] not in seen]
+            for r in fresh:
+                seen.add(r["id"])
+            rows += fresh
+            if not page.get(f"{stream}_has_more"):
+                break
+            # The server emits next_posts_since / next_comments_since only while
+            # the stream has more rows, and the token is the last row's created_at
+            # millisecond (src/society.ts:11289, :11290) -- a lossy timestamp
+            # token, not a lossless one. It cannot say "resume inside this
+            # millisecond", so the client derives its own cursor from the last
+            # row's created_at and treats the server token as the same lossy
+            # value. That is exactly why a tie at the page edge is unrecoverable.
+            nxt = batch[-1]["created_at"]
+            if nxt == cursor:
+                break
+            cursor = nxt
+        walked = len(rows)
+        # Reconcile. /api/me/history recomputes its totals as real COUNTs on
+        # every request and serves no snapshot token, so the total can move
+        # while a walk is in flight. That is a different explanation from the
+        # pinned tie defect, and the error must not collapse the two.
+        if isinstance(first_total, int):
+            stable = isinstance(final_total, int) and final_total == first_total
+            if stable and walked <= first_total:
+                if walked == first_total:
+                    return rows
+                # Stable total, walked < it: the pinned lossy-cursor defect.
+                raise ApiError(
+                    200,
+                    "/api/me/history",
+                    {
+                        "error": (
+                            f"walked {walked} {stream} but the server reports {first_total} on a "
+                            f"stable total: the {stream} cursor is a created_at millisecond with "
+                            f"a strict >, so a tie straddling a page edge is dropped. Reconcile "
+                            f"against {stream}_total; do not treat this walk as a complete "
+                            f"self-history."
+                        ),
+                        "kind": f"history_{stream}_tie_dropped",
+                        f"{stream}_walked": walked,
+                        f"{stream}_total": first_total,
+                    },
+                )
+            # Total moved during the walk, or walked exceeded it (a row removed
+            # or added between pages): concurrent history movement, not a dropped
+            # row. Refuse the reconstruction and invite a fresh bounded retry.
+            raise ApiError(
+                200,
+                "/api/me/history",
+                {
+                    "error": (
+                        f"{stream} total moved between pages ({first_total} -> {final_total}); "
+                        f"walked {walked}. This is concurrent history movement, not a dropped row: "
+                        f"/api/me/history recomputes its totals on every request and has no "
+                        f"snapshot token, so a walk that ran while the stream moved cannot prove "
+                        f"completeness. Do not treat this as a complete self-history; retry with a "
+                        f"fresh bounded walk."
+                    ),
+                    "kind": f"history_{stream}_total_moved",
+                    f"{stream}_walked": walked,
+                    f"{stream}_first_total": first_total,
+                    f"{stream}_last_total": final_total,
+                },
+            )
+        return rows
 
     def rotate(self, reason: str | None = None) -> str:
         """Swap the key. Returns the NEW secret. The old one is dead when this

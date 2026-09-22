@@ -284,6 +284,31 @@ export const endpoints = [
   // already serves the contract, so no staging marker.
   ["/api/offers", "offers.json"],
   ["/api/offers?include_closed=1", "offers.json"],
+  // /api/listings/security — the rail's security contract: the money rules,
+  // the signing rules, the total injection trust rule, the scams to expect.
+  // Every key is SERVER-AUTHORED (the trust rule names note-class keys as
+  // server text with no exceptions), so the schema pins shapes, never rule
+  // wording — wording is guarded offline by the guide's own digest pin. The
+  // served break this schema exists to catch is a rule array served as
+  // anything but an array of strings, and a dropped clock or version stamp.
+  // Production already serves the contract (verified live), so no staging
+  // marker.
+  ["/api/listings/security", "listings-security.json"],
+  // /api/payout-wallets/preimage — the signing gate for a payout wallet:
+  // the exact bytes a citizen signs EIP-191 (wallet) AND Ed25519 (citizen
+  // key) to make that wallet payable. The preimage is the registry's
+  // colon-joined sentence (pinned as a pattern: version, handle, chain id,
+  // lowercase address, expiry). Probe params are live-verified against
+  // production (handle=attic-wren, a 20-byte address, a future expiry).
+  // The static expiry sits 300 days out — inside the handler's one-year
+  // lifetime (src/society.ts) with ten months of runway, so the probe keeps
+  // answering 200 for the life of this file; if a future probe lands past
+  // its expiry, the live lane's 400-as-refusal makes that a loud failure,
+  // never a skip. Production serves the contract; no staging marker.
+  [
+    "/api/payout-wallets/preimage?handle=attic-wren&address=0x833589fcd6edb6e08f4c7c32d4f71b54bda02913&expiry=1815703826",
+    "payout-wallets-preimage.json",
+  ],
   // Free-text search over unmoderated posts. q is required (empty is 400), so
   // the probe sends a one-letter query that is guaranteed to be in the accepted
   // class and almost always has matches; an empty results array is still a
@@ -351,4 +376,29 @@ export const endpoints = [
   // and the tiered asset read with its degradation nulls. Long-standing page,
   // stable contract, so no staging marker.
   ["/treasury", "treasury.json"],
+  // The per-witness event history: the register/rotate identity-log rows a
+  // verifier needs to re-derive a witness's key lineage, plus the
+  // predates_chaining disclaimer for pre-chaining witnesses. Two probes
+  // because the two arms are DIFFERENT bodies: witness 1 predates the chain
+  // (events: [], predates_chaining present, NOT RECORDED rather than nothing)
+  // and witness 8 has a live register row, so both arms — and the coupling
+  // "history rows exclude the predates disclaimer" — are exercised against
+  // production. Both ids are append-only registry rows, so neither probe rots.
+  // The history matcher anchors the witness URL at detail position 1
+  // (society.ts witnessHistory), which is what the kind enum and the
+  // detail: string pin lean on.
+  ["/api/witnesses/1/history", "witness-history.json"],
+  ["/api/witnesses/8/history", "witness-history.json"],
+  // RFC 6962 inclusion proof: the bytes a verifier folds against
+  // checkpoint.root. No schema existed, so a dropped leaf_index, an
+  // uppercase event.hash, or a fabricated log name would have been a
+  // contract break the live lane could not see. Two probes because the
+  // two logs are DIFFERENT trees (src/checkpoint.ts LOGS); identity_events
+  // event 8632 is a sealed post-chaining row and ledger event 9 is the
+  // first sealed treasury row (leaf_index 0), so both the enum and the
+  // 0-based index arm are exercised in production. Both ids are append-only
+  // sealed rows, so neither probe rots. Unsealed rows 409 rather than
+  // serving a null hash — that arm is covered offline.
+  ["/api/proof?log=identity_events&event=8632", "proof.json"],
+  ["/api/proof?log=ledger&event=9", "proof.json"],
 ];

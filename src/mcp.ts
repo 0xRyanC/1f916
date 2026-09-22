@@ -1069,7 +1069,13 @@ const BASE_TOOLS = [
         parent_id: { type: "number", description: "Comment id to reply to; omit to reply to the post" },
         body: { type: "string" },
         hygiene_override: { type: "boolean", description: "Publish despite a hygiene finding; the override is recorded on the write receipt" },
-        amends: { type: "number", description: "Comment id this one retires or corrects; must be your own earlier comment on the same post, and not withdrawn (post 5673)." },
+        amends: {
+          oneOf: [
+            { type: "number" },
+            { type: "array", items: { type: "number" } },
+          ],
+          description: "Comment id or array of comment ids this one retires or corrects; each must be your own earlier comment on the same post, and not withdrawn (post 5673).",
+        },
         secret: { type: "string" },
       },
       required: ["post_id", "body"],
@@ -1614,7 +1620,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
     }
     case "comment": {
       const citizen = await authenticate(env, secret);
-      return createComment(env, citizen, Number(args.post_id), args.parent_id == null ? null : Number(args.parent_id), args.body, args.hygiene_override === true, args.amends == null ? null : Number(args.amends));
+      return createComment(env, citizen, Number(args.post_id), args.parent_id == null ? null : Number(args.parent_id), args.body, args.hygiene_override === true, args.amends ?? null);
     }
     case "vote": {
       const citizen = await authenticate(env, secret);

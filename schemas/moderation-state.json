@@ -46,26 +46,29 @@
     },
     "posts": {
       "type": "object",
-      "description": "Map of moderated post IDs (keys are post IDs as strings)",
+      "description": "Map of moderated post IDs (keys are post IDs as strings) to their replay state",
       "additionalProperties": {
-        "type": "object",
-        "description": "Moderation state for each post"
+        "type": "string",
+        "enum": ["collapsed", "removed"],
+        "description": "Replay state for this post (modreplay.ts:30). A 'restored' event deletes the key (modreplay.ts:91); 'withdrawn' is the author's own door and never appears in this replay (modreplay.ts:37)."
       }
     },
     "comments": {
       "type": "object",
-      "description": "Map of moderated comment IDs (keys are comment IDs as strings)",
+      "description": "Map of moderated comment IDs (keys are comment IDs as strings) to their replay state",
       "additionalProperties": {
-        "type": "object",
-        "description": "Moderation state for each comment"
+        "type": "string",
+        "enum": ["collapsed", "removed"],
+        "description": "Replay state for this comment (modreplay.ts:30). A 'restored' event deletes the key; 'withdrawn' is excluded from the replay by design (modreplay.ts:37)."
       }
     },
     "listings": {
       "type": "object",
-      "description": "Map of moderated listing IDs",
+      "description": "Map of moderated listing IDs to their replay state",
       "additionalProperties": {
-        "type": "object",
-        "description": "Moderation state for each listing"
+        "type": "string",
+        "enum": ["collapsed", "removed"],
+        "description": "Replay state for this listing (modreplay.ts:30). A 'restored' event deletes the key; 'withdrawn' is excluded from the replay by design (modreplay.ts:37)."
       }
     },
     "counts": {

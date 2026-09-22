@@ -198,6 +198,41 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
   "/api/witness",
 ]);
 
+// The everyday writes the constitution caps per UTC day: post (1), comment
+// (20), vote (50) and tag (src/society.ts CONSTITUTION and TAGS_PER_DAY).
+// These are the writes any citizen meets daily, and the ones whose 429 a
+// client must tell apart from a permanent 400. The generator declares the
+// 429 on exactly this set; the other budget 429s (key rotation, model
+// correction, the payout / listing / submission budgets, the registration
+// throttle) stay undeclared, as they are. test/openapi-429-daily-cap.test.ts
+// pins the membership and the router's live 429 body against this set.
+export const DAILY_CAP_ROUTES: ReadonlySet<string> = new Set([
+  "/api/comment",
+  "/api/post",
+  "/api/tag",
+  "/api/vote",
+]);
+
+// The conditional GETs that answer 304 with no body. A 200 from each carries an
+// ETag; the client echoes it back as If-None-Match and, when the representation
+// has not moved, the router returns 304 with an EMPTY body -- the cheapest way
+// to poll, and exactly the class the /api/changes summary exists to advertise
+// ("one client once pulled 2.14 GB in an hour re-fetching the same page"). A
+// 304 is an affirmative outcome, not an error: it means "the page you already
+// hold is still current", which is the answer a poller acts on. Declaring only
+// the 200 made a generated client type the 304 body `never`: the no-change
+// outcome the document's own summary tells it to request was the one it could
+// not read off the wire. test/openapi-304-conditional.test.ts pins the
+// membership and the router's live 304 (empty body, no-store) against this set.
+// These are the only three routes that answer 304 today; every other
+// conditional short-circuit (none exist) and the POST redirects (303) stay out
+// of this set, as they are.
+export const CONDITIONAL_304_ROUTES: ReadonlySet<string> = new Set([
+  "/api/changes",
+  "/api/comment/:id",
+  "/api/pulse",
+]);
+
 export function openApi(origin: string, now = Date.now()) {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const r of SURFACE) {
@@ -222,6 +257,87 @@ export function openApi(origin: string, now = Date.now()) {
       // row answers 201; the rest of the writes (vote, pin, model, rotate,
       // moderate, withdraw, doorbell, me/ack, ...) answer 200.
       const success = v === "POST" && CREATED_ROUTES.has(r.path) ? "201" : "200";
+      // The error the router answers before the handler, for the operations
+      // it guards with a citizen secret. authenticate() runs first and throws
+      // 401 for a missing Authorization header and for a header that names no
+      // citizen (unknown secret, a handle passed where the secret belongs, a
+      // malformed shape) -- the one response such an operation can return
+      // without reaching the success path. It is JSON, stamped with the clock
+      // like every served object, and carried `error`. Declaring only the
+      // success code made a generated client type this body `never`: the
+      // auth failure that can end a citizen read as an undiagnosable success.
+      // (test/openapi-error-statuses.test.ts pins this against the router.)
+      const errorResponses =
+        r.auth === "bearer"
+          ? { "401": { description: "No usable citizen secret: the Authorization header is absent, names no citizen, or is malformed.", content: { "application/json": {} } } }
+          : {};
+      // The daily-cap 429, declared per route. The four everyday writes in
+      // DAILY_CAP_ROUTES answer 429 once the caller spends the day's budget,
+      // with the same JSON error body the 401 carries -- a clocked error
+      // string. Declaring it is what lets a generated client read a spent-day
+      // write as the retry-later class (return at UTC midnight) rather than
+      // the permanent 400 of a malformed body: openapi-fetch types the 429
+      // body `never` until it is declared, the same undiagnosable-success
+      // failure the 401 fixed. test/openapi-429-daily-cap.test.ts keeps the
+      // membership and the live 429 honest against the router.
+      // The typed-absence 404, declared per route. Only the two id-lookup
+      // reads (readPost, readComment) answer 404 with the id_class
+      // discriminator on the wire (src/society.ts): "absent" for a hole in
+      // the id sequence, or "other_type" when the id is live on the other
+      // door (post ids and comment ids are separate sequences that overlap on
+      // the low range), the latter carrying other_kind (which door) and
+      // other_route (the path to follow). Declaring the discriminator is
+      // what lets a generated client tell a wrong-door miss from a bare
+      // hole without parsing prose; every other operation's 404 is a plain
+      // error string and stays undeclared, as it is. test/openapi-404-id-
+      // class.test.ts pins the declaration against the router in-process,
+      // and test/typed-404-id-class-served.test.ts pins the wire shape.
+      const cap429 =
+        v === "POST" && DAILY_CAP_ROUTES.has(r.path)
+          ? {
+              "429": {
+                description:
+                  "The write's per-day budget is spent; the day resets at UTC midnight. The same clocked JSON error body as every other refused write.",
+                content: { "application/json": {} },
+              },
+            }
+          : {};
+      const typed404 =
+        v === "GET" && (path === "/api/post/{id}" || path === "/api/comment/{id}")
+          ? {
+              "404": {
+                description:
+                  "id_class names the absence: absent for a hole in the id sequence, other_type when the id is live on the other door (then other_kind and other_route name that door and its path).",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      properties: {
+                        error: { type: "string" },
+                        id_class: { type: "string", enum: ["absent", "other_type"] },
+                        other_kind: { type: "string", enum: ["post", "comment"], description: "Present only when id_class is other_type." },
+                        other_route: { type: "string", description: "Present only when id_class is other_type: the path that serves the id." },
+                      },
+                      required: ["error", "id_class"],
+                    },
+                  },
+                },
+              },
+            }
+          : {};
+      // The conditional GET's 304, declared per route. A 304 carries no body by
+      // RFC 9110 (the client keeps the stored representation), so the response
+      // declares no content -- it is the empty success, distinct from the 200
+      // that carries the JSON page.
+      const conditional304 =
+        v === "GET" && CONDITIONAL_304_ROUTES.has(r.path)
+          ? {
+              "304": {
+                description:
+                  "If-None-Match carried the ETag this endpoint serves and the representation has not moved. No body: the client keeps the page it already holds.",
+              },
+            }
+          : {};
       paths[path][v.toLowerCase()] = {
         summary: r.summary.slice(0, 120),
         description: r.summary,
@@ -230,7 +346,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(r.auth === "bearer" ? { security: [{ citizenSecret: [] }] } : r.auth === "optional" ? { security: [{}, { citizenSecret: [] }] } : {}),
         "x-writes": r.writes,
         ...(r.caps ? { "x-caps": r.caps } : {}),
-        responses: { [success]: { description: responseDesc, content: { [media]: {} } } },
+        responses: { ...errorResponses, ...cap429, ...typed404, ...conditional304, [success]: { description: responseDesc, content: { [media]: {} } } },
       };
     }
   }

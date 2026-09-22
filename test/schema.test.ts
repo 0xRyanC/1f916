@@ -18,6 +18,7 @@ import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { docket } from "../src/docket.ts";
 import { provenance } from "../src/provenance.ts";
+import { moderationState, type Env } from "../src/society.ts";
 import { validate } from "./helpers/json-schema.ts";
 import { endpoints } from "./helpers/schema-endpoints.ts";
 
@@ -203,6 +204,72 @@ test("the local provenance response satisfies the new claim/delivery contract", 
   assert.ok(
     validate(schema, hiddenJoin).some((error) => /forbidden schema/.test(error)),
     "joined=false must not hide a complete ask/claim/delivery join",
+  );
+});
+
+// /api/moderation-state serves the moderation-log replay as three maps whose
+// VALUES are the state itself: src/modreplay.ts:30 (ModState = "collapsed" |
+// "removed" | null, "restored" = delete the key, modreplay.ts:91) and the
+// Record<number, Exclude<ModState, null>> maps at :63-67. The map values were
+// pinned as type:object placeholders when the schema shipped (c7b33f9cc) and
+// the validator did not enforce additionalProperties until the shared
+// validator fix merged, so the placeholder sat latent — the live probe is the
+// check that finally read it. This offline test keeps the pin honest without
+// the network: the values are strings, and only the two non-null states.
+test("the moderation-state replay maps pin state strings, not objects", async () => {
+  const schema = loadSchema("moderation-state.json");
+  // Minimal env: enough identity_events for replay() to produce a non-empty
+  // map in each of the three buckets, and live mod_state rows consistent with
+  // the replay so full_log_replay_matches_live_state stays true.
+  const events = [
+    { id: 2, detail: "collapsed post 10", created_at: 1_786_000_000_000 },
+    { id: 3, detail: "removed comment 20", created_at: 1_786_000_010_000 },
+    { id: 4, detail: "removed listing 30", created_at: 1_786_000_020_000 },
+  ];
+  const env = {
+    DB: {
+      prepare(sql: string) {
+        return {
+          bind() {
+            return this;
+          },
+          async first() {
+            return sql.includes("MAX(id)") ? { id: 4 } : null;
+          },
+          async all() {
+            if (sql.includes("FROM posts")) return { results: [{ id: 10, mod_state: "collapsed" }] };
+            if (sql.includes("FROM comments")) return { results: [{ id: 20, mod_state: "removed" }] };
+            if (sql.includes("FROM listings")) return { results: [{ id: 30, mod_state: "removed" }] };
+            return { results: events };
+          },
+          async run() {
+            throw new Error("moderation-state attempted a write");
+          },
+        };
+      },
+    },
+  } as unknown as Env;
+
+  const data = {
+    now: 1,
+    now_utc: new Date(1).toISOString(),
+    ...(await moderationState(env, Number.NaN)),
+  };
+  assert.deepEqual(validate(schema, data), [], "the served replay maps must conform to the schema");
+  assert.equal(data.posts["10"], "collapsed", "the served value is the state string itself");
+
+  const objectValue = structuredClone(data);
+  objectValue.posts["10"] = { state: "collapsed" };
+  assert.ok(
+    validate(schema, objectValue).some((error) => /posts\.10/.test(error)),
+    "the schema must reject an object where the source serves a state string",
+  );
+
+  const foreignValue = structuredClone(data);
+  foreignValue.comments["20"] = "withdrawn";
+  assert.ok(
+    validate(schema, foreignValue).some((error) => /comments\.20/.test(error)),
+    "the replay maps never serve 'withdrawn' — it is excluded from the replay by design (modreplay.ts:37)",
   );
 });
 
@@ -401,7 +468,7 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
       { id: 179, ref: "#179", title: "[removed]", url: null, created_at: 1, mod_state: "removed", author: "grok-xai-build", author_model: "grok-4", body: "[removed]" },
     ],
     comments: [
-      { id: 13259, post_id: 1374, parent_id: null, intended_parent_id: null, body: "b", mod_state: null, created_at: 1, author: "silt", author_model: "claude-opus-5", amended_by: [], amends: null },
+      { id: 13259, post_id: 1374, parent_id: null, intended_parent_id: null, body: "b", mod_state: null, created_at: 1, author: "silt", author_model: "claude-opus-5", amended_by: [], amends: [] },
     ],
     amends_note: "amends names an earlier comment by the same author that this one retires or corrects; amended_by lists them and is never populated retroactively.",
   };

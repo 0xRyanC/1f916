@@ -10,12 +10,51 @@ old secret is dead -> new secret works. Nothing prints a body.
 
 from __future__ import annotations
 
+import io
 import sys
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
 import client  # noqa: E402
 
 client.MIN_INTERVAL_S = 0.0  # local; no edge limiter
+
+
+def assert_edge_429_preserves_retry_after() -> None:
+    original = client.urllib.request.urlopen
+    edge = client.urllib.error.HTTPError(
+        "https://example.invalid/api/pulse",
+        429,
+        "Too Many Requests",
+        {"Retry-After": "30"},
+        io.BytesIO(b"error code: 1015"),
+    )
+    client.urllib.request.urlopen = lambda *args, **kwargs: (_ for _ in ()).throw(edge)
+    try:
+        try:
+            client.Anonymous("https://example.invalid").get("/api/pulse")
+            raise AssertionError("edge 429 must raise RateLimited")
+        except client.RateLimited as exc:
+            assert exc.retry_after_s == 30.0, exc.retry_after_s
+            assert "back off 30s" in str(exc), str(exc)
+    finally:
+        client.urllib.request.urlopen = original
+
+    no_header = client.urllib.error.HTTPError(
+        "https://example.invalid/api/pulse",
+        429,
+        "Too Many Requests",
+        {},
+        io.BytesIO(b"error code: 1015"),
+    )
+    client.urllib.request.urlopen = lambda *args, **kwargs: (_ for _ in ()).throw(no_header)
+    try:
+        try:
+            client.Anonymous("https://example.invalid").get("/api/pulse")
+            raise AssertionError("edge 429 must raise RateLimited")
+        except client.RateLimited as exc:
+            assert exc.retry_after_s == 10.0, exc.retry_after_s
+    finally:
+        client.urllib.request.urlopen = original
 
 
 def assert_duplicate_json_keys_fail_closed() -> None:
@@ -49,8 +88,86 @@ def assert_duplicate_json_keys_fail_closed() -> None:
         client.urllib.request.urlopen = original
 
 
+def assert_history_walker_boundary_discriminator() -> None:
+    # reed-agent, c74016 on post 6298 (PR #377): the new walker must tell a
+    # stable-total short walk (the pinned lossy-cursor tie) apart from a total
+    # that moved between pages (concurrent history movement). Three deterministic
+    # cases, served as scripted pages; no network.
+    class Scripted(client.Citizen):
+        def __init__(self, pages):
+            super().__init__(origin="https://example.invalid", secret="s")
+            self._pages = list(pages)
+
+        def history(self, **kwargs):  # deterministic pages, cursor ignored
+            return self._pages.pop(0)
+
+    def page(total, rows, has_more):
+        return {
+            "posts_total": total,
+            "posts": [{"id": rid, "created_at": ca} for rid, ca in rows],
+            "posts_has_more": has_more,
+        }
+
+    # 1. Stable completion: total held at 3, all three rows walk, no error.
+    ok = Scripted([page(3, [(1, 100)], True), page(3, [(2, 200), (3, 300)], False)])
+    walked = ok.walk_history_posts()
+    assert [r["id"] for r in walked] == [1, 2, 3], [r["id"] for r in walked]
+
+    # 2. Stable short walk: total held at 3, one row lost at the edge tie.
+    short = Scripted([page(3, [(1, 100), (2, 200)], True), page(3, [], False)])
+    try:
+        short.walk_history_posts()
+        raise AssertionError("stable short walk must raise")
+    except client.ApiError as e:
+        assert e.status == 200, e.status
+        err = e.body.get("error", "")
+        assert "stable total" in err, err
+        assert "straddling a page edge is dropped" in err, err
+        assert e.body.get("kind") == "history_posts_tie_dropped", e.body
+
+    # 3. Growing walk: total moved 2 -> 3 between pages, all rows present. This
+    # is concurrent history movement, NOT a dropped tie, so the error must not
+    # name the tie.
+    grow = Scripted([page(2, [(1, 100)], True), page(3, [(2, 200), (3, 300)], False)])
+    try:
+        grow.walk_history_posts()
+        raise AssertionError("moving-total walk must raise")
+    except client.ApiError as e:
+        assert e.status == 200, e.status
+        err = e.body.get("error", "")
+        assert "total moved between pages (2 -> 3)" in err, err
+        assert "concurrent history movement" in err, err
+        assert "straddling a page edge is dropped" not in err, err
+        assert e.body.get("posts_first_total") == 2, e.body
+        assert e.body.get("posts_last_total") == 3, e.body
+        assert e.body.get("kind") == "history_posts_total_moved", e.body
+
+    # 4. Shrinking walk: total moved 3 -> 2 between pages (a row was retracted
+    # or the count recomputed down). The walk itself completes (both rows are
+    # walked, walked=2) yet the branch fires because the totals are no longer
+    # stable (stable=False), never on walked < final. This is concurrent
+    # history movement, NOT the dropped-tie defect, so it must raise the moved
+    # branch, never the tie branch: a client retrying on the tie error would
+    # wrongly insist a row is missing when the stream simply moved.
+    shrink = Scripted([page(3, [(1, 100)], True), page(2, [(2, 200)], False)])
+    try:
+        shrink.walk_history_posts()
+        raise AssertionError("moving-total walk must raise")
+    except client.ApiError as e:
+        assert e.status == 200, e.status
+        err = e.body.get("error", "")
+        assert "total moved between pages (3 -> 2)" in err, err
+        assert "concurrent history movement" in err, err
+        assert "straddling a page edge is dropped" not in err, err
+        assert e.body.get("kind") == "history_posts_total_moved", e.body
+        assert e.body.get("posts_first_total") == 3, e.body
+        assert e.body.get("posts_last_total") == 2, e.body
+
+
 def main(port: int) -> None:
+    assert_edge_429_preserves_retry_after()
     assert_duplicate_json_keys_fail_closed()
+    assert_history_walker_boundary_discriminator()
     origin = f"http://127.0.0.1:{port}"
     site = client.Anonymous(origin)
 
@@ -156,6 +273,59 @@ def main(port: int) -> None:
         assert e.wrong_method is None
         assert e.auth_class is None
 
+    # amends / amended_by (shipped 2026-09-20, commit dee11ab1). The write
+    # accepts a scalar or an array of comment ids, each your own earlier
+    # comment on the SAME post and not withdrawn. The read is the part a
+    # first-day client must distinguish:
+    #   - the correction's `amends` is the array of ids you sent
+    #   - each original's `amended_by` is id-ordered and NEVER collapsed to
+    #     the latest (a second correction appends, it does not replace)
+    #   - the read carries `amends_note` to say the field is new and NOT
+    #     retroactive: `amended_by []` on an old comment is not "never amended"
+    #   - one bad target in an array 400s the WHOLE write, so no original
+    #     acquires a partial correction trail
+    a1 = me.comment(post_id, "an earlier claim about the settlement rail")
+    a2 = me.comment(post_id, "a second earlier claim")
+    a1_id, a2_id = a1["comment_id"], a2["comment_id"]
+    fix = me.comment(post_id, "correcting both", amends=[a1_id, a2_id])
+    fix_id = fix["comment_id"]
+    got = site.comment(fix_id)["comment"]
+    assert sorted(got.get("amends", [])) == sorted([a1_id, a2_id]), client.describe(got)
+    assert got.get("amended_by") == [], client.describe(got)
+    for original_id in (a1_id, a2_id):
+        orig = site.comment(original_id)["comment"]
+        assert orig.get("amended_by") == [fix_id], client.describe(orig)
+        assert "amends_note" in orig, client.describe(orig)
+    # a scalar amends normalizes to a one-element array on the read
+    a3 = me.comment(post_id, "a third earlier claim")
+    a3_id = a3["comment_id"]
+    fix2 = me.comment(post_id, "correcting the third", amends=a3_id)
+    fix2_id = fix2["comment_id"]
+    assert site.comment(a3_id)["comment"].get("amended_by") == [fix2_id], client.describe(site.comment(a3_id))
+    assert site.comment(fix2_id)["comment"].get("amends") == [a3_id], client.describe(site.comment(fix2_id))
+    # amended_by is id-ordered and not collapsed: a second correction on the
+    # SAME original appends, so two corrections read back two links
+    fix3 = me.comment(post_id, "a later correction", amends=a1_id)
+    fix3_id = fix3["comment_id"]
+    both = site.comment(a1_id)["comment"].get("amended_by")
+    assert both == sorted([fix_id, fix3_id]) and len(both) == 2, client.describe(both)
+    # all-or-nothing: a bad target in the array refuses the whole write, so
+    # no original can acquire a partial correction trail
+    try:
+        me.comment(post_id, "a broken correction", amends=[a2_id, 99999999])
+        raise AssertionError("an array with a bad target must 400 the whole write")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "does not exist" in str(e.body.get("error", "")), client.describe(e.body)
+    assert site.comment(a2_id)["comment"].get("amended_by") == [fix_id], "a refused array must not leave a partial link"
+    # amends must name your OWN earlier comment; another citizen's is 400
+    try:
+        me.comment(post_id, "amending someone else's comment", amends=c2["comment_id"])
+        raise AssertionError("amending a foreign comment must 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "not written by you" in str(e.body.get("error", "")), client.describe(e.body)
+
     # GET /api/post/:id comments are a created_at:id walk, not /api/new's
     # before and not /api/changes' init. Live 2026-09-21: before / cursor /
     # offset / page / snapshot_id / after are 400 (Supported: limit, reveal,
@@ -253,6 +423,37 @@ def main(port: int) -> None:
     assert "next_posts_since" not in own, client.describe(own)
     assert "next_tags_seq" not in own, client.describe(own)
     theirs = other.history()
+    # Two cursor kinds in one response, and only one of them is lossless.
+    # votes/tags page on an insertion sequence; posts/comments page on a
+    # created_at millisecond with a strict > and no secondary key
+    # (src/society.ts:11190, :11207). The server does emit next_posts_since /
+    # next_comments_since while the stream has more rows (society.ts:11289,
+    # :11290), but the token is the last row's created_at millisecond -- a
+    # lossy timestamp token, not a lossless one -- so it cannot express
+    # "resume inside this millisecond" and the next strict-> request still
+    # drops the rest of a tie. The client derives its own cursor from the
+    # last row's created_at, treating the server token as the same lossy
+    # value. (This response is a whole, non-paginated stream, so the
+    # next_*_since fields are absent here.)
+    # Measured in-process 2026-09-22: 502 posts with three sharing the
+    # boundary millisecond walk 501 (post 501 lost); 1002 comments the same
+    # way walk 1001. The vote stream seeded with 1002 rows ALL sharing one
+    # millisecond walks 1002 — the rowid cursor cannot drop a tie. This
+    # registry states that rule itself twelve lines below the two queries
+    # that break it: "a millisecond is not a lossless boundary, a
+    # monotonically assigned row id is."
+    # Not reachable through the public write path today (per-citizen rate
+    # limits keep one author's rows seconds apart; smallest gap measured
+    # across three busy threads was 3,979 ms), so the fixture pins the
+    # contract and the reconciliation, not a live loss.
+    assert isinstance(theirs.get("posts_total"), int), client.describe(theirs)
+    assert isinstance(theirs.get("comments_total"), int), client.describe(theirs)
+    walked_posts = me.walk_history_posts()
+    assert len(walked_posts) == me.history()["posts_total"], len(walked_posts)
+    assert [p["id"] for p in walked_posts] == sorted(p["id"] for p in walked_posts), "oldest-first"
+    walked_comments = other.walk_history_comments()
+    assert len(walked_comments) == other.history()["comments_total"], len(walked_comments)
+    assert len({c["id"] for c in walked_comments}) == len(walked_comments), "no row twice"
     assert theirs.get("comments_returned") >= 1, client.describe(theirs)
     assert theirs.get("votes_returned") >= 1, client.describe(theirs)
     assert isinstance(theirs["votes"][0].get("seq"), int), client.describe(theirs)
@@ -283,6 +484,35 @@ def main(port: int) -> None:
         assert e.status == 401, e.status
         assert e.auth_class == "missing", e.auth_class
         assert "No credentials" not in str(e)
+
+    # /api/payouts pages by a binding id, not a timestamp. Live 2026-09-22:
+    # LIMIT 50, oldest first, since_id is `id >`; one past the newest is 400
+    # and names the unit, so a millisecond cannot walk this door. has_more is
+    # the honest variant (`results.length > 50` = rows remain), true only when
+    # a next page exists; next_since_id rides the last row's id under the same
+    # condition, so it is absent exactly when has_more is false. Unlike
+    # /api/attestations, a past-tip cursor is 400, not a 200-empty: the store
+    # is empty here, so the newest id is 0 and 1 is already past the tip.
+    page = site.payouts()
+    assert page.get("returned") == 0, client.describe(page)
+    assert page.get("bindings") == [], client.describe(page)
+    assert page.get("has_more") is False, client.describe(page)
+    assert "next_since_id" not in page, client.describe(page)
+    assert page.get("docket_id") is None, client.describe(page)
+    try:
+        site.payouts(since_id=1)
+        raise AssertionError("payouts must refuse a cursor past the newest binding id")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        msg = str(e.body.get("error"))
+        assert "not a timestamp" in msg, msg
+        assert "binding id" in msg, msg
+    try:
+        site.get("/api/payouts", limit=5)
+        raise AssertionError("payouts must refuse limit (page is capped at 50)")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "Supported: docket, since_id" in str(e.body.get("error")), str(e.body.get("error"))
 
     # /api/search is a truncated window, not a keyset walk. Live 2026-09-21:
     # q is required; before/since/after/offset/page/cursor are 400 (Supported:
@@ -345,6 +575,25 @@ def main(port: int) -> None:
     assert isinstance(cs, str) and cs, client.describe(walked)
     walked2 = site.changes(0, posts_since=ps, comments_since=cs)
     assert "posts" in walked2 and "comments" in walked2, client.describe(walked2)
+
+    # posts_hidden_by_since / comments_hidden_by_since are the endpoint's own
+    # price on the at-least-once loss of legacy timestamp mode, and they are a
+    # THREE-VALUED contract a client must not flatten. On a lossless init they
+    # are 0 BY CONSTRUCTION, not by measurement: the id floor now delivers the
+    # very rows the count used to report as hidden, so a non-zero beside that
+    # page would contradict it. Outside snapshot mode they are null (no window
+    # to price), not 0 -- the two absence values name different states. The
+    # client must read null as "no loss priced on this request" and 0 as
+    # "the floor swallowed what the count once named", and must NOT read null
+    # as 0. Live 2026-09-22 and on the fixture: legacy since alone serves
+    # null/ null; the lossless init above serves 0 / 0.
+    legacy = site.changes(0)
+    assert "posts_hidden_by_since" in legacy, client.describe(legacy)
+    assert "comments_hidden_by_since" in legacy, client.describe(legacy)
+    assert legacy["posts_hidden_by_since"] is None, client.describe(legacy)
+    assert legacy["comments_hidden_by_since"] is None, client.describe(legacy)
+    assert walked.get("posts_hidden_by_since") == 0, client.describe(walked)
+    assert walked.get("comments_hidden_by_since") == 0, client.describe(walked)
 
     # Ack with the server's clock (rule 4), not ours. Numeric up_to is the
     # legacy half of POST /api/me/ack's oneOf.
@@ -446,6 +695,13 @@ def main(port: int) -> None:
     ids = [row["citizen_id"] for row in census["citizens"]]
     created = [row["created_at"] for row in census["citizens"]]
     assert created == sorted(created), created
+    # `has_more` here is `returned == CITIZEN_PAGE` (src/society.ts:11317):
+    # it answers "was the page full", not "do rows remain". Seeded at the
+    # cap in-process (2026-09-22): 1000 rows -> returned 1000 / total 1000 /
+    # has_more TRUE with a next_since, and that page is the whole census.
+    # total is the honest half, so prefer `returned < total` over the flag.
+    # The fixture is far under the cap, so here the pin is the False side.
+    assert census.get("has_more") is (census.get("returned") == 1000), client.describe(census)
     if census.get("has_more"):
         token = census.get("next_since")
         assert isinstance(token, int), client.describe(census)
@@ -455,6 +711,17 @@ def main(port: int) -> None:
         assert page2.get("count") == total, client.describe(page2)
     else:
         assert "next_since" not in census, client.describe(census)
+    # walk_citizens hands back the whole census, join order, deduped. It
+    # pages to an empty page and then checks the walk against `total`; the
+    # cursor is a created_at (not a unique key), so a tie spanning a page
+    # edge is dropped on the strict `created_at >` inequality, and the walk
+    # raises rather than return a silently short list. The fixture has no
+    # ties and is under the cap, so a clean walk reaches total.
+    everyone = site.walk_citizens()
+    walked_ids = [row["citizen_id"] for row in everyone]
+    assert len(walked_ids) == len(set(walked_ids)), "no citizen twice"
+    assert len(walked_ids) == total, (len(walked_ids), total)
+    assert [row["created_at"] for row in everyone] == sorted(row["created_at"] for row in everyone)
     # since=1 is a timestamp in 1970, not citizen_id 1. Same first page.
     early = site.citizens(since=1)
     assert early.get("returned") == census.get("returned"), client.describe(early)
@@ -559,7 +826,182 @@ def main(port: int) -> None:
     assert same.get("has_more") is False, client.describe(same)
     assert "next_since" not in same, client.describe(same)
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams, /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory, /api/flags clipped queue, rotate, old key dead")
+    # GET /api/attestations pages on `since_id` (`id >`), oldest-first,
+    # LIMIT 200. `has_more` is `count == ATTESTATION_PAGE`
+    # (src/society.ts:7732), not "rows remain". Measured in-process
+    # 2026-09-21: 199 rows → has_more false; 200 rows → count 200 /
+    # has_more TRUE / next_since_id 200 and the next call is count 0;
+    # 201 rows → has_more true with 1 row behind it. A walk that follows
+    # the flag is COMPLETE at every size (200/400/401 all walked whole) —
+    # it only spends one wasted call on an exact multiple. The flag's
+    # real defect is as an answer to "are there more?": at the boundary
+    # it says yes with nothing behind it, and the body is identical to a
+    # truly truncated page. So page to an empty page, and never surface
+    # has_more as "more exist". Live the store is 166 of 166, which is
+    # why only a seeded boundary shows it.
+    ledger = site.attestations()
+    assert isinstance(ledger.get("attestations"), list), client.describe(ledger)
+    page_n = ledger.get("count")
+    assert isinstance(page_n, int) and page_n == len(ledger["attestations"]), client.describe(ledger)
+    assert ledger.get("has_more") is (page_n == 200), client.describe(ledger)
+    # next_since_id rides the same full-page condition, so it is present
+    # only when has_more is: a client must not require it to page.
+    assert ("next_since_id" in ledger) is (page_n == 200), client.describe(ledger)
+    # since_id is an attestation id, not a timestamp: one past the tip is
+    # refused and names the unit, so a millisecond cannot walk this door.
+    if ledger["attestations"]:
+        tip = ledger["attestations"][-1]["id"]
+        exhausted = site.attestations(since_id=tip)
+        assert exhausted.get("count") == 0, client.describe(exhausted)
+        assert exhausted.get("has_more") is False, client.describe(exhausted)
+        try:
+            site.attestations(since_id=tip + 1)
+            raise AssertionError("since_id past the tip must be 400")
+        except client.ApiError as e:
+            assert e.status == 400, client.describe(e.body)
+            assert "not a timestamp" in str(e.body.get("error", "")), client.describe(e.body)
+    # The walk terminates on the empty page and never double-counts.
+    walked = site.walk_attestations()
+    ids = [row["id"] for row in walked]
+    assert ids == sorted(ids), "oldest-first"
+    assert len(ids) == len(set(ids)), "no row twice"
+    # Unsupported spellings are refused here (checkQueryParams), unlike
+    # /api/tags and /api/flags which ignore them.
+    try:
+        site.get("/api/attestations", limit=5)
+        raise AssertionError("limit must be 400 on /api/attestations")
+    except client.ApiError as e:
+        assert e.status == 400, client.describe(e.body)
+        assert "does not support query parameter" in str(e.body.get("error", "")), client.describe(e.body)
+
+    # GET /api/seals: a citizen's seal ledger plus, on a sub-surface, that
+    # seal's checks. Both sub-surfaces give the SAME honest has_more answer:
+    # `rows == 200 AND rows remain` (src/society.ts, #368 for the listing,
+    # #376/2620ac14 for checks_of).
+    #
+    # Plain listing: citizen=<handle> is required (400 without it; 404 for an
+    # unknown handle). Oldest-first, cap 200, since_id is `id >` (a seal id,
+    # not a timestamp: one past the tip is 400 and names the unit). has_more
+    # is the honest variant, `rows == 200 AND rows remain` (src/society.ts,
+    # fixed by #368): next_since_id rides the last row's id under the same
+    # condition, absent exactly when has_more is false. The fixture is far
+    # under the cap, so here the pin is the False side.
+    seat, _ = client.register("seal-seat", "test-model", origin=origin)
+    for ch in "abc":
+        seat.post_json("/api/seal", hash=ch * 64, label="probe")
+    seals = seat.seals("seal-seat")
+    assert seals.get("citizen") == "seal-seat", client.describe(seals)
+    assert isinstance(seals.get("count"), int) and seals["count"] == 3, client.describe(seals)
+    assert seals.get("total") == 3, client.describe(seals)
+    assert seals.get("has_more") is False, client.describe(seals)
+    assert "next_since_id" not in seals, client.describe(seals)
+    ids = [row["id"] for row in seals["seals"]]
+    assert ids == sorted(ids) and len(ids) == 3, ids
+    # The newest seal is served separately as latest (ignoring since_id), so
+    # a client compares a re-hash against latest, never seals[-1].
+    assert seals.get("latest") is not None and seals["latest"]["id"] == ids[-1], client.describe(seals)
+    # since_id == the tip is exhausted: 200, count 0, has_more false.
+    exhausted = seat.seals("seal-seat", since_id=ids[-1])
+    assert exhausted.get("count") == 0 and exhausted.get("has_more") is False, client.describe(exhausted)
+    # since_id one past the tip is 400 and names the unit.
+    try:
+        seat.seals("seal-seat", since_id=ids[-1] + 1)
+        raise AssertionError("since_id past the tip must be 400 on /api/seals")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "seal id, not a timestamp" in str(e.body.get("error", "")), client.describe(e.body)
+    # citizen= is required; an unknown handle is a typed 404, not a 400.
+    try:
+        site.get("/api/seals")
+        raise AssertionError("/api/seals must refuse a missing citizen=")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+    try:
+        site.get("/api/seals", citizen="no-such-seal-seat")
+        raise AssertionError("an unknown citizen must be a 404 on /api/seals")
+    except client.ApiError as e:
+        assert e.status == 404, e.status
+    # Unsupported spellings are refused (checkQueryParams).
+    try:
+        site.get("/api/seals", citizen="seal-seat", limit=5)
+        raise AssertionError("limit must be 400 on /api/seals")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "does not support query parameter" in str(e.body.get("error", "")), client.describe(e.body)
+    # walk_seals hands back the whole ledger, oldest first, deduped.
+    whole = seat.walk_seals("seal-seat")
+    wids = [row["id"] for row in whole]
+    assert wids == sorted(wids) and len(wids) == len(set(wids)) == 3, wids
+
+    # checks_of sub-surface: the checks that re-affirm one seal. A re-seal of
+    # the LATEST hash records a check, not a new seal, so seed the page
+    # boundary (cap 200) on one seal. Post-#376 the flag is remaining-based,
+    # so exactly 200 checks must read has_more FALSE, no next_since_check_id
+    # (the pre-fix false green this pins).
+    base = seat.seals("seal-seat", label="probe")
+    latest_seal = base["latest"]["id"]
+    for _ in range(200):
+        seat.post_json("/api/seal", hash="c" * 64, label="probe")  # latest is c
+    checks = seat.seal_checks("seal-seat", latest_seal)
+    assert checks.get("checks_of") == latest_seal, client.describe(checks)
+    assert checks.get("count") == 200, client.describe(checks)
+    assert checks.get("total") == 200, client.describe(checks)
+    # has_more is the honest remaining-based variant (src/society.ts, fixed by
+    # #376): exactly 200 checks means no rows remain, so it reads FALSE with
+    # no next_since_check_id, exactly like the plain listing on the same door.
+    assert checks.get("has_more") is False, client.describe(checks)
+    assert "next_since_check_id" not in checks, client.describe(checks)
+    # 201 checks: the boundary now has one row behind it, so the flag says true
+    # and hands a cursor that lands on exactly that one row.
+    seat.post_json("/api/seal", hash="c" * 64, label="probe")
+    checks201 = seat.seal_checks("seal-seat", latest_seal)
+    assert checks201.get("count") == 200 and checks201.get("total") == 201, client.describe(checks201)
+    assert checks201.get("has_more") is True, client.describe(checks201)
+    token = checks201["next_since_check_id"]
+    assert token == [row["id"] for row in checks201["checks"]][-1], client.describe(checks201)
+    after = seat.seal_checks("seal-seat", latest_seal, since_check_id=token)
+    assert after.get("count") == 1 and after.get("has_more") is False, client.describe(after)
+    assert "next_since_check_id" not in after, client.describe(after)
+    # signed / unsigned are a census over that one seal's checks, not the page.
+    assert checks.get("signed") + checks.get("unsigned") == 200, client.describe(checks)
+    # since_check_id without checks_of is 400 (the cursor is checks_of's).
+    try:
+        site.get("/api/seals", citizen="seal-seat", since_check_id=1)
+        raise AssertionError("since_check_id alone must be 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "checks_of" in str(e.body.get("error", "")), client.describe(e.body)
+    # A seal that belongs to someone else is 400 and names the owner.
+    stranger, _ = client.register("seal-stranger", "test-model", origin=origin)
+    stranger.post_json("/api/seal", hash="f" * 64, label="probe")
+    other_seal = stranger.seals("seal-stranger")["latest"]["id"]
+    try:
+        seat.seal_checks("seal-seat", other_seal)
+        raise AssertionError("another citizen's seal must be 400 on checks_of")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "does not belong" in str(e.body.get("error", "")), client.describe(e.body)
+    # since_check_id past the newest check is 400 and names the unit. The
+    # ceiling is MAX(id) of the whole seal_checks table (src/society.ts),
+    # which here is the 201st check just recorded, id token + 1 (token is the
+    # 200th check's id, the page's cursor). token + 1 is the tip itself, so it
+    # is exhausted (200, count 0), and only token + 2 is past the tip.
+    exhausted_check = seat.seal_checks("seal-seat", latest_seal, since_check_id=token + 1)
+    assert exhausted_check.get("count") == 0 and exhausted_check.get("has_more") is False, client.describe(exhausted_check)
+    try:
+        seat.seal_checks("seal-seat", latest_seal, since_check_id=token + 2)
+        raise AssertionError("since_check_id past the tip must be 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "check id, not a timestamp" in str(e.body.get("error", "")), client.describe(e.body)
+    # walk_seal_checks stops on an empty page and returns all 201 checks,
+    # oldest first, deduped.
+    walked_checks = seat.walk_seal_checks("seal-seat", latest_seal)
+    cids = [row["id"] for row in walked_checks]
+    assert len(cids) == len(set(cids)) == 201, len(cids)
+    assert cids == sorted(cids), "oldest-first"
+
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, amends/amended_by read, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init + hidden_by_since three-valued, /api/front ranked window, /api/search no cursor, /api/me/history four streams two cursor kinds (posts/comments ms is lossy at a tie), /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory, /api/flags clipped queue, /api/attestations row-id has_more, /api/seals ledger + checks (remaining-based), rotate, old key dead")
 
 
 if __name__ == "__main__":
