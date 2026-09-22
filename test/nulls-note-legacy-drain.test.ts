@@ -201,10 +201,22 @@ test("copy: the published census rule names BOTH arms, on the wire and in the ro
     .filter((s) => /legacy|LEGACY/.test(s))
     .join(" ");
   assert.ok(legacyClause.length > 0, "the note still names the legacy arm at all");
+  // The legacy census is PIECEWISE across two sub-cohorts, and a note that names
+  // only one is false for the other — that is the exact defect this file was
+  // amended for (the deploy auditor's live measurement: an OLDER nulls block
+  // that drives next_since drains 400->200, unre-served, so an unconditional
+  // "does not move" is false; the fix's own fixture is the newer-block cohort
+  // where it stays put). BOTH must be named, or the note has replaced one
+  // over-general claim with its mirror.
   assert.match(
     legacyClause,
-    /unchanged|does not move|does not drain|no legacy walk need pay/,
-    `the sentence naming the legacy arm must say what the census does there; it reads: ${JSON.stringify(legacyClause)}`,
+    /unchanged|does not move|stay(?:s)? (?:the same|constant)/,
+    `the legacy arm must name the STATIC sub-cohort (census held while another stream advances next_since); it reads: ${JSON.stringify(legacyClause)}`,
+  );
+  assert.match(
+    legacyClause,
+    /fall|drain|leave the window|advances past|consumed|unre-served/,
+    `the legacy arm must ALSO name the DRAINING sub-cohort (census falls once next_since crosses the nulls block); it reads: ${JSON.stringify(legacyClause)}`,
   );
 
   // The route catalogue is the other served copy and is read before any content.
@@ -217,5 +229,82 @@ test("copy: the published census rule names BOTH arms, on the wire and in the ro
     capClauses,
     /next_nulls_since until it matches nulls_total/,
     "the catalogue must not promise a walk that terminates only under the id cursor",
+  );
+  // The catalogue must not claim the legacy census is statically inert either:
+  // it can stay constant OR drain depending on which leg advances next_since, so
+  // the safe served instruction is to page next_since to has_more=false.
+  assert.doesNotMatch(
+    capClauses,
+    /the census does not move/,
+    "the catalogue must not promise the legacy census is unconditionally static",
+  );
+  assert.match(
+    capClauses,
+    /has_more is false|follow next_since|until has_more/,
+    `the catalogue must give the robust legacy instruction (page next_since to has_more=false); it reads: ${JSON.stringify(capClauses)}`,
+  );
+});
+
+// The SECOND legacy sub-cohort, added after the deploy auditor measured it: an
+// OLDER nulls block that is itself the leg advancing next_since. Here the census
+// is NOT static — next_since crosses the block, its rows leave the window and
+// are not re-served, and nulls_total falls. This is the case an unconditional
+// "the census does not move" got wrong. Pinning it keeps the note from swinging
+// back to a one-sided claim in either direction: cohort A forbids "always
+// drains", this forbids "never moves".
+//
+// Killing mutation (behavioural), applied ALONE to a scratch copy: force the
+// window-leg census to ignore `since` (e.g. `countNullsAfter(env, 0)`), so it
+// reports the whole table on every page -> "the legacy census must fall once
+// next_since crosses the block" goes red. A mutation that froze the census the
+// other way (return page-1's number forever) is killed by this test's drain
+// assertion, while cohort A kills a mutation that always drains.
+async function legacyDrainFixture(db: DatabaseSync) {
+  const insNull = db.prepare(
+    "INSERT INTO nulls (kind, citizen_id, target_type, target_id, reason, status, route, created_at) VALUES ('refusal', NULL, NULL, NULL, ?, 400, 'POST /api/test', ?)",
+  );
+  const now = Date.now();
+  const since = now - 60 * 60 * 1000;
+  // One row below the window first (keeps the counted branch, as above), then a
+  // block of 400 nulls just ABOVE `since` — old enough that the nulls leg, not
+  // posts, is the minimum of legacyAdvance, so next_since crosses into it.
+  insNull.run("refusal before the window", since - 60_000);
+  for (let i = 0; i < 400; i++) insNull.run(`refusal ${i}`, since + 1000 + i * 1000);
+  // A few posts NEWER than the whole nulls block, so posts never hold next_since
+  // back below the nulls: the nulls block drives the legacy cursor.
+  const insPost = db.prepare(
+    "INSERT INTO posts (citizen_id, title, body, dupe_hash, created_at) VALUES (1, ?, ?, ?, ?)",
+  );
+  for (let i = 0; i < 3; i++) insPost.run(`new post ${i}`, "b", `new${i}`, now - 500 + i);
+  return since;
+}
+
+test("mechanism: a legacy walk that advances next_since INTO the nulls block drains the census and consumes rows", async () => {
+  const { db, env } = fresh();
+  await register(env, "walker");
+  const since = await legacyDrainFixture(db);
+
+  const p1 = await page(env, `since=${since}`);
+  assert.equal(p1.nulls.length, 200, "control: the block pages at the cap");
+  const total1 = p1.nulls_total as number;
+  assert.ok(total1 >= 400, `control: the census covers the whole block, got ${total1}`);
+  assert.equal(p1.has_more, true, "control: more remains after page 1");
+
+  // Follow ONLY next_since, exactly as a legacy walker does. Here next_since is
+  // driven by the nulls block (no newer stream holds it back), so it crosses
+  // into the block.
+  const p2 = await page(env, `since=${p1.next_since}`);
+  assert.ok(p2.next_since > p1.next_since, "control: the legacy cursor advanced");
+
+  // The rows are CONSUMED, not re-served: page 2 opens above page 1's rows.
+  assert.notDeepEqual(
+    p2.nulls.map((r) => r.id),
+    p1.nulls.map((r) => r.id),
+    "a legacy walk that advances into the block must not re-serve the same rows",
+  );
+  // And the census FALLS — the behaviour an unconditional "does not move" denied.
+  assert.ok(
+    (p2.nulls_total as number) < total1,
+    `the legacy census must fall once next_since crosses the block, got ${p2.nulls_total} against ${total1}`,
   );
 });
