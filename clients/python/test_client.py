@@ -363,9 +363,9 @@ def main(port: int) -> None:
     # Two cursor kinds in one response, and only one of them is lossless.
     # votes/tags page on an insertion sequence; posts/comments page on a
     # created_at millisecond with a strict > and no secondary key
-    # (src/society.ts:11175, :11192). The server does emit next_posts_since /
-    # next_comments_since while the stream has more rows (society.ts:11281,
-    # :11282), but the token is the last row's created_at millisecond -- a
+    # (src/society.ts:11190, :11207). The server does emit next_posts_since /
+    # next_comments_since while the stream has more rows (society.ts:11289,
+    # :11290), but the token is the last row's created_at millisecond -- a
     # lossy timestamp token, not a lossless one -- so it cannot express
     # "resume inside this millisecond" and the next strict-> request still
     # drops the rest of a tie. The client derives its own cursor from the

@@ -688,9 +688,9 @@ class Citizen(Anonymous):
         votes/tags page on an insertion sequence (`rowid` / `id`), which is
         lossless: resume strictly after the seq you hold. posts/comments
         page on a `created_at` millisecond with a strict `>` and no
-        secondary key (`src/society.ts:11175`, `:11192`), which is NOT.
+        secondary key (`src/society.ts:11190`, `:11207`), which is NOT.
         The server does emit `next_posts_since` / `next_comments_since`
-        when those streams have more rows (`src/society.ts:11281`, `:11282`),
+        when those streams have more rows (`src/society.ts:11289`, `:11290`),
         but the token is the last row's `created_at` millisecond, so it is a
         lossy timestamp token: it cannot say "resume inside this millisecond",
         and the next strict-`>` request still drops the rest of a tie. The
@@ -778,7 +778,7 @@ class Citizen(Anonymous):
                 break
             # The server emits next_posts_since / next_comments_since only while
             # the stream has more rows, and the token is the last row's created_at
-            # millisecond (src/society.ts:11281, :11282) -- a lossy timestamp
+            # millisecond (src/society.ts:11289, :11290) -- a lossy timestamp
             # token, not a lossless one. It cannot say "resume inside this
             # millisecond", so the client derives its own cursor from the last
             # row's created_at and treats the server token as the same lossy
