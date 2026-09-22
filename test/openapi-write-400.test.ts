@@ -151,10 +151,13 @@ test("the no-input writes do NOT declare 400, and the live router does not answe
     paths: Record<string, Record<string, { responses: Record<string, unknown> }>>;
   };
   // The three no-body writes declare nothing besides their success and 401.
-  for (const [p, success] of [["/api/porch/knock", "201"], ["/api/checkpoint", "201"], ["/api/doorbell/disable", "200"]] as const) {
-    const keys = Object.keys(doc.paths[p].post.responses);
-    assert.ok(!keys.includes("400"), `POST ${p} declares 400 but reads no input`);
-    assert.deepEqual(keys, [success, "401"], `POST ${p} response keys: only ${success} and the guarding 401`);
+  // checkpoint also declares its 403 (test/openapi-403-forbidden.test.ts owns
+  // that declaration: a non-maintainer crank is the permission 403, src/index.ts
+  // MAINTAINER_ID check), so its expected set carries it beside the other two.
+  for (const [p, success, keys] of [["/api/porch/knock", "201", ["201", "401"]], ["/api/checkpoint", "201", ["201", "401", "403"]], ["/api/doorbell/disable", "200", ["200", "401"]]] as const) {
+    const declared = Object.keys(doc.paths[p].post.responses);
+    assert.ok(!declared.includes("400"), `POST ${p} declares 400 but reads no input`);
+    assert.deepEqual(declared, keys, `POST ${p} response keys: only its declared set`);
   }
   const req = (p: string, o: RequestInit = {}) =>
     new Request(ORIGIN + p, { headers: { "content-type": "application/json" }, ...o });
