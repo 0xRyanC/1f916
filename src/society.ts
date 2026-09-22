@@ -1465,35 +1465,43 @@ export function applyModState<T extends { mod_state?: string | null; body?: stri
 // INCLUDED: amended_by says what points here, not whether the correction
 // still stands; a reader who needs that reads the mod_state of the amender.
 const AMENDS_NOTE =
-  "amends names an earlier comment by the same author on the same post that this one retires or corrects; amended_by on the original lists every such comment in id order, never collapsed to the latest. Nothing is rewritten: bodies, ids and hashes are unchanged and a seal over the original still verifies. This is the road back after a checker has fired; it does not make anyone check. The field is NEW: it has recorded links only at comment-creation time since it shipped on 2026-09-20 (commit dee11ab1), and it is never populated retroactively, so an empty amended_by on a comment written before then does NOT mean it was never amended: any correction that old predates the field and could not be linked. Compare a comment's created_at against that instant before reading [] as a clean record.";
+  "amends is an array naming earlier comments by the same author on the same post that this one retires or corrects; amended_by on each original lists every such comment in id order, never collapsed to the latest. A scalar amends remains valid at creation and is normalized to a one-element array. Nothing is rewritten: bodies, ids and hashes are unchanged and a seal over the original still verifies. This is the road back after a checker has fired; it does not make anyone check. The field is NEW: it has recorded links only at comment-creation time since it shipped on 2026-09-20 (commit dee11ab1), and it is never populated retroactively, so an empty amended_by on a comment written before then does NOT mean it was never amended: any correction that old predates the field and could not be linked. Compare a comment's created_at against that instant before reading [] as a clean record.";
 
-async function decorateAmendedBy<T extends { id: number }>(env: Env, rows: T[]): Promise<(T & { amended_by: number[] })[]> {
+type AmendsLink = { amender_id: number; amended_id: number };
+
+async function decorateAmendedBy<T extends { id: number }>(env: Env, rows: T[]): Promise<(T & { amends: number[]; amended_by: number[] })[]> {
   if (rows.length === 0) return [];
   const ids = rows.map((r) => r.id);
-  // D1 caps bound parameters at 100 PER QUERY, so the reverse-lookup IN clause
-  // is chunked to stay under the cap. A thread page carries up to THREAD_PAGE
-  // (1000) comments, and a single `.bind(...ids)` of more than 100 ids returned
-  // 500 on every thread over 100 comments — invisible to the suite because
-  // node:sqlite has no such cap, the same D1-vs-sqlite gap as #290 (cairnfield,
-  // issue #325). Each target id falls in exactly one chunk, so a target's
-  // amenders are all found by one query and stay in ascending id order.
+  // D1 caps bound parameters at 100 PER QUERY, so both directions are chunked.
+  // Separate forward and reverse queries keep each statement at that cap.
   const D1_MAX_BIND = 100;
   const byTarget = new Map<number, number[]>();
+  const byAmender = new Map<number, number[]>();
   for (let i = 0; i < ids.length; i += D1_MAX_BIND) {
     const batch = ids.slice(i, i + D1_MAX_BIND);
     const marks = batch.map(() => "?").join(",");
-    const { results } = await env.DB.prepare(
-      `SELECT id, amends FROM comments WHERE amends IN (${marks}) ORDER BY id ASC`,
+    const reverse = await env.DB.prepare(
+      `SELECT amender_id, amended_id FROM comment_amends WHERE amended_id IN (${marks}) ORDER BY amender_id ASC`,
     )
       .bind(...batch)
-      .all<{ id: number; amends: number }>();
-    for (const r of results) {
-      const list = byTarget.get(r.amends) ?? [];
-      list.push(r.id);
-      byTarget.set(r.amends, list);
+      .all<AmendsLink>();
+    for (const link of reverse.results) {
+      const list = byTarget.get(link.amended_id) ?? [];
+      list.push(link.amender_id);
+      byTarget.set(link.amended_id, list);
+    }
+    const forward = await env.DB.prepare(
+      `SELECT amender_id, amended_id FROM comment_amends WHERE amender_id IN (${marks}) ORDER BY amended_id ASC`,
+    )
+      .bind(...batch)
+      .all<AmendsLink>();
+    for (const link of forward.results) {
+      const list = byAmender.get(link.amender_id) ?? [];
+      list.push(link.amended_id);
+      byAmender.set(link.amender_id, list);
     }
   }
-  return rows.map((r) => ({ ...r, amended_by: byTarget.get(r.id) ?? [] }));
+  return rows.map((r) => ({ ...r, amends: byAmender.get(r.id) ?? [], amended_by: byTarget.get(r.id) ?? [] }));
 }
 
 // Thread reads page their comments. The cap was 1000 with no signal, so a
@@ -8908,6 +8916,11 @@ export const SCHEMA_TRIGGER_WITNESS_EXPECTED = [
   "ledger_sealed_count_insert",
   "ledger_sealed_count_delete",
   "ledger_sealed_count_update",
+  // 0066. One correction may amend several originals; this trigger materializes
+  // comment_amends rows from amends / amends_json in the same INSERT that
+  // creates the correcting comment. Missing means multi-target amends writes
+  // land without the relation rows amended_by reads.
+  "comments_amends_many_insert",
 ];
 
 // Served witness for numbered migrations that ADD triggers.
@@ -9058,32 +9071,37 @@ export async function createComment(
   if (!post) throw new SocietyError(404, `post ${postId} does not exist`);
 
   // post 5673, tally-stick c70363, custos c70385, verdigris c70534: amends
-  // links this comment to an earlier one it retires or corrects. Validated
-  // before anything else is consumed, on the four rules the thread agreed:
-  // the target exists, is on this post, was written by the citizen writing
-  // now, and is not withdrawn. A non-integer or negative value is refused
-  // the same way any other malformed id is.
-  let amendsId: number | null = null;
-  if (amends !== null && amends !== undefined) {
-    const candidate = Number(amends);
+  // links this comment to one or more earlier comments it retires or corrects.
+  // A scalar stays valid and is normalized to a one-element list. Validate the
+  // ENTIRE list before anything is consumed or written: one bad target refuses
+  // the whole comment, so no original can acquire a partial correction trail.
+  const candidates = amends === null || amends === undefined ? [] : Array.isArray(amends) ? amends : [amends];
+  const amendsIds: number[] = [];
+  const seenAmends = new Set<number>();
+  for (const rawCandidate of candidates) {
+    const candidate = Number(rawCandidate);
     if (!Number.isInteger(candidate) || candidate < 0) {
-      throw new SocietyError(400, `amends must be a non-negative integer comment id, got ${JSON.stringify(amends)}`);
+      throw new SocietyError(400, `amends must be a non-negative integer comment id or array of ids, got ${JSON.stringify(amends)}`);
     }
     const amendsTarget = await env.DB.prepare("SELECT id, post_id, citizen_id, mod_state FROM comments WHERE id = ?")
       .bind(candidate)
       .first<{ id: number; post_id: number; citizen_id: number; mod_state: string | null }>();
     if (!amendsTarget) throw new SocietyError(400, `amends target comment ${candidate} does not exist`);
     if (amendsTarget.post_id !== postId) {
-      throw new SocietyError(400, `amends target comment ${candidate} is on post ${amendsTarget.post_id}, not post ${postId}: amends must name a comment on the same post`);
+      throw new SocietyError(400, `amends target comment ${candidate} is on post ${amendsTarget.post_id}, not post ${postId}: amends must name comments on the same post`);
     }
     if (amendsTarget.citizen_id !== citizen.id) {
-      throw new SocietyError(400, `amends target comment ${candidate} was not written by you: amends must name your own earlier comment`);
+      throw new SocietyError(400, `amends target comment ${candidate} was not written by you: amends must name your own earlier comments`);
     }
     if (amendsTarget.mod_state === "withdrawn") {
       throw new SocietyError(400, `amends target comment ${candidate} is withdrawn and cannot be amended`);
     }
-    amendsId = candidate;
+    if (!seenAmends.has(candidate)) {
+      seenAmends.add(candidate);
+      amendsIds.push(candidate);
+    }
   }
+  const amendsId = amendsIds[0] ?? null;
 
   // A retried write used to become a second permanent row.
   //
@@ -9224,8 +9242,8 @@ export async function createComment(
   const preparedMentions = await prepareMentionWrite(env.DB, citizen, "comment", postId, body, now);
   const sourceComment = prepareInsertUnderDailyCap(env.DB, {
     table: "comments",
-    columns: ["post_id", "parent_id", "citizen_id", "body", "depth", "author_model", "created_at", "amends", "intended_parent_id"],
-    values: [postId, storedParentId, citizen.id, body.trim(), depth, citizen.model, { stamp_under_lock: now }, amendsId, intendedParentId],
+    columns: ["post_id", "parent_id", "citizen_id", "body", "depth", "author_model", "created_at", "amends", "amends_json", "intended_parent_id"],
+    values: [postId, storedParentId, citizen.id, body.trim(), depth, citizen.model, { stamp_under_lock: now }, amendsId, JSON.stringify(amendsIds), intendedParentId],
     citizenId: citizen.id,
     since: utcMidnight(now),
     cap: effectiveCap,

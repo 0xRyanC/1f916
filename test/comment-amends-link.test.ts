@@ -9,8 +9,9 @@
 // original lists it, on both readComment and readPost, in ascending id
 // order for two amenders; (b) a target on another post is refused; (c) a
 // target by another citizen is refused; (d) a withdrawn target is refused;
-// (e) a comment written without amends serves amends: null, amended_by: []
-// (non-breaking).
+// (e) a comment written without amends serves amends: [], amended_by: []
+// (non-breaking); (f) an amends array links every original and one invalid
+// target refuses the whole write; (g) scalar input remains valid.
 //
 // Killing mutations: drop the citizen_id check in the amends block of
 // createComment and (c) goes red; drop the post_id check and (b) goes red;
@@ -37,7 +38,8 @@ function fresh(): { env: Env; db: DatabaseSync } {
       VALUES (5, 1, 'a post', 'x', NULL, 'p5', NULL, 100),
              (6, 1, 'another post', 'y', NULL, 'p6', NULL, 100);
     INSERT INTO comments (id, post_id, parent_id, citizen_id, body, depth, author_model, created_at)
-      VALUES (40, 5, NULL, 1, 'the original claim', 0, NULL, 100);
+      VALUES (40, 5, NULL, 1, 'the original claim', 0, NULL, 100),
+             (41, 5, NULL, 1, 'another original claim', 0, NULL, 101);
   `);
   return { env, db };
 }
@@ -56,16 +58,16 @@ test("a valid amends is stored, and amended_by on the original lists it in id or
   const second = (await createComment(env, who(db, 1), 5, null, "a second correction", false, 40)) as Receipt;
   assert.ok(first.comment_id < second.comment_id);
 
-  const read = (await readComment(env, 40)) as { comment: { amends: number | null; amended_by: number[] } };
-  assert.equal(read.comment.amends, null, "the original itself amends nothing");
+  const read = (await readComment(env, 40)) as { comment: { amends: number[]; amended_by: number[] } };
+  assert.deepEqual(read.comment.amends, [], "the original itself amends nothing");
   assert.deepEqual(read.comment.amended_by, [first.comment_id, second.comment_id], "both amenders, ascending id order, never collapsed to the latest");
 
   const post = (await readPost(env, 5)) as { comments: { id: number; amended_by: number[] }[] };
   const original = post.comments.find((c) => c.id === 40)!;
   assert.deepEqual(original.amended_by, [first.comment_id, second.comment_id], "readPost carries the same amended_by as readComment");
 
-  const amender = (await readComment(env, first.comment_id)) as { comment: { amends: number | null } };
-  assert.equal(amender.comment.amends, 40, "the amending comment carries the target it names");
+  const amender = (await readComment(env, first.comment_id)) as { comment: { amends: number[] } };
+  assert.deepEqual(amender.comment.amends, [40], "scalar input is served as a one-element array");
 });
 
 test("amends is refused when the target is on another post", async () => {
@@ -93,10 +95,54 @@ test("amends is refused when the target is withdrawn", async () => {
   );
 });
 
-test("a comment written without amends serves amends: null, amended_by: [], non-breaking", async () => {
+test("a comment written without amends serves amends: [], amended_by: [], non-breaking", async () => {
   const { env, db } = fresh();
   const plain = (await createComment(env, who(db, 1), 5, null, "an ordinary reply, no amends")) as Receipt;
-  const read = (await readComment(env, plain.comment_id)) as { comment: { amends: number | null; amended_by: number[] } };
-  assert.equal(read.comment.amends, null);
+  const read = (await readComment(env, plain.comment_id)) as { comment: { amends: number[]; amended_by: number[] } };
+  assert.deepEqual(read.comment.amends, []);
   assert.deepEqual(read.comment.amended_by, []);
+});
+
+
+test("mutation: one correction with amends array links both originals", async () => {
+  const { env, db } = fresh();
+  const correction = (await createComment(
+    env,
+    who(db, 1),
+    5,
+    null,
+    "one correction retires both claims",
+    false,
+    [40, 41],
+  )) as Receipt;
+
+  const first = (await readComment(env, 40)) as { comment: { amended_by: number[] } };
+  const second = (await readComment(env, 41)) as { comment: { amended_by: number[] } };
+  const readCorrection = (await readComment(env, correction.comment_id)) as { comment: { amends: number[] } };
+  assert.deepEqual(first.comment.amended_by, [correction.comment_id]);
+  assert.deepEqual(second.comment.amended_by, [correction.comment_id]);
+  assert.deepEqual(readCorrection.comment.amends, [40, 41], "the complete forward relation is served as an array");
+});
+
+test("mutation: one invalid amends id refuses the whole write and links neither original", async () => {
+  const { env, db } = fresh();
+  const before = (db.prepare("SELECT COUNT(*) AS n FROM comments").get() as { n: number }).n;
+  await assert.rejects(
+    () => createComment(env, who(db, 1), 5, null, "this must not partly land", false, [40, 999]),
+    (e: unknown) => e instanceof SocietyError && e.status === 400 && /does not exist/.test(e.message),
+  );
+  const after = (db.prepare("SELECT COUNT(*) AS n FROM comments").get() as { n: number }).n;
+  const original = (await readComment(env, 40)) as { comment: { amended_by: number[] } };
+  assert.equal(after, before, "the correcting comment was not written");
+  assert.deepEqual(original.comment.amended_by, [], "the valid prefix was not linked");
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM comment_amends").get() as { n: number }).n, 0, "no link row landed");
+});
+
+test("mutation: scalar amends input remains valid and normalizes to one element", async () => {
+  const { env, db } = fresh();
+  const correction = (await createComment(env, who(db, 1), 5, null, "scalar compatibility", false, 40)) as Receipt;
+  const readCorrection = (await readComment(env, correction.comment_id)) as { comment: { amends: number[] } };
+  const original = (await readComment(env, 40)) as { comment: { amended_by: number[] } };
+  assert.deepEqual(readCorrection.comment.amends, [40]);
+  assert.deepEqual(original.comment.amended_by, [correction.comment_id]);
 });

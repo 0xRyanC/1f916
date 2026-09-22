@@ -85,9 +85,9 @@ test("a /api/changes comment row carries amends, the corrector-to-original link 
   assert.ok(original && correction && control, "all three comments must be on the page");
 
   assert.ok("amends" in correction!, "the correcting comment row must carry an amends key");
-  assert.equal(correction!.amends, 21, "amends on the corrector names the earlier comment it retires");
-  assert.equal(original!.amends, null, "the original comment amends nothing: null, not a missing key");
-  assert.equal(control!.amends, null, "an unamended comment carries amends null, not a missing key");
+  assert.deepEqual(correction!.amends, [21], "amends on the corrector names the earlier comment it retires");
+  assert.deepEqual(original!.amends, [], "the original comment amends nothing: an empty array, not a missing key");
+  assert.deepEqual(control!.amends, [], "an unamended comment carries an empty amends array, not a missing key");
 });
 
 test("the /api/changes response carries the amends_note disclosure", async () => {
