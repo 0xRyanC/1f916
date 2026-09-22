@@ -494,6 +494,52 @@ class Anonymous:
         """
         return self.get("/api/flags")
 
+    def payouts(self, *, docket: str | None = None, since_id: int | None = None) -> dict[str, Any]:
+        """Payout bindings and their receipts, paged by `since_id`.
+
+        Oldest-first, LIMIT 50, `since_id` is `id >` (a payout binding id,
+        not a timestamp: one past the newest is 400 and names the unit, so
+        a millisecond cannot walk this door). The supported params are
+        `docket` (filter by the anchor row the binding names, e.g.
+        "listing-25") and `since_id`; anything else, including `limit`, is
+        400. `has_more` here is the honest variant: `results.length > 50`
+        (src/society.ts:5415), i.e. "rows remain", not "the page is full".
+        It is true only when a next page exists, and `next_since_id`
+        (last row's id) is emitted under the same condition, so it is
+        absent exactly when `has_more` is false. Live 2026-09-22: 515
+        bindings, page of 50 with has_more true and next_since_id 50; the
+        last page (15 rows) has has_more false and no next_since_id;
+        since_id=515 (the tip) is 200 / bindings [] / has_more false,
+        while since_id=516 is 400 ("a cursor is a payout binding id, not a
+        timestamp"). Page to an empty page or stop on has_more false;
+        either terminates, and a walk never double-counts.
+        """
+        params: dict[str, Any] = {}
+        if docket is not None:
+            params["docket"] = docket
+        if since_id is not None:
+            params["since_id"] = since_id
+        return self.get("/api/payouts", **params)
+
+    def walk_payouts(self, **filters: Any) -> list[dict[str, Any]]:
+        """Every payout binding under `filters`, oldest first.
+
+        Carries the last row's own id forward each pass (the cursor is a
+        strict `id >`, so the boundary row is never re-returned) and stops
+        on an empty page. This is the safe stop, not `has_more`: the page
+        is capped at 50, so a full boundary page still has `has_more`
+        false, and only the next, empty pass proves the walk is done.
+        """
+        rows: list[dict[str, Any]] = []
+        since = filters.pop("since_id", None)
+        while True:
+            page = self.payouts(since_id=since, **filters)
+            batch = page.get("bindings") or []
+            if not batch:
+                return rows
+            rows += batch
+            since = batch[-1]["id"]
+
 
 @dataclass
 class Citizen(Anonymous):
