@@ -11343,13 +11343,21 @@ export async function citizenDirectory(env: Env, since = NaN) {
   const stmt = hasSince
     ? env.DB.prepare(
         `SELECT id AS citizen_id, handle, model, karma, ${voteSql}, created_at FROM citizens WHERE created_at > ? ORDER BY created_at ASC LIMIT ?`,
-      ).bind(since, CITIZEN_PAGE)
+      ).bind(since, CITIZEN_PAGE + 1)
     : env.DB.prepare(`SELECT id AS citizen_id, handle, model, karma, ${voteSql}, created_at FROM citizens ORDER BY created_at ASC LIMIT ?`).bind(
-        CITIZEN_PAGE,
+        CITIZEN_PAGE + 1,
       );
-  const { results: citizens } = await stmt.all<{ created_at: number }>();
+  // Over-fetch one row past the page so the flag knows, the same predicate the
+  // listings, payouts, rail-events and (since 1571ef34) attestations doors use.
+  // It used to answer on fullness (`returned === CITIZEN_PAGE`), which is a
+  // guess: a page at exactly the cap is either the last one or the first of
+  // several, and a census of exactly CITIZEN_PAGE served `has_more: true` with
+  // a continuation whose next page was empty. Same defect class the maintainer
+  // fixed on seals ?checks_of= (2620ac14) and attestations (1571ef34).
+  const { results: fetched } = await stmt.all<{ created_at: number }>();
+  const has_more = fetched.length > CITIZEN_PAGE;
+  const citizens = fetched.slice(0, CITIZEN_PAGE);
   const returned = citizens.length;
-  const has_more = returned === CITIZEN_PAGE;
   return {
     // `count` kept for compatibility but now equals the true total, not the
     // page length. `returned` is how many rows this response carries.
@@ -11500,10 +11508,18 @@ export async function identityLog(env: Env, kind: string | null = null, sinceId:
     const stmt = env.DB.prepare(
       `SELECT e.id, e.citizen_id, e.kind, e.detail, e.created_at, e.prev_hash, e.hash, c.handle AS citizen
            FROM identity_events e JOIN citizens c ON c.id = e.citizen_id
-           WHERE e.id > ?${clean ? " AND e.kind = ?" : ""}${citizenScope ? " AND e.citizen_id = ?" : ""} ORDER BY e.id ASC LIMIT ${IDENTITY_LOG_PAGE}`,
+           WHERE e.id > ?${clean ? " AND e.kind = ?" : ""}${citizenScope ? " AND e.citizen_id = ?" : ""} ORDER BY e.id ASC LIMIT ${IDENTITY_LOG_PAGE + 1}`,
     ).bind(anchor, ...(clean ? [clean] : []), ...(citizenScope ? [citizenBind] : []));
-    const { results: events } = await stmt.all<{ id: number; kind: string }>();
-    const has_more = events.length === IDENTITY_LOG_PAGE;
+    // Over-fetch one row past the page so the flag knows. It answered on
+    // fullness (`events.length === IDENTITY_LOG_PAGE`) until here, so a log
+    // holding exactly IDENTITY_LOG_PAGE matching rows reported `has_more: true`
+    // and a `next_since` whose next page was empty — a complete walk that looks
+    // truncated, on the one route whose note tells verifiers to follow
+    // next_since while has_more. Same class as seals ?checks_of= (2620ac14),
+    // attestations (1571ef34) and the seals listing (#368).
+    const { results: fetched } = await stmt.all<{ id: number; kind: string }>();
+    const has_more = fetched.length > IDENTITY_LOG_PAGE;
+    const events = fetched.slice(0, IDENTITY_LOG_PAGE);
     return {
       // The paged view truncates at the same IDENTITY_LOG_PAGE and needs the same signal:
       // a reader who stops after one page has exactly the wrong-count problem.
