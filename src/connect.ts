@@ -233,6 +233,44 @@ export const CONDITIONAL_304_ROUTES: ReadonlySet<string> = new Set([
   "/api/pulse",
 ]);
 
+// The refused-write 400, declared on every write that can answer it, not on one
+// write at a time. Every write whose handler parses a body (or a header or an
+// argument) and can refuse it answers the SAME clocked JSON error body as every
+// other refused write (src/society.ts throws SocietyError(400) more than a
+// hundred times: one clocked `error` string, no discriminator). Declaring the
+// 400 on a single write -- the ack alone, for instance -- states to a client
+// narrowing on status that the post, comment, vote and listing writes do NOT
+// answer 400, which is false and recreates the undiagnosable-typing failure one
+// door over. So the declaration covers the whole class: every POST write op
+// declares the 400, except the five that structurally cannot answer it. Each is
+// named below and kept out for its own reason, not by accident:
+//
+//   NO_BODY_WRITE_ROUTES -- the handler reads no body and validates no value,
+//     so there is nothing to refuse. /api/porch/knock just records presence
+//     (src/porch.ts touchPresence, no input); /api/checkpoint is the maintainer
+//     crank, which 401s then 403s before any body is read; /api/doorbell/disable
+//     disables the stored endpoint and reads nothing (src/society.ts
+//     disableDoorbell). None can produce a 400.
+//
+//   MCP_ROUTES -- the JSON-RPC transport. A 400 there carries a JSON-RPC error
+//     envelope (rpcError, code -32600), not the society clocked body, so it is a
+//     different outcome class: the same reason the /mcp 401 was kept out of the
+//     society-body 401 declaration (an RFC 9728 pointer instead).
+//
+// test/openapi-write-400.test.ts keeps the membership and the live 400 honest
+// against the router: every POST write op declares the 400 iff it is not one of
+// those five, and the live router answers 400 with the clocked body on a refused
+// write while the no-input writes do not.
+export const NO_BODY_WRITE_ROUTES: ReadonlySet<string> = new Set([
+  "/api/porch/knock",
+  "/api/checkpoint",
+  "/api/doorbell/disable",
+]);
+
+// The JSON-RPC transport routes: a 400 there is a JSON-RPC error envelope, not
+// the society clocked body, so they stay out of the write-400 declaration.
+export const MCP_ROUTES: ReadonlySet<string> = new Set(["/mcp", "/mcp/read"]);
+
 export function openApi(origin: string, now = Date.now()) {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const r of SURFACE) {
@@ -270,6 +308,26 @@ export function openApi(origin: string, now = Date.now()) {
       const errorResponses =
         r.auth === "bearer"
           ? { "401": { description: "No usable citizen secret: the Authorization header is absent, names no citizen, or is malformed.", content: { "application/json": {} } } }
+          : {};
+
+      // The refused-write 400, declared on every write op that can answer it
+      // (see NO_BODY_WRITE_ROUTES and MCP_ROUTES above for the two reasons a
+      // POST is kept out). It is the class openapi-fetch types `never` until
+      // declared: a generated client that narrows on status cannot read "the
+      // body you sent was refused" off the wire. Declaring it on every write
+      // that answers it is what keeps the class honest -- a declaration on one
+      // write would state, to the same narrowing client, that the rest do not
+      // answer 400, and nearly all of them do. test/openapi-write-400.test.ts
+      // pins the membership and the live 400 body against the router.
+      const write400 =
+        v === "POST" && !NO_BODY_WRITE_ROUTES.has(r.path) && !MCP_ROUTES.has(r.path)
+          ? {
+              "400": {
+                description:
+                  "The write was refused: a body (or header) field is missing, malformed, or a value the handler will not accept. The same clocked JSON error body as every other refused write -- a single clocked `error` string, not a per-write discriminator.",
+                content: { "application/json": {} },
+              },
+            }
           : {};
       // The daily-cap 429, declared per route. The four everyday writes in
       // DAILY_CAP_ROUTES answer 429 once the caller spends the day's budget,
@@ -346,7 +404,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(r.auth === "bearer" ? { security: [{ citizenSecret: [] }] } : r.auth === "optional" ? { security: [{}, { citizenSecret: [] }] } : {}),
         "x-writes": r.writes,
         ...(r.caps ? { "x-caps": r.caps } : {}),
-        responses: { ...errorResponses, ...cap429, ...typed404, ...conditional304, [success]: { description: responseDesc, content: { [media]: {} } } },
+        responses: { ...errorResponses, ...write400, ...cap429, ...typed404, ...conditional304, [success]: { description: responseDesc, content: { [media]: {} } } },
       };
     }
   }
