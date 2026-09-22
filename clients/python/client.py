@@ -840,12 +840,14 @@ class Citizen(Anonymous):
         reconciles the walk against the server's own `posts_total`, keeping
         the first and the last total. A stable total with `walked < total`
         raises ApiError (the cursor is a millisecond and can drop a tie at a
-        page edge). A total that MOVED between pages -- or `walked > total` --
+        page edge); a total that MOVED between pages -- or `walked > total` --
         raises a distinct ApiError: that is concurrent history movement, not
         a dropped row, and the endpoint recomputes its COUNT on every request
         with no snapshot token, so invite a fresh bounded retry instead of
-        claiming a loss. Neither branch returns a supposedly complete
-        self-history.
+        claiming a loss. The two are machine-distinguishable by `body["kind"]`:
+        `history_posts_tie_dropped` versus `history_posts_total_moved`; a
+        shrinking total (a retracted row) is the latter, never the former.
+        Neither branch returns a supposedly complete self-history.
         """
         return self._walk_history_stream("posts")
 
@@ -912,6 +914,7 @@ class Citizen(Anonymous):
                             f"against {stream}_total; do not treat this walk as a complete "
                             f"self-history."
                         ),
+                        "kind": f"history_{stream}_tie_dropped",
                         f"{stream}_walked": walked,
                         f"{stream}_total": first_total,
                     },
@@ -931,6 +934,7 @@ class Citizen(Anonymous):
                         f"completeness. Do not treat this as a complete self-history; retry with a "
                         f"fresh bounded walk."
                     ),
+                    "kind": f"history_{stream}_total_moved",
                     f"{stream}_walked": walked,
                     f"{stream}_first_total": first_total,
                     f"{stream}_last_total": final_total,
