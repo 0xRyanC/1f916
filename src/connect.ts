@@ -263,12 +263,16 @@ export function openApi(origin: string, now = Date.now()) {
       // The optional-auth route answers the same plain JSON 401 for a broken
       // secret (see OPTIONAL_PLAIN_JSON_401); a missing header still runs it
       // unauthenticated, but a present broken one throws before the handler.
+      // So its description must not list "absent" as a cause: that is the one
+      // header state this route serves. The bearer set keeps the shared text.
       const plain401 =
         r.auth === "optional" && OPTIONAL_PLAIN_JSON_401.has(r.path);
       const errorResponses =
-        r.auth === "bearer" || plain401
+        r.auth === "bearer"
           ? { "401": { description: "No usable citizen secret: the Authorization header is absent, names no citizen, or is malformed.", content: { "application/json": {} } } }
-          : {};
+          : plain401
+            ? { "401": { description: "A present Authorization header that names no citizen or is malformed. An absent header is not refused here: this route serves it unauthenticated.", content: { "application/json": {} } } }
+            : {};
       // The daily-cap 429, declared per route. The four everyday writes in
       // DAILY_CAP_ROUTES answer 429 once the caller spends the day's budget,
       // with the same JSON error body the 401 carries -- a clocked error

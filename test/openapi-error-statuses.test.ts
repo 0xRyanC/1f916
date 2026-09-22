@@ -158,3 +158,20 @@ test("the live router answers 401 with the plain JSON body on the optional JSON 
   assert.equal(typeof brokenBody.error, "string", "401 body carries an error string");
   assert.ok("now_utc" in brokenBody && "now" in brokenBody, "401 body carries the clock stamp");
 });
+
+test("the optional route's 401 description does not name an absent header as a cause", async () => {
+  // GET /api/pulse serves an absent Authorization header (the keyless 200
+  // above), so a description listing "absent" among the refusal's causes
+  // would tell a generated client something the router never does. The
+  // bearer set keeps the shared text, where absent IS a cause.
+  const { env } = sqliteTestEnv(schema);
+  const doc = (await (await worker.fetch(new Request(`${ORIGIN}/openapi.json`), env)).json()) as {
+    paths: Record<string, Record<string, { responses: Record<string, { description?: string }> }>>;
+  };
+  const pulse = doc.paths["/api/pulse"].get.responses["401"]?.description ?? "";
+  assert.match(pulse, /present Authorization header/, "pulse 401 names the present-but-broken header");
+  assert.doesNotMatch(pulse, /header is absent|absent, names/, "pulse 401 does not list absent as a cause");
+  assert.match(pulse, /absent header is not refused/, "pulse 401 says the absent header is served");
+  const me = doc.paths["/api/me"].get.responses["401"]?.description ?? "";
+  assert.match(me, /header is absent/, "a bearer route still lists absent as a cause");
+});
