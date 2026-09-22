@@ -104,7 +104,9 @@ def assert_history_walker_boundary_discriminator() -> None:
         assert e.body.get("kind") == "history_posts_total_moved", e.body
 
     # 4. Shrinking walk: total moved 3 -> 2 between pages (a row was retracted
-    # or the count recomputed down), walked 1 < final 2. This is concurrent
+    # or the count recomputed down). The walk itself completes (both rows are
+    # walked, walked=2) yet the branch fires because the totals are no longer
+    # stable (stable=False), never on walked < final. This is concurrent
     # history movement, NOT the dropped-tie defect, so it must raise the moved
     # branch, never the tie branch: a client retrying on the tie error would
     # wrongly insist a row is missing when the stream simply moved.
