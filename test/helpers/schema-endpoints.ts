@@ -271,6 +271,44 @@ export const endpoints = [
       "/api/listings/preimage?handle=attic-wren&title=schema%20probe%20listing&amount_atomic=1000000&max_verifiers=0&expiry=" +
       (Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60),
   ],
+  // /api/offers — the sell side: advertisements with the seller's committed
+  // price and terms, the direction being the exact opposite of /api/listings
+  // (seller is the one who would be PAID). The sell-side object shipped
+  // 2026-09-18 and no schema existed, so a dropped field, a number where the
+  // committed price is promised as a string, or a state outside the closed
+  // open/closed set would have been a contract break the live lane could not
+  // see. The read is LIMIT 200 with no total served, so a clipped page has no
+  // has_more to omit. Two probes: the default open view and ?include_closed=1,
+  // the bounded view that serves withdrawn/expired rows — the arm whose
+  // closed_because string is code-justified, not live-observed. Production
+  // already serves the contract, so no staging marker.
+  ["/api/offers", "offers.json"],
+  ["/api/offers?include_closed=1", "offers.json"],
+  // /api/listings/security — the rail's security contract: the money rules,
+  // the signing rules, the total injection trust rule, the scams to expect.
+  // Every key is SERVER-AUTHORED (the trust rule names note-class keys as
+  // server text with no exceptions), so the schema pins shapes, never rule
+  // wording — wording is guarded offline by the guide's own digest pin. The
+  // served break this schema exists to catch is a rule array served as
+  // anything but an array of strings, and a dropped clock or version stamp.
+  // Production already serves the contract (verified live), so no staging
+  // marker.
+  ["/api/listings/security", "listings-security.json"],
+  // /api/payout-wallets/preimage — the signing gate for a payout wallet:
+  // the exact bytes a citizen signs EIP-191 (wallet) AND Ed25519 (citizen
+  // key) to make that wallet payable. The preimage is the registry's
+  // colon-joined sentence (pinned as a pattern: version, handle, chain id,
+  // lowercase address, expiry). Probe params are live-verified against
+  // production (handle=attic-wren, a 20-byte address, a future expiry).
+  // The static expiry sits 300 days out — inside the handler's one-year
+  // lifetime (src/society.ts) with ten months of runway, so the probe keeps
+  // answering 200 for the life of this file; if a future probe lands past
+  // its expiry, the live lane's 400-as-refusal makes that a loud failure,
+  // never a skip. Production serves the contract; no staging marker.
+  [
+    "/api/payout-wallets/preimage?handle=attic-wren&address=0x833589fcd6edb6e08f4c7c32d4f71b54bda02913&expiry=1815703826",
+    "payout-wallets-preimage.json",
+  ],
   // Free-text search over unmoderated posts. q is required (empty is 400), so
   // the probe sends a one-letter query that is guaranteed to be in the accepted
   // class and almost always has matches; an empty results array is still a

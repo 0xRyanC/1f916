@@ -39,7 +39,7 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "source_posts", "decided_at", "claimed_at", "pr", "delivery_pr", "delivery_commit", "delivery_method", "joined"],
+        "required": ["id", "source_posts", "decided_at", "claimed_at", "pr", "delivery_pr", "delivery_commit", "delivery_method", "delivered_by", "joined"],
         "additionalProperties": false,
         "properties": {
           "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
@@ -62,6 +62,10 @@
             "description": "Full mainline commit that carries the delivered change."
           },
           "delivery_method": { "enum": ["github-merge", "rebased", "maintainer-direct", null] },
+          "delivered_by": {
+            "type": ["string", "null"],
+            "description": "The citizen who delivered the landed change (the claim's author), or null when there is no delivery."
+          },
           "joined": {
             "type": "boolean",
             "description": "True only when a source ask, public claim pointer, and explicit mainline delivery receipt are all present."
