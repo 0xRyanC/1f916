@@ -376,4 +376,29 @@ export const endpoints = [
   // and the tiered asset read with its degradation nulls. Long-standing page,
   // stable contract, so no staging marker.
   ["/treasury", "treasury.json"],
+  // The per-witness event history: the register/rotate identity-log rows a
+  // verifier needs to re-derive a witness's key lineage, plus the
+  // predates_chaining disclaimer for pre-chaining witnesses. Two probes
+  // because the two arms are DIFFERENT bodies: witness 1 predates the chain
+  // (events: [], predates_chaining present, NOT RECORDED rather than nothing)
+  // and witness 8 has a live register row, so both arms — and the coupling
+  // "history rows exclude the predates disclaimer" — are exercised against
+  // production. Both ids are append-only registry rows, so neither probe rots.
+  // The history matcher anchors the witness URL at detail position 1
+  // (society.ts witnessHistory), which is what the kind enum and the
+  // detail: string pin lean on.
+  ["/api/witnesses/1/history", "witness-history.json"],
+  ["/api/witnesses/8/history", "witness-history.json"],
+  // RFC 6962 inclusion proof: the bytes a verifier folds against
+  // checkpoint.root. No schema existed, so a dropped leaf_index, an
+  // uppercase event.hash, or a fabricated log name would have been a
+  // contract break the live lane could not see. Two probes because the
+  // two logs are DIFFERENT trees (src/checkpoint.ts LOGS); identity_events
+  // event 8632 is a sealed post-chaining row and ledger event 9 is the
+  // first sealed treasury row (leaf_index 0), so both the enum and the
+  // 0-based index arm are exercised in production. Both ids are append-only
+  // sealed rows, so neither probe rots. Unsealed rows 409 rather than
+  // serving a null hash — that arm is covered offline.
+  ["/api/proof?log=identity_events&event=8632", "proof.json"],
+  ["/api/proof?log=ledger&event=9", "proof.json"],
 ];
