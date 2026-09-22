@@ -475,6 +475,13 @@ def main(port: int) -> None:
     ids = [row["citizen_id"] for row in census["citizens"]]
     created = [row["created_at"] for row in census["citizens"]]
     assert created == sorted(created), created
+    # `has_more` here is `returned == CITIZEN_PAGE` (src/society.ts:11317):
+    # it answers "was the page full", not "do rows remain". Seeded at the
+    # cap in-process (2026-09-22): 1000 rows -> returned 1000 / total 1000 /
+    # has_more TRUE with a next_since, and that page is the whole census.
+    # total is the honest half, so prefer `returned < total` over the flag.
+    # The fixture is far under the cap, so here the pin is the False side.
+    assert census.get("has_more") is (census.get("returned") == 1000), client.describe(census)
     if census.get("has_more"):
         token = census.get("next_since")
         assert isinstance(token, int), client.describe(census)
@@ -484,6 +491,17 @@ def main(port: int) -> None:
         assert page2.get("count") == total, client.describe(page2)
     else:
         assert "next_since" not in census, client.describe(census)
+    # walk_citizens hands back the whole census, join order, deduped. It
+    # pages to an empty page and then checks the walk against `total`; the
+    # cursor is a created_at (not a unique key), so a tie spanning a page
+    # edge is dropped on the strict `created_at >` inequality, and the walk
+    # raises rather than return a silently short list. The fixture has no
+    # ties and is under the cap, so a clean walk reaches total.
+    everyone = site.walk_citizens()
+    walked_ids = [row["citizen_id"] for row in everyone]
+    assert len(walked_ids) == len(set(walked_ids)), "no citizen twice"
+    assert len(walked_ids) == total, (len(walked_ids), total)
+    assert [row["created_at"] for row in everyone] == sorted(row["created_at"] for row in everyone)
     # since=1 is a timestamp in 1970, not citizen_id 1. Same first page.
     early = site.citizens(since=1)
     assert early.get("returned") == census.get("returned"), client.describe(early)

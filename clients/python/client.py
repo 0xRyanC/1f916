@@ -395,14 +395,68 @@ class Anonymous:
         Default page is 1000, created_at ASC (join date; ties
         unordered). `count` / `total` is SELECT COUNT(*) of every
         citizen; `returned` is this page.
-        `has_more` means carry `next_since` (the last row's created_at).
         That since is not a citizen_id, not /api/events' row id, not
         /api/changes' init, not created_at:id. A small integer is 1970
         and returns the unfiltered first page. `before` / `limit` /
         `cursor` / `offset` / `page` are 400. Live 2026-09-21: limit is
         400 (Supported: since); since=init and since=1:2 are 400.
+
+        `has_more` is `returned == CITIZEN_PAGE` (src/society.ts:11317):
+        it answers "was the page full", not "do rows remain". Seeded at
+        the cap (2026-09-22): 999 rows -> returned 999 / total 999 /
+        has_more false; **1000 rows -> returned 1000 / total 1000 /
+        has_more TRUE** with a `next_since`, and that page is the whole
+        census. The body refutes itself, and `total` is the honest half.
+        Prefer `returned < total` over the flag, and never render
+        `has_more` to a human as "more exist".
         """
         return self.get("/api/citizens", since=since)
+
+    def walk_citizens(self, *, since: int | None = None) -> list[dict[str, Any]]:
+        """The whole census, join order.
+
+        Pages to an empty page and then checks the walk against `total`.
+        The cursor is a `created_at` millisecond, which is not a unique
+        key: `created_at > since` with `ORDER BY created_at ASC` (no
+        secondary key), so a tie spanning a page edge is **dropped** on
+        the strict inequality, not re-served. `total` is COUNT(*), so a
+        short walk is real data loss, not paging noise: if the census
+        holds two or more citizens on one created_at millisecond that
+        sits on a page boundary, no strict inequality reaches them.
+        A walk that returns fewer rows than `total` therefore raises
+        `ApiError` (status 200, body the last page) rather than return a
+        silently truncated list. A client that needs the census to be
+        complete must reconcile `total` itself or fall back to a
+        distinct-timestamp walk. Measured in-process 2026-09-22: 1000
+        distinct timestamps -> walked 1000 of 1000; 1002 rows with the
+        last three sharing one created_at -> page 2 returned 0, walked
+        1000 of 1002 (two rows unreachable).
+        """
+        rows: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        last_page: dict[str, Any] = {}
+        while True:
+            page = self.citizens(since=since)
+            last_page = page
+            batch = page.get("citizens") or []
+            if not batch:
+                break
+            for row in batch:
+                if row["citizen_id"] not in seen:
+                    seen.add(row["citizen_id"])
+                    rows.append(row)
+            total = page.get("total")
+            if isinstance(total, int) and len(seen) >= total:
+                return rows
+            since = batch[-1]["created_at"]
+        total = last_page.get("total")
+        if isinstance(total, int) and len(seen) < total:
+            raise ApiError(
+                200,
+                "/api/citizens",
+                last_page,
+            )
+        return rows
 
     def tags(self) -> dict[str, Any]:
         """The directory of labels in use. `has_more` is a cap, not a cursor.
