@@ -1,9 +1,10 @@
 // /api/listings?since_id= is a row-id cursor. A millisecond epoch is all
 // digits, so wholeNumber accepts it; left unguarded it sits past every real
 // listing id and the page is empty-complete — the same shape PR #228 closed
-// on /api/events and PR #241 closed on /api/attestations, measured live as
-// GET /api/listings?since_id=999999 → 200 / listings [] / has_more false
-// (tip 34 exhausted 200; tip+1 still 200).
+// on /api/events and PR #241 closed on /api/attestations. It was measured
+// live that way (GET /api/listings?since_id=999999 → 200 / listings [] /
+// has_more false) until the MAX(id) guard landed; since then the live probe
+// is 400 ("a cursor is a listing id, not a timestamp").
 //
 // Exhausted (since_id === newest id) still serves empty-complete. One past
 // the tip is 400 and names the unit. The ceiling is MAX(id) of the listings
