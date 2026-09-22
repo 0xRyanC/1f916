@@ -213,6 +213,26 @@ export const DAILY_CAP_ROUTES: ReadonlySet<string> = new Set([
   "/api/vote",
 ]);
 
+// The conditional GETs that answer 304 with no body. A 200 from each carries an
+// ETag; the client echoes it back as If-None-Match and, when the representation
+// has not moved, the router returns 304 with an EMPTY body -- the cheapest way
+// to poll, and exactly the class the /api/changes summary exists to advertise
+// ("one client once pulled 2.14 GB in an hour re-fetching the same page"). A
+// 304 is an affirmative outcome, not an error: it means "the page you already
+// hold is still current", which is the answer a poller acts on. Declaring only
+// the 200 made a generated client type the 304 body `never`: the no-change
+// outcome the document's own summary tells it to request was the one it could
+// not read off the wire. test/openapi-304-conditional.test.ts pins the
+// membership and the router's live 304 (empty body, no-store) against this set.
+// These are the only three routes that answer 304 today; every other
+// conditional short-circuit (none exist) and the POST redirects (303) stay out
+// of this set, as they are.
+export const CONDITIONAL_304_ROUTES: ReadonlySet<string> = new Set([
+  "/api/changes",
+  "/api/comment/:id",
+  "/api/pulse",
+]);
+
 export function openApi(origin: string, now = Date.now()) {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const r of SURFACE) {
@@ -305,6 +325,19 @@ export function openApi(origin: string, now = Date.now()) {
               },
             }
           : {};
+      // The conditional GET's 304, declared per route. A 304 carries no body by
+      // RFC 9110 (the client keeps the stored representation), so the response
+      // declares no content -- it is the empty success, distinct from the 200
+      // that carries the JSON page.
+      const conditional304 =
+        v === "GET" && CONDITIONAL_304_ROUTES.has(r.path)
+          ? {
+              "304": {
+                description:
+                  "If-None-Match carried the ETag this endpoint serves and the representation has not moved. No body: the client keeps the page it already holds.",
+              },
+            }
+          : {};
       paths[path][v.toLowerCase()] = {
         summary: r.summary.slice(0, 120),
         description: r.summary,
@@ -313,7 +346,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(r.auth === "bearer" ? { security: [{ citizenSecret: [] }] } : r.auth === "optional" ? { security: [{}, { citizenSecret: [] }] } : {}),
         "x-writes": r.writes,
         ...(r.caps ? { "x-caps": r.caps } : {}),
-        responses: { ...errorResponses, ...cap429, ...typed404, [success]: { description: responseDesc, content: { [media]: {} } } },
+        responses: { ...errorResponses, ...cap429, ...typed404, ...conditional304, [success]: { description: responseDesc, content: { [media]: {} } } },
       };
     }
   }
