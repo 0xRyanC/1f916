@@ -78,14 +78,28 @@ test("the document declares 201 on exactly the created routes and 200 everywhere
     paths: Record<string, Record<string, { responses: Record<string, unknown> }>>;
   };
   const toTemplate = (p: string) => p.replace(/\{([A-Za-z_]+)\}/g, ":$1");
+  // The operations the router guards with a citizen secret, read from SURFACE
+  // the way the generator does: each now declares one 401 beside its success
+  // code (test/openapi-error-statuses.test.ts keeps that declaration honest
+  // against the router). The success code itself is asserted here exactly as
+  // before; the 401 is filtered out of the count so this file stays the
+  // single owner of the 200/201 split.
+  const bearerOps = new Set<string>();
+  for (const r of SURFACE) {
+    if (r.auth !== "bearer") continue;
+    const p = r.path.replace(/:([A-Za-z_]+)/g, "{$1}").replace(/\{handle\}\.svg$/, "{handle}.svg");
+    const verbs = r.verbs ?? (r.method === "*" ? ["GET"] : [r.method]);
+    for (const v of verbs) bearerOps.add(`${p} ${v.toLowerCase()}`);
+  }
   const declared201: string[] = [];
   for (const [path, ops] of Object.entries(doc.paths)) {
     for (const [verb, op] of Object.entries(ops)) {
-      const codes = Object.keys(op.responses);
-      assert.equal(codes.length, 1, `${verb.toUpperCase()} ${path} declares ${codes.length} success codes`);
+      const codes = Object.keys(op.responses).filter((c) => c !== "401");
       const want = verb === "post" && CREATED_ROUTES.has(toTemplate(path)) ? "201" : "200";
-      assert.deepEqual(codes, [want], `${verb.toUpperCase()} ${path}`);
-      if (codes[0] === "201") declared201.push(toTemplate(path));
+      assert.deepEqual(codes, [want], `${verb.toUpperCase()} ${path} success code`);
+      // The 401 belongs exactly to the bearer operations and nothing else.
+      assert.equal(Object.keys(op.responses).includes("401"), bearerOps.has(`${path} ${verb}`), `${verb.toUpperCase()} ${path} 401 membership`);
+      if (want === "201") declared201.push(toTemplate(path));
     }
   }
   assert.deepEqual(declared201.sort(), [...CREATED_ROUTES].sort());
@@ -100,7 +114,10 @@ test("the writes a client meets first declare what the router sends: comment and
   const doc = (await (await worker.fetch(new Request(`${ORIGIN}/openapi.json`), env)).json()) as {
     paths: Record<string, Record<string, { responses: Record<string, unknown> }>>;
   };
-  assert.deepEqual(Object.keys(doc.paths["/api/comment"].post.responses), ["201"]);
-  assert.deepEqual(Object.keys(doc.paths["/api/vote"].post.responses), ["200"]);
-  assert.deepEqual(Object.keys(doc.paths["/api/post"].post.responses), ["201"]);
+  // All three are bearer-guarded, so each now declares its 401 beside the
+  // success code the router sends. The codes are integer-like keys, which
+  // order numerically ascending, so the success code (200/201) precedes 401.
+  assert.deepEqual(Object.keys(doc.paths["/api/comment"].post.responses), ["201", "401"]);
+  assert.deepEqual(Object.keys(doc.paths["/api/vote"].post.responses), ["200", "401"]);
+  assert.deepEqual(Object.keys(doc.paths["/api/post"].post.responses), ["201", "401"]);
 });
