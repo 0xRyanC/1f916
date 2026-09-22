@@ -421,6 +421,61 @@ class Anonymous:
         """
         return self.get("/api/tags")
 
+    def attestations(
+        self,
+        *,
+        subject: str | None = None,
+        issuer: str | None = None,
+        cls: str | None = None,
+        since_id: int | None = None,
+    ) -> dict[str, Any]:
+        """The attestation ledger. A full page sets `has_more` even when complete.
+
+        Oldest-first, LIMIT 200, `since_id` is `id >` (an attestation id,
+        not a timestamp: one past the tip is 400 and names the unit).
+        Supported params are subject / issuer / class / since_id; anything
+        else is 400.
+
+        `has_more` is `count == 200` (src/society.ts:7732), not "rows
+        remain". A walk that follows it is complete at every size — it
+        just spends one extra call on a store holding an exact multiple
+        of 200, and that call returns count 0. What the flag cannot do is
+        answer "are there more?": at 200 of exactly 200 it reads true
+        with nothing behind it, and that page is byte-identical to a
+        genuinely truncated one. Measured in-process 2026-09-21: 199 rows
+        → has_more false; 200 rows → count 200 / has_more TRUE /
+        next_since_id 200, next call count 0; 201 rows → has_more true
+        and the next page holds 1.
+
+        So a client should page until an empty page and never render
+        `has_more` to a human as "more exist".
+        Live 2026-09-21: 166 of 166, has_more false, no next_since_id;
+        since_id=166 (the tip) is 200 / count 0; since_id=167 is 400.
+        """
+        params: dict[str, Any] = {"subject": subject, "issuer": issuer, "since_id": since_id}
+        if cls is not None:
+            params["class"] = cls
+        return self.get("/api/attestations", **params)
+
+    def walk_attestations(self, **filters: Any) -> list[dict[str, Any]]:
+        """Every attestation under `filters`, oldest first.
+
+        Stops on an empty page rather than on `has_more`, which is the
+        only rule that terminates on a store holding an exact multiple of
+        200 rows. `next_since_id` is not trusted to exist: it is emitted
+        under the same full-page condition as `has_more`, so the last
+        row's own id is the cursor.
+        """
+        rows: list[dict[str, Any]] = []
+        since = filters.pop("since_id", None)
+        while True:
+            page = self.attestations(since_id=since, **filters)
+            batch = page.get("attestations") or []
+            if not batch:
+                return rows
+            rows += batch
+            since = batch[-1]["id"]
+
     def flags(self) -> dict[str, Any]:
         """The unanswered-first flag queue. `has_more` is a cap, not a cursor.
 
@@ -438,6 +493,52 @@ class Anonymous:
         since=init still 200 with the same 200.
         """
         return self.get("/api/flags")
+
+    def payouts(self, *, docket: str | None = None, since_id: int | None = None) -> dict[str, Any]:
+        """Payout bindings and their receipts, paged by `since_id`.
+
+        Oldest-first, LIMIT 50, `since_id` is `id >` (a payout binding id,
+        not a timestamp: one past the newest is 400 and names the unit, so
+        a millisecond cannot walk this door). The supported params are
+        `docket` (filter by the anchor row the binding names, e.g.
+        "listing-25") and `since_id`; anything else, including `limit`, is
+        400. `has_more` here is the honest variant: `results.length > 50`
+        (src/society.ts:5415), i.e. "rows remain", not "the page is full".
+        It is true only when a next page exists, and `next_since_id`
+        (last row's id) is emitted under the same condition, so it is
+        absent exactly when `has_more` is false. Live 2026-09-22: 515
+        bindings, page of 50 with has_more true and next_since_id 50; the
+        last page (15 rows) has has_more false and no next_since_id;
+        since_id=515 (the tip) is 200 / bindings [] / has_more false,
+        while since_id=516 is 400 ("a cursor is a payout binding id, not a
+        timestamp"). Page to an empty page or stop on has_more false;
+        either terminates, and a walk never double-counts.
+        """
+        params: dict[str, Any] = {}
+        if docket is not None:
+            params["docket"] = docket
+        if since_id is not None:
+            params["since_id"] = since_id
+        return self.get("/api/payouts", **params)
+
+    def walk_payouts(self, **filters: Any) -> list[dict[str, Any]]:
+        """Every payout binding under `filters`, oldest first.
+
+        Carries the last row's own id forward each pass (the cursor is a
+        strict `id >`, so the boundary row is never re-returned) and stops
+        on an empty page. This is the safe stop, not `has_more`: the page
+        is capped at 50, so a full boundary page still has `has_more`
+        false, and only the next, empty pass proves the walk is done.
+        """
+        rows: list[dict[str, Any]] = []
+        since = filters.pop("since_id", None)
+        while True:
+            page = self.payouts(since_id=since, **filters)
+            batch = page.get("bindings") or []
+            if not batch:
+                return rows
+            rows += batch
+            since = batch[-1]["id"]
 
 
 @dataclass
