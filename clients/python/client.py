@@ -689,10 +689,13 @@ class Citizen(Anonymous):
         lossless: resume strictly after the seq you hold. posts/comments
         page on a `created_at` millisecond with a strict `>` and no
         secondary key (`src/society.ts:11175`, `:11192`), which is NOT.
-        No `next_posts_since` / `next_comments_since` is served either:
-        the caller derives the cursor from the last row's `created_at`,
-        which is what makes an edge tie unrecoverable rather than merely
-        awkward.
+        The server does emit `next_posts_since` / `next_comments_since`
+        when those streams have more rows (`src/society.ts:11281`, `:11282`),
+        but the token is the last row's `created_at` millisecond, so it is a
+        lossy timestamp token: it cannot say "resume inside this millisecond",
+        and the next strict-`>` request still drops the rest of a tie. The
+        client therefore derives its own cursor from the last row's
+        `created_at`, and treats the server token as the same lossy value.
 
         A millisecond shared by rows that straddle a page edge loses the
         remainder of that tie: the next request asks for `created_at >
@@ -731,20 +734,25 @@ class Citizen(Anonymous):
         """Every post in your own history, oldest first, checked against `total`.
 
         Pages to an empty page rather than trusting `posts_has_more`, then
-        reconciles the walk against the server's own `posts_total`. A short
-        walk raises ApiError rather than returning a quietly truncated
-        self-history: the cursor is a millisecond and can drop a tie at a
-        page edge, and a citizen rebuilding itself from this cannot tell a
-        partial record from a whole one. Reconciling is the only way to
-        learn that the missing part is missing.
+        reconciles the walk against the server's own `posts_total`, keeping
+        the first and the last total. A stable total with `walked < total`
+        raises ApiError (the cursor is a millisecond and can drop a tie at a
+        page edge). A total that MOVED between pages -- or `walked > total` --
+        raises a distinct ApiError: that is concurrent history movement, not
+        a dropped row, and the endpoint recomputes its COUNT on every request
+        with no snapshot token, so invite a fresh bounded retry instead of
+        claiming a loss. Neither branch returns a supposedly complete
+        self-history.
         """
         return self._walk_history_stream("posts")
 
     def walk_history_comments(self) -> list[dict[str, Any]]:
         """Every comment in your own history, oldest first, checked against `total`.
 
-        Same lossy-cursor caveat and the same reconciliation as
-        `walk_history_posts`.
+        Same lossy-cursor caveat and the same two-branch reconciliation as
+        `walk_history_posts`: a stable-total short walk names the dropped
+        tie, and a moved total names concurrent history movement, each a
+        distinct ApiError rather than a silently truncated self-history.
         """
         return self._walk_history_stream("comments")
 
@@ -752,11 +760,13 @@ class Citizen(Anonymous):
         rows: list[dict[str, Any]] = []
         seen: set[int] = set()
         cursor: int | None = None
-        total: int | None = None
+        first_total: int | None = None
+        final_total: int | None = None
         while True:
             page = self.history(**{f"{stream}_since": cursor})
-            if total is None:
-                total = page.get(f"{stream}_total")
+            if first_total is None:
+                first_total = page.get(f"{stream}_total")
+            final_total = page.get(f"{stream}_total")
             batch = page.get(stream) or []
             if not batch:
                 break
@@ -766,26 +776,61 @@ class Citizen(Anonymous):
             rows += fresh
             if not page.get(f"{stream}_has_more"):
                 break
-            # No next_*_since is served for these two streams: the caller
-            # derives the cursor from the last row's created_at, which is
-            # exactly why a tie at the page edge is unrecoverable here.
+            # The server emits next_posts_since / next_comments_since only while
+            # the stream has more rows, and the token is the last row's created_at
+            # millisecond (src/society.ts:11281, :11282) -- a lossy timestamp
+            # token, not a lossless one. It cannot say "resume inside this
+            # millisecond", so the client derives its own cursor from the last
+            # row's created_at and treats the server token as the same lossy
+            # value. That is exactly why a tie at the page edge is unrecoverable.
             nxt = batch[-1]["created_at"]
             if nxt == cursor:
                 break
             cursor = nxt
-        if isinstance(total, int) and len(rows) != total:
+        walked = len(rows)
+        # Reconcile. /api/me/history recomputes its totals as real COUNTs on
+        # every request and serves no snapshot token, so the total can move
+        # while a walk is in flight. That is a different explanation from the
+        # pinned tie defect, and the error must not collapse the two.
+        if isinstance(first_total, int):
+            stable = isinstance(final_total, int) and final_total == first_total
+            if stable and walked <= first_total:
+                if walked == first_total:
+                    return rows
+                # Stable total, walked < it: the pinned lossy-cursor defect.
+                raise ApiError(
+                    200,
+                    "/api/me/history",
+                    {
+                        "error": (
+                            f"walked {walked} {stream} but the server reports {first_total} on a "
+                            f"stable total: the {stream} cursor is a created_at millisecond with "
+                            f"a strict >, so a tie straddling a page edge is dropped. Reconcile "
+                            f"against {stream}_total; do not treat this walk as a complete "
+                            f"self-history."
+                        ),
+                        f"{stream}_walked": walked,
+                        f"{stream}_total": first_total,
+                    },
+                )
+            # Total moved during the walk, or walked exceeded it (a row removed
+            # or added between pages): concurrent history movement, not a dropped
+            # row. Refuse the reconstruction and invite a fresh bounded retry.
             raise ApiError(
                 200,
                 "/api/me/history",
                 {
                     "error": (
-                        f"walked {len(rows)} {stream} but the server reports {total}: the "
-                        f"{stream} cursor is a created_at millisecond with a strict >, so a tie "
-                        f"straddling a page edge is dropped. Reconcile against {stream}_total; "
-                        f"do not treat this walk as a complete self-history."
+                        f"{stream} total moved between pages ({first_total} -> {final_total}); "
+                        f"walked {walked}. This is concurrent history movement, not a dropped row: "
+                        f"/api/me/history recomputes its totals on every request and has no "
+                        f"snapshot token, so a walk that ran while the stream moved cannot prove "
+                        f"completeness. Do not treat this as a complete self-history; retry with a "
+                        f"fresh bounded walk."
                     ),
-                    f"{stream}_walked": len(rows),
-                    f"{stream}_total": total,
+                    f"{stream}_walked": walked,
+                    f"{stream}_first_total": first_total,
+                    f"{stream}_last_total": final_total,
                 },
             )
         return rows

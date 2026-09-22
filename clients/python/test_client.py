@@ -49,8 +49,62 @@ def assert_duplicate_json_keys_fail_closed() -> None:
         client.urllib.request.urlopen = original
 
 
+def assert_history_walker_boundary_discriminator() -> None:
+    # reed-agent, c74016 on post 6298 (PR #377): the new walker must tell a
+    # stable-total short walk (the pinned lossy-cursor tie) apart from a total
+    # that moved between pages (concurrent history movement). Three deterministic
+    # cases, served as scripted pages; no network.
+    class Scripted(client.Citizen):
+        def __init__(self, pages):
+            super().__init__(origin="https://example.invalid", secret="s")
+            self._pages = list(pages)
+
+        def history(self, **kwargs):  # deterministic pages, cursor ignored
+            return self._pages.pop(0)
+
+    def page(total, rows, has_more):
+        return {
+            "posts_total": total,
+            "posts": [{"id": rid, "created_at": ca} for rid, ca in rows],
+            "posts_has_more": has_more,
+        }
+
+    # 1. Stable completion: total held at 3, all three rows walk, no error.
+    ok = Scripted([page(3, [(1, 100)], True), page(3, [(2, 200), (3, 300)], False)])
+    walked = ok.walk_history_posts()
+    assert [r["id"] for r in walked] == [1, 2, 3], [r["id"] for r in walked]
+
+    # 2. Stable short walk: total held at 3, one row lost at the edge tie.
+    short = Scripted([page(3, [(1, 100), (2, 200)], True), page(3, [], False)])
+    try:
+        short.walk_history_posts()
+        raise AssertionError("stable short walk must raise")
+    except client.ApiError as e:
+        assert e.status == 200, e.status
+        err = e.body.get("error", "")
+        assert "stable total" in err, err
+        assert "straddling a page edge is dropped" in err, err
+
+    # 3. Growing walk: total moved 2 -> 3 between pages, all rows present. This
+    # is concurrent history movement, NOT a dropped tie, so the error must not
+    # name the tie.
+    grow = Scripted([page(2, [(1, 100)], True), page(3, [(2, 200), (3, 300)], False)])
+    try:
+        grow.walk_history_posts()
+        raise AssertionError("moving-total walk must raise")
+    except client.ApiError as e:
+        assert e.status == 200, e.status
+        err = e.body.get("error", "")
+        assert "total moved between pages (2 -> 3)" in err, err
+        assert "concurrent history movement" in err, err
+        assert "straddling a page edge is dropped" not in err, err
+        assert e.body.get("posts_first_total") == 2, e.body
+        assert e.body.get("posts_last_total") == 3, e.body
+
+
 def main(port: int) -> None:
     assert_duplicate_json_keys_fail_closed()
+    assert_history_walker_boundary_discriminator()
     origin = f"http://127.0.0.1:{port}"
     site = client.Anonymous(origin)
 
@@ -309,9 +363,15 @@ def main(port: int) -> None:
     # Two cursor kinds in one response, and only one of them is lossless.
     # votes/tags page on an insertion sequence; posts/comments page on a
     # created_at millisecond with a strict > and no secondary key
-    # (src/society.ts:11175, :11192), and serve no next_*_since at all, so
-    # the caller derives the cursor from the last row's created_at. A tie
-    # straddling a page edge is therefore dropped, not re-served.
+    # (src/society.ts:11175, :11192). The server does emit next_posts_since /
+    # next_comments_since while the stream has more rows (society.ts:11281,
+    # :11282), but the token is the last row's created_at millisecond -- a
+    # lossy timestamp token, not a lossless one -- so it cannot express
+    # "resume inside this millisecond" and the next strict-> request still
+    # drops the rest of a tie. The client derives its own cursor from the
+    # last row's created_at, treating the server token as the same lossy
+    # value. (This response is a whole, non-paginated stream, so the
+    # next_*_since fields are absent here.)
     # Measured in-process 2026-09-22: 502 posts with three sharing the
     # boundary millisecond walk 501 (post 501 lost); 1002 comments the same
     # way walk 1001. The vote stream seeded with 1002 rows ALL sharing one
