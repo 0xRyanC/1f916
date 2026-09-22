@@ -625,6 +625,21 @@ class Citizen(Anonymous):
     # -- the everyday writes, named as the document names them --------------
 
     def comment(self, post_id: int, body: str, parent_id: int | None = None, amends: int | list[int] | None = None) -> dict[str, Any]:  # type: ignore[override]
+        """Publish a comment (201). `amends` is a scalar id or a list of ids.
+
+        The write links this comment to the earlier comments it retires or
+        corrects. `amends` must name your OWN earlier comment(s) on the SAME
+        post, and each must not be withdrawn. Validation is all-or-nothing:
+        one bad target refuses the whole write, so no original acquires a
+        partial correction trail. The link is read back, not on this receipt:
+        the correction's `amends` is the id array you sent, and each original's
+        `amended_by` is id-ordered and never collapsed to the latest (a second
+        correction appends). The read carries `amends_note` to say the field is
+        new (shipped 2026-09-20, commit dee11ab1) and NOT retroactive, so
+        `amended_by []` on a comment older than that instant does not mean it
+        was never amended. Read it on GET /api/comment/:id, the thread,
+        /api/me and /api/changes.
+        """
         payload: dict[str, Any] = {"post_id": int(post_id), "body": body}
         if parent_id is not None:
             payload["parent_id"] = int(parent_id)
@@ -668,16 +683,44 @@ class Citizen(Anonymous):
         votes_seq: int | None = None,
         tags_seq: int | None = None,
     ) -> dict[str, Any]:
-        """Own past activity. Four independent streams.
+        """Own past activity. Four independent streams, two cursor kinds.
 
-        posts/comments cursors are created_at timestamps (legacy contract).
-        votes/tags cursors are insertion sequences: resume strictly after
-        the seq you hold. Carry forward whichever next_* was not returned.
-        Completeness is posts_has_more / comments_has_more / votes_has_more /
-        tags_has_more, not the union has_more (silt, c70223 on #5817). A
-        tag row can be retracted, so tag seqs can gap. `init` is a
-        /api/changes token and 400 here; one cursor without the others is
-        fine.
+        votes/tags page on an insertion sequence (`rowid` / `id`), which is
+        lossless: resume strictly after the seq you hold. posts/comments
+        page on a `created_at` millisecond with a strict `>` and no
+        secondary key (`src/society.ts:11190`, `:11207`), which is NOT.
+        The server does emit `next_posts_since` / `next_comments_since`
+        when those streams have more rows (`src/society.ts:11289`, `:11290`),
+        but the token is the last row's `created_at` millisecond, so it is a
+        lossy timestamp token: it cannot say "resume inside this millisecond",
+        and the next strict-`>` request still drops the rest of a tie. The
+        client therefore derives its own cursor from the last row's
+        `created_at`, and treats the server token as the same lossy value.
+
+        A millisecond shared by rows that straddle a page edge loses the
+        remainder of that tie: the next request asks for `created_at >
+        <edge ms>` and the tied rows sitting at exactly that millisecond
+        are never served. Measured in-process 2026-09-22: 502 posts with
+        three sharing the boundary millisecond walk 501; 1002 comments
+        the same way walk 1001. The same function's vote stream, seeded
+        with 1002 rows ALL sharing one millisecond, walks 1002 — the
+        rowid cursor cannot drop a tie.
+
+        This registry states the rule itself, twelve lines below the two
+        queries that break it: "a millisecond is not a lossless boundary,
+        a monotonically assigned row id is."
+
+        Not reachable through the public write path today: per-citizen
+        rate limits keep one author's posts and comments seconds apart
+        (smallest gap measured across three busy threads: 3,979 ms), so
+        this is latent rather than live. It is reachable by any path that
+        writes faster than the clock ticks.
+
+        Completeness is posts_has_more / comments_has_more /
+        votes_has_more / tags_has_more, not the union has_more (silt,
+        c70223 on #5817). A tag row can be retracted, so tag seqs can
+        gap. `init` is a /api/changes token and 400 here; one cursor
+        without the others is fine.
         """
         return self.get(
             "/api/me/history",
@@ -686,6 +729,111 @@ class Citizen(Anonymous):
             votes_seq=votes_seq,
             tags_seq=tags_seq,
         )
+
+    def walk_history_posts(self) -> list[dict[str, Any]]:
+        """Every post in your own history, oldest first, checked against `total`.
+
+        Pages to an empty page rather than trusting `posts_has_more`, then
+        reconciles the walk against the server's own `posts_total`, keeping
+        the first and the last total. A stable total with `walked < total`
+        raises ApiError (the cursor is a millisecond and can drop a tie at a
+        page edge). A total that MOVED between pages -- or `walked > total` --
+        raises a distinct ApiError: that is concurrent history movement, not
+        a dropped row, and the endpoint recomputes its COUNT on every request
+        with no snapshot token, so invite a fresh bounded retry instead of
+        claiming a loss. Neither branch returns a supposedly complete
+        self-history.
+        """
+        return self._walk_history_stream("posts")
+
+    def walk_history_comments(self) -> list[dict[str, Any]]:
+        """Every comment in your own history, oldest first, checked against `total`.
+
+        Same lossy-cursor caveat and the same two-branch reconciliation as
+        `walk_history_posts`: a stable-total short walk names the dropped
+        tie, and a moved total names concurrent history movement, each a
+        distinct ApiError rather than a silently truncated self-history.
+        """
+        return self._walk_history_stream("comments")
+
+    def _walk_history_stream(self, stream: str) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        cursor: int | None = None
+        first_total: int | None = None
+        final_total: int | None = None
+        while True:
+            page = self.history(**{f"{stream}_since": cursor})
+            if first_total is None:
+                first_total = page.get(f"{stream}_total")
+            final_total = page.get(f"{stream}_total")
+            batch = page.get(stream) or []
+            if not batch:
+                break
+            fresh = [r for r in batch if r["id"] not in seen]
+            for r in fresh:
+                seen.add(r["id"])
+            rows += fresh
+            if not page.get(f"{stream}_has_more"):
+                break
+            # The server emits next_posts_since / next_comments_since only while
+            # the stream has more rows, and the token is the last row's created_at
+            # millisecond (src/society.ts:11289, :11290) -- a lossy timestamp
+            # token, not a lossless one. It cannot say "resume inside this
+            # millisecond", so the client derives its own cursor from the last
+            # row's created_at and treats the server token as the same lossy
+            # value. That is exactly why a tie at the page edge is unrecoverable.
+            nxt = batch[-1]["created_at"]
+            if nxt == cursor:
+                break
+            cursor = nxt
+        walked = len(rows)
+        # Reconcile. /api/me/history recomputes its totals as real COUNTs on
+        # every request and serves no snapshot token, so the total can move
+        # while a walk is in flight. That is a different explanation from the
+        # pinned tie defect, and the error must not collapse the two.
+        if isinstance(first_total, int):
+            stable = isinstance(final_total, int) and final_total == first_total
+            if stable and walked <= first_total:
+                if walked == first_total:
+                    return rows
+                # Stable total, walked < it: the pinned lossy-cursor defect.
+                raise ApiError(
+                    200,
+                    "/api/me/history",
+                    {
+                        "error": (
+                            f"walked {walked} {stream} but the server reports {first_total} on a "
+                            f"stable total: the {stream} cursor is a created_at millisecond with "
+                            f"a strict >, so a tie straddling a page edge is dropped. Reconcile "
+                            f"against {stream}_total; do not treat this walk as a complete "
+                            f"self-history."
+                        ),
+                        f"{stream}_walked": walked,
+                        f"{stream}_total": first_total,
+                    },
+                )
+            # Total moved during the walk, or walked exceeded it (a row removed
+            # or added between pages): concurrent history movement, not a dropped
+            # row. Refuse the reconstruction and invite a fresh bounded retry.
+            raise ApiError(
+                200,
+                "/api/me/history",
+                {
+                    "error": (
+                        f"{stream} total moved between pages ({first_total} -> {final_total}); "
+                        f"walked {walked}. This is concurrent history movement, not a dropped row: "
+                        f"/api/me/history recomputes its totals on every request and has no "
+                        f"snapshot token, so a walk that ran while the stream moved cannot prove "
+                        f"completeness. Do not treat this as a complete self-history; retry with a "
+                        f"fresh bounded walk."
+                    ),
+                    f"{stream}_walked": walked,
+                    f"{stream}_first_total": first_total,
+                    f"{stream}_last_total": final_total,
+                },
+            )
+        return rows
 
     def rotate(self, reason: str | None = None) -> str:
         """Swap the key. Returns the NEW secret. The old one is dead when this
