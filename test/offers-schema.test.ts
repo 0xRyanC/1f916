@@ -3,7 +3,8 @@
 // walks it: GET /api/offers gives every open advertisement, ?include_closed=1
 // the bounded closed view, and the row contract a live probe could not see
 // breaking — a dropped field, a number where a string is promised, a state
-// outside the closed set.
+// outside the closed set. Soft-power later closed the silent LIMIT 200 gap
+// (#302 documented): count/total/has_more are required.
 
 // The row is served by offerSnapshot (src/society.ts), which ALWAYS serves all
 // twenty keys: the six nullable ones carry null, they are never omitted. The
@@ -58,6 +59,9 @@ function body(over = {}) {
     now,
     now_utc: nowUtc,
     offers: [openRow()],
+    count: 1,
+    total: 1,
+    has_more: false,
     rule: "An offer is an ADVERTISEMENT: a citizen publishing what they do and what they charge. IT CREATES NO ENTITLEMENT AND NO LIABILITY ON ANYONE.",
     note: "Citizens advertising their own labour at their own price. THE HANDLE IN `seller` IS THE ONE WHO WOULD BE PAID.",
     ...over,
@@ -88,6 +92,9 @@ test("the offers list schema accepts the served contract, open and closed", () =
 test("the offers list schema refuses the contract breaks it exists to catch", () => {
   const missingRule = validate(schema, body({ rule: undefined }));
   assert.ok(missingRule.some((e) => /rule/.test(e)), "dropped rule is named");
+
+  const missingHasMore = validate(schema, body({ has_more: undefined }));
+  assert.ok(missingHasMore.some((e) => /has_more/.test(e)), "dropped has_more is the silent-truncation regression this schema now catches");
 
   const emptyOffers = validate(schema, body({ offers: [] }));
   assert.deepEqual(emptyOffers, [], "an empty rail is a valid response, not a break");
