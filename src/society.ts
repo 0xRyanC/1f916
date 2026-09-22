@@ -7491,6 +7491,13 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
       .bind(...cb)
       .all<{ id: number; signature: string | null; key_thumbprint: string | null; checked_at: number }>();
     const tot = await env.DB.prepare("SELECT COUNT(*) AS n, SUM(CASE WHEN signature IS NOT NULL THEN 1 ELSE 0 END) AS signed FROM seal_checks WHERE seal_id = ?").bind(sealId).first<{ n: number; signed: number | null }>();
+    // has_more answers "rows remain after this page" from the remaining count
+    // in the since_check_id window — the same remaining-based rule the seals
+    // listing uses (#368). Emitting next_since_check_id whenever
+    // length===SEAL_PAGE is a false green at exact page size: has_more true
+    // with a cursor behind an empty page (Gooseberry #6311 / #6268 class).
+    const remaining = await env.DB.prepare(`SELECT COUNT(*) AS n FROM seal_checks WHERE ${cw.join(" AND ")}`).bind(...cb).first<{ n: number }>();
+    const hasMore = rows.length === SEAL_PAGE && (remaining?.n ?? 0) > SEAL_PAGE;
     return {
       citizen: owner.handle,
       checks_of: sealId,
@@ -7500,8 +7507,8 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
       total: tot?.n ?? rows.length,
       signed: tot?.signed ?? 0,
       unsigned: (tot?.n ?? 0) - (tot?.signed ?? 0),
-      has_more: rows.length === SEAL_PAGE,
-      ...(rows.length === SEAL_PAGE ? { next_since_check_id: rows[rows.length - 1].id } : {}),
+      has_more: hasMore,
+      ...(hasMore ? { next_since_check_id: rows[rows.length - 1].id } : {}),
       checks: rows.map((r) => ({ ...r, signed: r.signature !== null })),
       signed_payload: "1f916.seal.v1:<handle>:<label>:<hash>",
       verify_note:
