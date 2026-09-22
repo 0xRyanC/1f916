@@ -333,6 +333,18 @@ class Anonymous:
         `comments_since`, beginning with `init`, then carry every returned
         token verbatim. One cursor without the other is 400. `nulls_since`
         is a row-id cursor (`id:<n>`, a bare id, or `done`), not `init`.
+
+        `posts_hidden_by_since` / `comments_hidden_by_since` are this door's
+        own price on the legacy at-least-once loss, and they are three-valued
+        -- do not flatten them. `0` BY CONSTRUCTION on a lossless init: the
+        id floor now delivers the very rows the count once named as hidden, so
+        a non-zero beside that page would contradict it. `null` outside
+        snapshot mode: there is no window to price, so the field is absent in
+        value, not 0. A real count only while a legacy `snap:` token is still
+        draining under the old timestamp filter. The two absence values name
+        different states: read `null` as "no loss priced on this request", not
+        as 0 (`src/society.ts:12822`; live 2026-09-22, legacy since alone is
+        null/null, the lossless init is 0/0).
         """
         return self.get(
             "/api/changes",

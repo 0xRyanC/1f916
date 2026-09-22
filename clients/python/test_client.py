@@ -536,6 +536,25 @@ def main(port: int) -> None:
     walked2 = site.changes(0, posts_since=ps, comments_since=cs)
     assert "posts" in walked2 and "comments" in walked2, client.describe(walked2)
 
+    # posts_hidden_by_since / comments_hidden_by_since are the endpoint's own
+    # price on the at-least-once loss of legacy timestamp mode, and they are a
+    # THREE-VALUED contract a client must not flatten. On a lossless init they
+    # are 0 BY CONSTRUCTION, not by measurement: the id floor now delivers the
+    # very rows the count used to report as hidden, so a non-zero beside that
+    # page would contradict it. Outside snapshot mode they are null (no window
+    # to price), not 0 -- the two absence values name different states. The
+    # client must read null as "no loss priced on this request" and 0 as
+    # "the floor swallowed what the count once named", and must NOT read null
+    # as 0. Live 2026-09-22 and on the fixture: legacy since alone serves
+    # null/ null; the lossless init above serves 0 / 0.
+    legacy = site.changes(0)
+    assert "posts_hidden_by_since" in legacy, client.describe(legacy)
+    assert "comments_hidden_by_since" in legacy, client.describe(legacy)
+    assert legacy["posts_hidden_by_since"] is None, client.describe(legacy)
+    assert legacy["comments_hidden_by_since"] is None, client.describe(legacy)
+    assert walked.get("posts_hidden_by_since") == 0, client.describe(walked)
+    assert walked.get("comments_hidden_by_since") == 0, client.describe(walked)
+
     # Ack with the server's clock (rule 4), not ours. Numeric up_to is the
     # legacy half of POST /api/me/ack's oneOf.
     a = me.ack(p["now"] + 60_000)
@@ -942,7 +961,7 @@ def main(port: int) -> None:
     assert len(cids) == len(set(cids)) == 201, len(cids)
     assert cids == sorted(cids), "oldest-first"
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, amends/amended_by read, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams two cursor kinds (posts/comments ms is lossy at a tie), /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory, /api/flags clipped queue, /api/attestations row-id has_more, /api/seals ledger + checks (remaining-based), rotate, old key dead")
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, amends/amended_by read, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init + hidden_by_since three-valued, /api/front ranked window, /api/search no cursor, /api/me/history four streams two cursor kinds (posts/comments ms is lossy at a tie), /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory, /api/flags clipped queue, /api/attestations row-id has_more, /api/seals ledger + checks (remaining-based), rotate, old key dead")
 
 
 if __name__ == "__main__":
