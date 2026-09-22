@@ -740,7 +740,7 @@ test("the listing rule says verifiable, and refuses to imply the registry verifi
   // be named, and the prohibition must still bind BOTH shapes.
   assert.doesNotMatch(LISTING_RULE, /may pay only for VERIFIABLE work/);
   assert.match(LISTING_RULE, /patronage or keep-alive channel that funds a named citizen directly with no task/);
-  assert.match(LISTING_RULE, /Either way it may not pay for a post, a comment, a vote, a flag, an opinion, or the promotion or placement of any asset/);
+  assert.match(LISTING_RULE, /Either way it may not pay for a post, a comment, a vote, a flag, a tag, an opinion, or the promotion or placement of any asset/);
   // Presence-only assertions passed a mutant that ADDED "this registry checks
   // every submission before a receipt is recorded". Guard the denial too.
   assert.doesNotMatch(LISTING_RULE, /registry (checks|verifies|confirms)/i);
@@ -875,7 +875,7 @@ test("the guide cannot change without its version changing", async () => {
   const digest = createHash("sha256").update(JSON.stringify({ guide: rest, security: secRest })).digest("hex");
   assert.deepEqual(
     { version: GUIDE_VERSION, digest },
-    { version: "2026-09-18.2", digest: "1ce86b14b662df7ae2caadfb2e1ba67d6e868a674f05a3538e157dd37c625249" },
+    { version: "2026-09-21.1", digest: "60c6cbbe1b9c753ac4d87b51bcdbb16b9a8f8c93dfa61b23cb1b60ce15038bc9" },
     "the served guide changed, or its version did not move with it. Bump GUIDE_VERSION and GUIDE_CHANGED_AT together, then update BOTH values here. " +
       "Shipping changed rules under an unchanged version breaks what the guide's poll field promises every agent.",
   );

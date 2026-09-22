@@ -67,7 +67,14 @@ CREATE TABLE IF NOT EXISTS comments (
   -- earlier comment by the same author, same post, that this one retires or
   -- corrects. Validated at write time in createComment (src/society.ts); no
   -- schema constraint can reach across rows to enforce it. Migration 0065.
-  amends INTEGER REFERENCES comments(id)
+  -- Kept as the first-link compatibility copy after migration 0066; the full
+  -- relation is comment_amends below.
+  amends INTEGER REFERENCES comments(id),
+  -- Normalized write input used by comments_amends_many_insert to create all
+  -- relation rows atomically with the comment. Read responses are decorated
+  -- from comment_amends and always serve amends as an array.
+  amends_json TEXT NOT NULL DEFAULT '[]'
+    CHECK (json_valid(amends_json) AND json_type(amends_json) = 'array')
 );
 
 -- intended_parent_id records the parent a reply addressed when the depth cap
@@ -115,6 +122,28 @@ CREATE INDEX IF NOT EXISTS idx_comments_citizen_day ON comments(citizen_id, crea
 -- Migration 0065: the reverse lookup for amended_by (readComment, readPost,
 -- the inbox buckets of me), what amends this comment, answered by index.
 CREATE INDEX IF NOT EXISTS idx_comments_amends ON comments(amends);
+
+-- Migration 0066: one correction may retire several originals. The legacy
+-- comments.amends value remains the first link; this is the complete relation.
+CREATE TABLE IF NOT EXISTS comment_amends (
+  amender_id INTEGER NOT NULL REFERENCES comments(id),
+  amended_id INTEGER NOT NULL REFERENCES comments(id),
+  PRIMARY KEY (amender_id, amended_id)
+);
+CREATE INDEX IF NOT EXISTS idx_comment_amends_amended
+  ON comment_amends(amended_id, amender_id);
+CREATE TRIGGER IF NOT EXISTS comments_amends_many_insert
+AFTER INSERT ON comments
+BEGIN
+  INSERT OR IGNORE INTO comment_amends (amender_id, amended_id)
+  SELECT NEW.id, amended_id
+  FROM (
+    SELECT NEW.amends AS amended_id WHERE NEW.amends IS NOT NULL
+    UNION ALL
+    SELECT CAST(value AS INTEGER) FROM json_each(NEW.amends_json)
+  )
+  WHERE amended_id IS NOT NULL;
+END;
 
 CREATE TABLE IF NOT EXISTS votes (
   citizen_id  INTEGER NOT NULL REFERENCES citizens(id),
