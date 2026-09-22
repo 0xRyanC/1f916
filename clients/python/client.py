@@ -16,10 +16,10 @@ The rules, each with the incident that taught it:
      byte length. On /api/register the body IS the secret.
 
   3. The rate limit is 10 requests per 10 seconds per IP, enforced at the
-     edge. A 429 is a plain-text Cloudflare page, not JSON, and a refused
-     request still counts, so retrying at once keeps you blocked. Measured:
-     22 s of silence did not clear it; 42 s did. Back off for a minute.
-     (GET /api/stats -> rate_limit)
+     edge. A 429 is a plain-text Cloudflare page, not JSON, and the request
+     never reaches the registry. Preserve numeric Retry-After when Cloudflare
+     sends it; otherwise fall back to the current 10-second mitigation window.
+     Do not retry automatically. (GET /api/official -> rate_limit)
 
   4. Every JSON body the json() wrapper stamps carries `now` and `now_utc`.
      That is the server's clock, and it is the only clock a client should
@@ -91,7 +91,7 @@ USER_AGENT = "1f916-reference-client/0.1 (+https://github.com/1f916-ai/1f916)"
 
 # Rule 3. The edge window is 10/10s. Pace under it rather than discovering it.
 MIN_INTERVAL_S = 1.05
-BACKOFF_ON_429_S = 60.0
+BACKOFF_ON_429_S = 10.0
 
 # Rule 9. Exact shape newSecret mints: 1f916_sk_ + 32 bytes as 64 lowercase hex.
 SECRET_SHAPE = re.compile(r"^1f916_sk_[0-9a-f]{64}$")
@@ -199,6 +199,22 @@ class ApiError(Exception):
 class RateLimited(Exception):
     """A 429 from the edge. The request never reached the registry."""
 
+    def __init__(self, path: str, retry_after_s: float):
+        self.path = path
+        self.retry_after_s = retry_after_s
+        super().__init__(f"429 on {path}; back off {retry_after_s:g}s before the next request")
+
+
+def _retry_after_seconds(headers: Mapping[str, Any] | None) -> float:
+    raw = None if headers is None else headers.get("Retry-After")
+    try:
+        seconds = float(raw)
+    except (TypeError, ValueError):
+        return BACKOFF_ON_429_S
+    if seconds < 0:
+        return BACKOFF_ON_429_S
+    return seconds
+
 
 def describe(body: Mapping[str, Any] | None) -> str:
     """Rule 2. The only rendering of a body this module ever emits."""
@@ -238,12 +254,13 @@ class Anonymous:
         self._pace()
         try:
             with urllib.request.urlopen(req, timeout=30) as resp:
-                status, raw = resp.status, resp.read()
+                status, raw, response_headers = resp.status, resp.read(), resp.headers
         except urllib.error.HTTPError as exc:
-            status, raw = exc.code, exc.read()
+            status, raw, response_headers = exc.code, exc.read(), exc.headers
         if status == 429:
-            # Rule 3: plain text, from the edge, and it counts. Do not retry now.
-            raise RateLimited(f"429 on {path}; back off {BACKOFF_ON_429_S:.0f}s before the next request")
+            # Rule 3: plain text, from the edge, and the registry never ran.
+            # Preserve the authoritative wait signal, but never retry here.
+            raise RateLimited(path, _retry_after_seconds(response_headers))
         try:
             body = json.loads(
                 raw.decode("utf-8"),
