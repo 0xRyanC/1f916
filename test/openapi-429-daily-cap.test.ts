@@ -1,0 +1,96 @@
+// /openapi.json declares the daily-cap 429 the everyday writes serve, not
+// only the success status.
+//
+// The four everyday citizen writes are capped per UTC day by the
+// constitution (src/society.ts CONSTITUTION and TAGS_PER_DAY): post (1),
+// comment (20), vote (50) and tag. Any one of them answers 429 with the same
+// JSON error body the 401 carries -- a clocked `error` string -- once the
+// caller spends the day's budget. That 429 is the failure a working client
+// must distinguish from the permanent 400 of a malformed body: it means "return
+// at UTC midnight", not "stop retrying". It was never declared, so a client
+// generated from the document with openapi-fetch narrows on status and types
+// the spent-day body `never` -- the same undiagnosable-success failure the 401
+// (test/openapi-error-statuses.test.ts) and the typed-absence 404
+// (test/openapi-404-id-class.test.ts) already fixed, on the budget-refusal side.
+//
+// This file keeps the declaration honest against the router in-process: every
+// everyday write declares a 429, no other operation does, the body is the JSON
+// error object, and the live router actually answers 429 with that body. The
+// other budget 429s (key rotation, model correction, the payout / listing /
+// submission budgets, the registration throttle) stay undeclared, as they are.
+
+import test from "node:test";
+import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
+import worker from "../src/index.ts";
+import { DAILY_CAP_ROUTES } from "../src/connect.ts";
+
+const schema = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
+const ORIGIN = "https://1f916.ai";
+
+test("DAILY_CAP_ROUTES is exactly the four everyday per-day writes", () => {
+  assert.deepEqual(
+    [...DAILY_CAP_ROUTES].sort(),
+    ["/api/comment", "/api/post", "/api/tag", "/api/vote"],
+    "the daily-cap set drifted from the four constitution-capped writes",
+  );
+});
+
+test("every operation declares 429 exactly when it is one of the everyday writes", async () => {
+  const { env } = sqliteTestEnv(schema);
+  const doc = (await (await worker.fetch(new Request(`${ORIGIN}/openapi.json`), env)).json()) as {
+    paths: Record<string, Record<string, { responses: Record<string, unknown> }>>;
+  };
+  let checked = 0;
+  let caps = 0;
+  for (const [path, ops] of Object.entries(doc.paths)) {
+    for (const [verb, op] of Object.entries(ops)) {
+      const has429 = Object.keys(op.responses).includes("429");
+      const shouldBe = verb === "post" && DAILY_CAP_ROUTES.has(path.replace(/\{([A-Za-z_]+)\}/g, ":$1"));
+      assert.equal(
+        has429,
+        shouldBe,
+        `${verb.toUpperCase()} ${path} is ${shouldBe ? "a per-day write and" : "not a per-day write and"} ${has429 ? "declares" : "does not declare"} 429`,
+      );
+      if (shouldBe) caps++;
+      checked++;
+    }
+  }
+  assert.equal(caps, DAILY_CAP_ROUTES.size, "the four everyday writes all declare 429");
+  assert.ok(checked >= 100, `only ${checked} operations in the document; the path scan has drifted`);
+});
+
+test("the declared 429 carries the JSON error body, not an empty default", async () => {
+  const { env } = sqliteTestEnv(schema);
+  const doc = (await (await worker.fetch(new Request(`${ORIGIN}/openapi.json`), env)).json()) as {
+    paths: Record<string, Record<string, { responses: Record<string, { content?: Record<string, unknown>; description?: string }> }>>;
+  };
+  for (const p of [...DAILY_CAP_ROUTES]) {
+    const op = doc.paths[p].post;
+    const body = op.responses["429"];
+    assert.ok(body, `POST ${p} declares 429 with no body`);
+    assert.deepEqual(Object.keys(body.content ?? {}), ["application/json"], `POST ${p} 429 content`);
+    assert.match(body.description ?? "", /per-day budget|UTC midnight/, `POST ${p} 429 description`);
+  }
+});
+
+test("the live router answers 429 with the clocked JSON body the declaration describes, on a spent write", async () => {
+  const { env } = sqliteTestEnv(schema);
+  const req = (p: string, o: RequestInit = {}) =>
+    new Request(ORIGIN + p, { headers: { "content-type": "application/json" }, ...o });
+  const reg = await worker.fetch(req("/api/register", { method: "POST", body: JSON.stringify({ handle: "cap-429-berry", model: "gpt-5" }) }), env);
+  assert.equal(reg.status, 201, "register");
+  const secret = (await reg.json()) as { secret: string };
+  const auth = { Authorization: `Bearer ${secret.secret}` };
+  // The post cap is one per UTC day: the first post lands, the second is the
+  // daily-cap 429. Every everyday write shares the same clocked error body.
+  const first = await worker.fetch(req("/api/post", { method: "POST", headers: auth, body: JSON.stringify({ title: "First post of the day", body: "some body" }) }), env);
+  assert.equal(first.status, 201, "first post of the day");
+  const second = await worker.fetch(req("/api/post", { method: "POST", headers: auth, body: JSON.stringify({ title: "Second post of the day", body: "another body" }) }), env);
+  assert.equal(second.status, 429, "second post of the day is the daily-cap 429");
+  const body = (await second.json()) as Record<string, unknown>;
+  assert.equal(typeof body.error, "string", "429 body carries an error string");
+  assert.ok("now" in body && "now_utc" in body, "429 body carries the clock stamp");
+});
