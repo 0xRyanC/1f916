@@ -10,7 +10,7 @@ import { DatabaseSync } from "node:sqlite";
 import { generateKeyPairSync, sign as edSign } from "node:crypto";
 import { attestationPayload, jcs, signedMessage, validateAttestation } from "../src/attestations.ts";
 import { b64urlEncode } from "../src/keys.ts";
-import { SocietyError, listAttestations, type Env } from "../src/society.ts";
+import { SocietyError, ATTESTATION_PAGE, listAttestations, type Env } from "../src/society.ts";
 
 class D1Statement {
   private args: unknown[] = [];
@@ -236,4 +236,51 @@ test("null target_attestation_id and withdraw_when are served as keys, matching 
   assert.ok("withdraw_when" in row, "withdraw_when is a key on the served row even when null");
   assert.equal(row.target_attestation_id, null);
   assert.equal(row.withdraw_when, null);
+});
+
+// listAttestations pages oldest-first at ATTESTATION_PAGE (200) and answers
+// has_more on whether rows REMAIN, not on whether the page came back full. A
+// full page over the whole set is the last one: it must say has_more false and
+// carry no next_since_id, so a reader who pages until the cursor disappears
+// stops here instead of following a cursor into an empty page. Same predicate
+// the seals and listings doors use (page full AND rows remain).
+async function seedAttestations(db: DatabaseSync, n: number) {
+  for (let i = 0; i < n; i++) {
+    db.prepare(
+      "INSERT INTO attestations (class, issuer_id, subject_id, claim, evidence, payload, payload_hash, signature, issued_at) VALUES ('replicated-total', 1, 2, 'c', '[]', 'p', ?, NULL, 0)",
+    ).run(`hash-${i}`);
+  }
+}
+
+test("attestations: a full page with no rows left says has_more false, no cursor (the boundary)", async () => {
+  const { env, db } = makeEnv();
+  await seedAttestations(db, ATTESTATION_PAGE);
+  const out = await listAttestations(env, null, null, null);
+  assert.equal(out.count, ATTESTATION_PAGE);
+  assert.equal(out.attestations.length, ATTESTATION_PAGE);
+  assert.equal(out.has_more, false, "a full page over the whole set is not 'more'");
+  assert.ok(!("next_since_id" in out), "no cursor to follow when nothing remains");
+});
+
+test("attestations: one row past the page says has_more true with a cursor that follows", async () => {
+  const { env, db } = makeEnv();
+  await seedAttestations(db, ATTESTATION_PAGE + 1);
+  const out = await listAttestations(env, null, null, null);
+  assert.equal(out.count, ATTESTATION_PAGE);
+  assert.equal(out.has_more, true);
+  assert.equal(out.next_since_id, ATTESTATION_PAGE);
+  // Following the cursor returns exactly the one row it pointed at.
+  const next = await listAttestations(env, null, null, null, ATTESTATION_PAGE);
+  assert.equal(next.count, 1);
+  assert.equal(next.has_more, false);
+});
+
+test("attestations: a short final page after paged says has_more false", async () => {
+  const { env, db } = makeEnv();
+  await seedAttestations(db, ATTESTATION_PAGE + 7);
+  const p1 = await listAttestations(env, null, null, null);
+  assert.equal(p1.has_more, true);
+  const p2 = await listAttestations(env, null, null, null, ATTESTATION_PAGE);
+  assert.equal(p2.count, 7, "the tail is 7 rows, short of the page cap");
+  assert.equal(p2.has_more, false, "7 < ATTESTATION_PAGE already proves nothing remains");
 });

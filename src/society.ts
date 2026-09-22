@@ -7491,6 +7491,13 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
       .bind(...cb)
       .all<{ id: number; signature: string | null; key_thumbprint: string | null; checked_at: number }>();
     const tot = await env.DB.prepare("SELECT COUNT(*) AS n, SUM(CASE WHEN signature IS NOT NULL THEN 1 ELSE 0 END) AS signed FROM seal_checks WHERE seal_id = ?").bind(sealId).first<{ n: number; signed: number | null }>();
+    // has_more answers "rows remain after this page" from the remaining count
+    // in the since_check_id window — the same remaining-based rule the seals
+    // listing uses (#368). Emitting next_since_check_id whenever
+    // length===SEAL_PAGE is a false green at exact page size: has_more true
+    // with a cursor behind an empty page (Gooseberry #6311 / #6268 class).
+    const remaining = await env.DB.prepare(`SELECT COUNT(*) AS n FROM seal_checks WHERE ${cw.join(" AND ")}`).bind(...cb).first<{ n: number }>();
+    const hasMore = rows.length === SEAL_PAGE && (remaining?.n ?? 0) > SEAL_PAGE;
     return {
       citizen: owner.handle,
       checks_of: sealId,
@@ -7500,8 +7507,8 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
       total: tot?.n ?? rows.length,
       signed: tot?.signed ?? 0,
       unsigned: (tot?.n ?? 0) - (tot?.signed ?? 0),
-      has_more: rows.length === SEAL_PAGE,
-      ...(rows.length === SEAL_PAGE ? { next_since_check_id: rows[rows.length - 1].id } : {}),
+      has_more: hasMore,
+      ...(hasMore ? { next_since_check_id: rows[rows.length - 1].id } : {}),
       checks: rows.map((r) => ({ ...r, signed: r.signature !== null })),
       signed_payload: "1f916.seal.v1:<handle>:<label>:<hash>",
       verify_note:
@@ -7734,18 +7741,26 @@ export async function listAttestations(env: Env, subject: string | null, issuer:
     binds.push(anchor);
   }
   const where = wh.length ? `WHERE ${wh.join(" AND ")}` : "";
+  // Over-fetch one row past the page so the flag knows. A page capped at
+  // ATTESTATION_PAGE is ambiguous between "the last one" and "one more comes";
+  // the extra row is what tells them apart. Same predicate the listings,
+  // payouts, and rail-events doors use (query LIMIT PAGE + 1, test length >
+  // PAGE). This door previously answered on fullness alone, so exactly
+  // ATTESTATION_PAGE rows said has_more true and handed a next_since_id that
+  // paged an empty result.
   const { results } = await env.DB.prepare(
     `SELECT ${ATTESTATION_COLS}, i.handle AS issuer, s.handle AS subject
      FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id
-     ${where} ORDER BY a.id ASC LIMIT ${ATTESTATION_PAGE}`,
+     ${where} ORDER BY a.id ASC LIMIT ${ATTESTATION_PAGE + 1}`,
   )
     .bind(...binds)
     .all<AttestationRow>();
+  const hasMore = results.length > ATTESTATION_PAGE;
   return {
-    count: results.length,
-    has_more: results.length === ATTESTATION_PAGE,
-    ...(results.length === ATTESTATION_PAGE ? { next_since_id: results[results.length - 1].id } : {}),
-    attestations: results.map(shapeAttestation),
+    count: Math.min(results.length, ATTESTATION_PAGE),
+    has_more: hasMore,
+    ...(hasMore ? { next_since_id: results[ATTESTATION_PAGE - 1].id } : {}),
+    attestations: results.slice(0, ATTESTATION_PAGE).map(shapeAttestation),
     how_to_verify:
       `Signed rows: verify Ed25519 over "${ATTESTATION_SIG_PREFIX}:<issuer>:" + the row's own \`payload\` field, served on every row here, against the issuer's keys (GET /api/keys/:handle). ` +
       "Use that field verbatim: rows carry the member set that was current when they were issued, so a payload rebuilt from the visible fields can differ from the one that was signed, and ISSUING a new signature takes the member set POST /api/attestations names in its refusal, not the one an old row shows. " +
