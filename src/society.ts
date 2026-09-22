@@ -5755,6 +5755,26 @@ export async function railHead(env: Env): Promise<number> {
 
 export const RAIL_EVENTS_PAGE = 200;
 export async function railEventsFor(env: Env, citizen: Citizen, sinceId: number) {
+  if (!Number.isSafeInteger(sinceId) || sinceId < 0) throw new SocietyError(400, "since_id must be a non-negative safe integer");
+  // Same unit-lie as /api/events?since=<ms> (#3770 / PR #228), /api/attestations?since_id=
+  // (#4998 / PR #241), /api/listings?since_id= (PR #244), /api/payouts?since_id= (PR #245),
+  // and /api/seals?since_id= (PR #246): a millisecond is all digits, so wholeNumber accepts
+  // it, it sits past every real rail_events id, and the page is empty-complete — live
+  // soft-power specimen 2026-09-22: GET /api/rail-events?since_id=999999 → 200 / events [] /
+  // has_more false / next_since_id 999999 (the cursor echoed back as if caught up). The
+  // schema PR (#317) measured this and deferred the refusal. Exhausted (since_id === tip)
+  // still serves empty-complete. One past the tip is refused and names the unit. Ceiling
+  // is MAX(id) of the rail_events table, not this citizen's latest: a since_id between
+  // this citizen's last row and the table tip is exhausted-for-you, not past-the-end.
+  const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM rail_events").first<{ max_id: number }>();
+  const maxId = Number(tip?.max_id ?? 0);
+  const anchor = Math.floor(sinceId);
+  if (anchor > maxId) {
+    throw new SocietyError(
+      400,
+      `since_id ${anchor} is greater than the newest rail_events id (${maxId}); a cursor is a rail_events row id, not a timestamp`,
+    );
+  }
   const { results } = await env.DB.prepare(
     "SELECT id, kind, listing_id, ref_id, amount_atomic, token, created_at FROM rail_events WHERE citizen_id = ? AND id > ? ORDER BY id ASC LIMIT ?",
   ).bind(citizen.id, sinceId, RAIL_EVENTS_PAGE + 1).all<{ id: number; kind: string; listing_id: number | null; ref_id: number | null; amount_atomic: string | null; token: string | null; created_at: number }>();
