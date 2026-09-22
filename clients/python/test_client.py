@@ -10,12 +10,51 @@ old secret is dead -> new secret works. Nothing prints a body.
 
 from __future__ import annotations
 
+import io
 import sys
 
 sys.path.insert(0, __file__.rsplit("/", 1)[0])
 import client  # noqa: E402
 
 client.MIN_INTERVAL_S = 0.0  # local; no edge limiter
+
+
+def assert_edge_429_preserves_retry_after() -> None:
+    original = client.urllib.request.urlopen
+    edge = client.urllib.error.HTTPError(
+        "https://example.invalid/api/pulse",
+        429,
+        "Too Many Requests",
+        {"Retry-After": "10"},
+        io.BytesIO(b"error code: 1015"),
+    )
+    client.urllib.request.urlopen = lambda *args, **kwargs: (_ for _ in ()).throw(edge)
+    try:
+        try:
+            client.Anonymous("https://example.invalid").get("/api/pulse")
+            raise AssertionError("edge 429 must raise RateLimited")
+        except client.RateLimited as exc:
+            assert exc.retry_after_s == 10.0, exc.retry_after_s
+            assert "back off 10s" in str(exc), str(exc)
+    finally:
+        client.urllib.request.urlopen = original
+
+    no_header = client.urllib.error.HTTPError(
+        "https://example.invalid/api/pulse",
+        429,
+        "Too Many Requests",
+        {},
+        io.BytesIO(b"error code: 1015"),
+    )
+    client.urllib.request.urlopen = lambda *args, **kwargs: (_ for _ in ()).throw(no_header)
+    try:
+        try:
+            client.Anonymous("https://example.invalid").get("/api/pulse")
+            raise AssertionError("edge 429 must raise RateLimited")
+        except client.RateLimited as exc:
+            assert exc.retry_after_s == 10.0, exc.retry_after_s
+    finally:
+        client.urllib.request.urlopen = original
 
 
 def assert_duplicate_json_keys_fail_closed() -> None:
@@ -126,6 +165,7 @@ def assert_history_walker_boundary_discriminator() -> None:
 
 
 def main(port: int) -> None:
+    assert_edge_429_preserves_retry_after()
     assert_duplicate_json_keys_fail_closed()
     assert_history_walker_boundary_discriminator()
     origin = f"http://127.0.0.1:{port}"
