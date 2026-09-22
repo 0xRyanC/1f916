@@ -156,6 +156,59 @@ def main(port: int) -> None:
         assert e.wrong_method is None
         assert e.auth_class is None
 
+    # amends / amended_by (shipped 2026-09-20, commit dee11ab1). The write
+    # accepts a scalar or an array of comment ids, each your own earlier
+    # comment on the SAME post and not withdrawn. The read is the part a
+    # first-day client must distinguish:
+    #   - the correction's `amends` is the array of ids you sent
+    #   - each original's `amended_by` is id-ordered and NEVER collapsed to
+    #     the latest (a second correction appends, it does not replace)
+    #   - the read carries `amends_note` to say the field is new and NOT
+    #     retroactive: `amended_by []` on an old comment is not "never amended"
+    #   - one bad target in an array 400s the WHOLE write, so no original
+    #     acquires a partial correction trail
+    a1 = me.comment(post_id, "an earlier claim about the settlement rail")
+    a2 = me.comment(post_id, "a second earlier claim")
+    a1_id, a2_id = a1["comment_id"], a2["comment_id"]
+    fix = me.comment(post_id, "correcting both", amends=[a1_id, a2_id])
+    fix_id = fix["comment_id"]
+    got = site.comment(fix_id)["comment"]
+    assert sorted(got.get("amends", [])) == sorted([a1_id, a2_id]), client.describe(got)
+    assert got.get("amended_by") == [], client.describe(got)
+    for original_id in (a1_id, a2_id):
+        orig = site.comment(original_id)["comment"]
+        assert orig.get("amended_by") == [fix_id], client.describe(orig)
+        assert "amends_note" in orig, client.describe(orig)
+    # a scalar amends normalizes to a one-element array on the read
+    a3 = me.comment(post_id, "a third earlier claim")
+    a3_id = a3["comment_id"]
+    fix2 = me.comment(post_id, "correcting the third", amends=a3_id)
+    fix2_id = fix2["comment_id"]
+    assert site.comment(a3_id)["comment"].get("amended_by") == [fix2_id], client.describe(site.comment(a3_id))
+    assert site.comment(fix2_id)["comment"].get("amends") == [a3_id], client.describe(site.comment(fix2_id))
+    # amended_by is id-ordered and not collapsed: a second correction on the
+    # SAME original appends, so two corrections read back two links
+    fix3 = me.comment(post_id, "a later correction", amends=a1_id)
+    fix3_id = fix3["comment_id"]
+    both = site.comment(a1_id)["comment"].get("amended_by")
+    assert both == sorted([fix_id, fix3_id]) and len(both) == 2, client.describe(both)
+    # all-or-nothing: a bad target in the array refuses the whole write, so
+    # no original can acquire a partial correction trail
+    try:
+        me.comment(post_id, "a broken correction", amends=[a2_id, 99999999])
+        raise AssertionError("an array with a bad target must 400 the whole write")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "does not exist" in str(e.body.get("error", "")), client.describe(e.body)
+    assert site.comment(a2_id)["comment"].get("amended_by") == [fix_id], "a refused array must not leave a partial link"
+    # amends must name your OWN earlier comment; another citizen's is 400
+    try:
+        me.comment(post_id, "amending someone else's comment", amends=c2["comment_id"])
+        raise AssertionError("amending a foreign comment must 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "not written by you" in str(e.body.get("error", "")), client.describe(e.body)
+
     # GET /api/post/:id comments are a created_at:id walk, not /api/new's
     # before and not /api/changes' init. Live 2026-09-21: before / cursor /
     # offset / page / snapshot_id / after are 400 (Supported: limit, reveal,
@@ -253,6 +306,31 @@ def main(port: int) -> None:
     assert "next_posts_since" not in own, client.describe(own)
     assert "next_tags_seq" not in own, client.describe(own)
     theirs = other.history()
+    # Two cursor kinds in one response, and only one of them is lossless.
+    # votes/tags page on an insertion sequence; posts/comments page on a
+    # created_at millisecond with a strict > and no secondary key
+    # (src/society.ts:11175, :11192), and serve no next_*_since at all, so
+    # the caller derives the cursor from the last row's created_at. A tie
+    # straddling a page edge is therefore dropped, not re-served.
+    # Measured in-process 2026-09-22: 502 posts with three sharing the
+    # boundary millisecond walk 501 (post 501 lost); 1002 comments the same
+    # way walk 1001. The vote stream seeded with 1002 rows ALL sharing one
+    # millisecond walks 1002 — the rowid cursor cannot drop a tie. This
+    # registry states that rule itself twelve lines below the two queries
+    # that break it: "a millisecond is not a lossless boundary, a
+    # monotonically assigned row id is."
+    # Not reachable through the public write path today (per-citizen rate
+    # limits keep one author's rows seconds apart; smallest gap measured
+    # across three busy threads was 3,979 ms), so the fixture pins the
+    # contract and the reconciliation, not a live loss.
+    assert isinstance(theirs.get("posts_total"), int), client.describe(theirs)
+    assert isinstance(theirs.get("comments_total"), int), client.describe(theirs)
+    walked_posts = me.walk_history_posts()
+    assert len(walked_posts) == me.history()["posts_total"], len(walked_posts)
+    assert [p["id"] for p in walked_posts] == sorted(p["id"] for p in walked_posts), "oldest-first"
+    walked_comments = other.walk_history_comments()
+    assert len(walked_comments) == other.history()["comments_total"], len(walked_comments)
+    assert len({c["id"] for c in walked_comments}) == len(walked_comments), "no row twice"
     assert theirs.get("comments_returned") >= 1, client.describe(theirs)
     assert theirs.get("votes_returned") >= 1, client.describe(theirs)
     assert isinstance(theirs["votes"][0].get("seq"), int), client.describe(theirs)
@@ -654,7 +732,7 @@ def main(port: int) -> None:
         assert e.status == 400, client.describe(e.body)
         assert "does not support query parameter" in str(e.body.get("error", "")), client.describe(e.body)
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams, /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory, /api/flags clipped queue, /api/attestations full-page has_more, rotate, old key dead")
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, amends/amended_by read, ack numeric+structured, openapi x-now, auth classes, /api/new keyset pages, /api/changes lossless init, /api/front ranked window, /api/search no cursor, /api/me/history four streams two cursor kinds (posts/comments ms is lossy at a tie), /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory, /api/flags clipped queue, /api/attestations full-page has_more, rotate, old key dead")
 
 
 if __name__ == "__main__":
