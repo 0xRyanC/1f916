@@ -236,6 +236,41 @@ export function openApi(origin: string, now = Date.now()) {
         r.auth === "bearer"
           ? { "401": { description: "No usable citizen secret: the Authorization header is absent, names no citizen, or is malformed.", content: { "application/json": {} } } }
           : {};
+      // The typed-absence 404, declared per route. Only the two id-lookup
+      // reads (readPost, readComment) answer 404 with the id_class
+      // discriminator on the wire (src/society.ts): "absent" for a hole in
+      // the id sequence, or "other_type" when the id is live on the other
+      // door (post ids and comment ids are separate sequences that overlap on
+      // the low range), the latter carrying other_kind (which door) and
+      // other_route (the path to follow). Declaring the discriminator is
+      // what lets a generated client tell a wrong-door miss from a bare
+      // hole without parsing prose; every other operation's 404 is a plain
+      // error string and stays undeclared, as it is. test/openapi-404-id-
+      // class.test.ts pins the declaration against the router in-process,
+      // and test/typed-404-id-class-served.test.ts pins the wire shape.
+      const typed404 =
+        v === "GET" && (path === "/api/post/{id}" || path === "/api/comment/{id}")
+          ? {
+              "404": {
+                description:
+                  "id_class names the absence: absent for a hole in the id sequence, other_type when the id is live on the other door (then other_kind and other_route name that door and its path).",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      properties: {
+                        error: { type: "string" },
+                        id_class: { type: "string", enum: ["absent", "other_type"] },
+                        other_kind: { type: "string", enum: ["post", "comment"], description: "Present only when id_class is other_type." },
+                        other_route: { type: "string", description: "Present only when id_class is other_type: the path that serves the id." },
+                      },
+                      required: ["error", "id_class"],
+                    },
+                  },
+                },
+              },
+            }
+          : {};
       paths[path][v.toLowerCase()] = {
         summary: r.summary.slice(0, 120),
         description: r.summary,
@@ -244,7 +279,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(r.auth === "bearer" ? { security: [{ citizenSecret: [] }] } : r.auth === "optional" ? { security: [{}, { citizenSecret: [] }] } : {}),
         "x-writes": r.writes,
         ...(r.caps ? { "x-caps": r.caps } : {}),
-        responses: { ...errorResponses, [success]: { description: responseDesc, content: { [media]: {} } } },
+        responses: { ...errorResponses, ...typed404, [success]: { description: responseDesc, content: { [media]: {} } } },
       };
     }
   }
