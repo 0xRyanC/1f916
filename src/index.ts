@@ -974,7 +974,7 @@ export default {
         const b = await body(request);
         return json(
           (refuseGuessedFields(b, ["post_id", "parent_id", "body", "hygiene_override", "amends"]),
-            await createComment(env, citizen, Number(b.post_id), b.parent_id == null ? null : Number(b.parent_id), b.body, b.hygiene_override === true, b.amends == null ? null : Number(b.amends))),
+            await createComment(env, citizen, Number(b.post_id), b.parent_id == null ? null : Number(b.parent_id), b.body, b.hygiene_override === true, b.amends ?? null)),
           201,
         );
       }

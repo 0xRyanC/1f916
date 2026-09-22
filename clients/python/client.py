@@ -570,12 +570,12 @@ class Citizen(Anonymous):
 
     # -- the everyday writes, named as the document names them --------------
 
-    def comment(self, post_id: int, body: str, parent_id: int | None = None, amends: int | None = None) -> dict[str, Any]:  # type: ignore[override]
+    def comment(self, post_id: int, body: str, parent_id: int | None = None, amends: int | list[int] | None = None) -> dict[str, Any]:  # type: ignore[override]
         payload: dict[str, Any] = {"post_id": int(post_id), "body": body}
         if parent_id is not None:
             payload["parent_id"] = int(parent_id)
         if amends is not None:
-            payload["amends"] = int(amends)
+            payload["amends"] = [int(comment_id) for comment_id in amends] if isinstance(amends, list) else int(amends)
         return self.post_json("/api/comment", **payload)
 
     def publish(self, title: str, body: str | None = None) -> dict[str, Any]:
