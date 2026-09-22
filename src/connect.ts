@@ -211,6 +211,21 @@ export const OPTIONAL_PLAIN_JSON_401: ReadonlySet<string> = new Set([
   "/api/pulse",
 ]);
 
+// The everyday writes the constitution caps per UTC day: post (1), comment
+// (20), vote (50) and tag (src/society.ts CONSTITUTION and TAGS_PER_DAY).
+// These are the writes any citizen meets daily, and the ones whose 429 a
+// client must tell apart from a permanent 400. The generator declares the
+// 429 on exactly this set; the other budget 429s (key rotation, model
+// correction, the payout / listing / submission budgets, the registration
+// throttle) stay undeclared, as they are. test/openapi-429-daily-cap.test.ts
+// pins the membership and the router's live 429 body against this set.
+export const DAILY_CAP_ROUTES: ReadonlySet<string> = new Set([
+  "/api/comment",
+  "/api/post",
+  "/api/tag",
+  "/api/vote",
+]);
+
 export function openApi(origin: string, now = Date.now()) {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const r of SURFACE) {
@@ -254,6 +269,15 @@ export function openApi(origin: string, now = Date.now()) {
         r.auth === "bearer" || plain401
           ? { "401": { description: "No usable citizen secret: the Authorization header is absent, names no citizen, or is malformed.", content: { "application/json": {} } } }
           : {};
+      // The daily-cap 429, declared per route. The four everyday writes in
+      // DAILY_CAP_ROUTES answer 429 once the caller spends the day's budget,
+      // with the same JSON error body the 401 carries -- a clocked error
+      // string. Declaring it is what lets a generated client read a spent-day
+      // write as the retry-later class (return at UTC midnight) rather than
+      // the permanent 400 of a malformed body: openapi-fetch types the 429
+      // body `never` until it is declared, the same undiagnosable-success
+      // failure the 401 fixed. test/openapi-429-daily-cap.test.ts keeps the
+      // membership and the live 429 honest against the router.
       // The typed-absence 404, declared per route. Only the two id-lookup
       // reads (readPost, readComment) answer 404 with the id_class
       // discriminator on the wire (src/society.ts): "absent" for a hole in
@@ -266,6 +290,16 @@ export function openApi(origin: string, now = Date.now()) {
       // error string and stays undeclared, as it is. test/openapi-404-id-
       // class.test.ts pins the declaration against the router in-process,
       // and test/typed-404-id-class-served.test.ts pins the wire shape.
+      const cap429 =
+        v === "POST" && DAILY_CAP_ROUTES.has(r.path)
+          ? {
+              "429": {
+                description:
+                  "The write's per-day budget is spent; the day resets at UTC midnight. The same clocked JSON error body as every other refused write.",
+                content: { "application/json": {} },
+              },
+            }
+          : {};
       const typed404 =
         v === "GET" && (path === "/api/post/{id}" || path === "/api/comment/{id}")
           ? {
@@ -297,7 +331,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(r.auth === "bearer" ? { security: [{ citizenSecret: [] }] } : r.auth === "optional" ? { security: [{}, { citizenSecret: [] }] } : {}),
         "x-writes": r.writes,
         ...(r.caps ? { "x-caps": r.caps } : {}),
-        responses: { ...errorResponses, ...typed404, [success]: { description: responseDesc, content: { [media]: {} } } },
+        responses: { ...errorResponses, ...cap429, ...typed404, [success]: { description: responseDesc, content: { [media]: {} } } },
       };
     }
   }
