@@ -10,18 +10,21 @@
 // and recreates the undiagnosable-typing failure one door over.
 //
 // The fix therefore covers the whole class: every POST write op declares the
-// 400, except the five that structurally cannot answer it, each named in
+// 400, except the six that structurally cannot answer it, each named in
 // src/connect.ts (NO_BODY_WRITE_ROUTES, MCP_ROUTES) and kept out for its own
 // reason:
 //
-//   /api/porch/knock, /api/checkpoint, /api/doorbell/disable -- the handler
-//     reads no body and validates no value, so there is nothing to refuse.
+//   /api/porch/knock, /api/checkpoint, /api/doorbell/disable,
+//   /api/awards/:id/settle -- the handler reads no body and validates no
+//     value, so there is nothing to refuse. settle takes only the path award
+//     id and answers 404, 403 or 409 (src/society.ts
+//     settleAwardFromExistingReceipt).
 //   /mcp, /mcp/read -- the JSON-RPC transport: a 400 there carries a JSON-RPC
 //     error envelope (rpcError, code -32600), not the society clocked body, the
 //     same reason the /mcp 401 was kept out of the society-body 401 declaration.
 //
 // This file keeps the declaration honest against the router in-process: every
-// POST write op declares the 400 iff it is not one of those five, the body is
+// POST write op declares the 400 iff it is not one of those six, the body is
 // the clocked JSON error object, and the live router actually answers 400 with
 // that body on a refused write while the no-input writes do not.
 
@@ -48,10 +51,10 @@ function postWriteOps(): Set<string> {
   return set;
 }
 
-test("the no-body and MCP exception sets are the five expected routes", () => {
+test("the no-body and MCP exception sets are the six expected routes", () => {
   assert.deepEqual(
     [...NO_BODY_WRITE_ROUTES].sort(),
-    ["/api/checkpoint", "/api/doorbell/disable", "/api/porch/knock"],
+    ["/api/awards/:id/settle", "/api/checkpoint", "/api/doorbell/disable", "/api/porch/knock"],
     "the no-body write set drifted",
   );
   assert.deepEqual([...MCP_ROUTES].sort(), ["/mcp", "/mcp/read"], "the MCP set drifted");
@@ -64,7 +67,7 @@ test("every exception route is a declared POST route", () => {
   for (const p of [...NO_BODY_WRITE_ROUTES, ...MCP_ROUTES]) assert.ok(posts.has(p), `${p} is an exception but SURFACE has no POST row for it`);
 });
 
-test("every POST write op declares 400 exactly when it is not one of the five exceptions", async () => {
+test("every POST write op declares 400 exactly when it is not one of the six exceptions", async () => {
   const { env } = sqliteTestEnv(schema);
   const doc = (await (await worker.fetch(new Request(`${ORIGIN}/openapi.json`), env)).json()) as {
     paths: Record<string, Record<string, { responses: Record<string, unknown> }>>;
@@ -75,7 +78,10 @@ test("every POST write op declares 400 exactly when it is not one of the five ex
   for (const [path, ops] of Object.entries(doc.paths)) {
     for (const [verb, op] of Object.entries(ops)) {
       if (!posts.has(`${path} ${verb}`)) continue;
-      const template = path.replace(/\{([A-Za-z_]+)\}/g, "(:$1)");
+      // {param} -> :param, the SURFACE template the exception sets hold.
+      // settle is the first parameterised exception, so this mapping is now
+      // load-bearing: the old "(:$1)" produced (:id) and matched nothing.
+      const template = path.replace(/\{([A-Za-z_]+)\}/g, ":$1");
       const has400 = Object.keys(op.responses).includes("400");
       const shouldBe = !NO_BODY_WRITE_ROUTES.has(template) && !MCP_ROUTES.has(template);
       assert.equal(
@@ -88,9 +94,9 @@ test("every POST write op declares 400 exactly when it is not one of the five ex
     }
   }
   // Every POST op is checked, and the count that declares is the total minus
-  // the five exceptions -- so the membership is held in both directions.
+  // the six exceptions -- so the membership is held in both directions.
   assert.ok(checked >= 40, `only ${checked} POST ops found; the POST-op scan has drifted`);
-  assert.equal(declares, checked - NO_BODY_WRITE_ROUTES.size - MCP_ROUTES.size, "the declared set is the POST set minus the five exceptions");
+  assert.equal(declares, checked - NO_BODY_WRITE_ROUTES.size - MCP_ROUTES.size, "the declared set is the POST set minus the six exceptions");
 });
 
 test("the declared 400 carries the clocked JSON error body, not an empty default", async () => {
@@ -161,4 +167,15 @@ test("the no-input writes do NOT declare 400, and the live router does not answe
   // but it also never 400s on body shape -- it reads nothing.)
   const knock = await worker.fetch(req("/api/porch/knock", { method: "POST", headers: auth }), env);
   assert.equal(knock.status, 201, "porch/knock succeeds with no body, never a 400");
+  // settle reads no body, so a garbage body cannot be refused as malformed:
+  // with no award behind the path id it is the not-found, never the 400.
+  // The membership test derives its expected set from the sets it checks, so
+  // this live probe is what makes the exception real.
+  const settle = await worker.fetch(req("/api/awards/999999/settle", { method: "POST", headers: auth, body: "{not json" }), env);
+  assert.notEqual(settle.status, 400, "awards/:id/settle never answers the refused-write 400");
+  assert.equal(settle.status, 404, "awards/:id/settle with no award behind the id is the not-found");
+  const settleDoc = (await (await worker.fetch(new Request(`${ORIGIN}/openapi.json`), env)).json()) as {
+    paths: Record<string, Record<string, { responses: Record<string, unknown> }>>;
+  };
+  assert.ok(!("400" in settleDoc.paths["/api/awards/{id}/settle"].post.responses), "POST /api/awards/{id}/settle declares no 400");
 });

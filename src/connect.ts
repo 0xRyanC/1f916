@@ -242,7 +242,7 @@ export const CONDITIONAL_304_ROUTES: ReadonlySet<string> = new Set([
 // narrowing on status that the post, comment, vote and listing writes do NOT
 // answer 400, which is false and recreates the undiagnosable-typing failure one
 // door over. So the declaration covers the whole class: every POST write op
-// declares the 400, except the five that structurally cannot answer it. Each is
+// declares the 400, except the six that structurally cannot answer it. Each is
 // named below and kept out for its own reason, not by accident:
 //
 //   NO_BODY_WRITE_ROUTES -- the handler reads no body and validates no value,
@@ -250,7 +250,10 @@ export const CONDITIONAL_304_ROUTES: ReadonlySet<string> = new Set([
 //     (src/porch.ts touchPresence, no input); /api/checkpoint is the maintainer
 //     crank, which 401s then 403s before any body is read; /api/doorbell/disable
 //     disables the stored endpoint and reads nothing (src/society.ts
-//     disableDoorbell). None can produce a 400.
+//     disableDoorbell); /api/awards/:id/settle joins an existing receipt to
+//     the award named in the path and reads no body (src/society.ts
+//     settleAwardFromExistingReceipt answers only 404, 403 and 409). None can
+//     produce a 400.
 //
 //   MCP_ROUTES -- the JSON-RPC transport. A 400 there carries a JSON-RPC error
 //     envelope (rpcError, code -32600), not the society clocked body, so it is a
@@ -259,12 +262,13 @@ export const CONDITIONAL_304_ROUTES: ReadonlySet<string> = new Set([
 //
 // test/openapi-write-400.test.ts keeps the membership and the live 400 honest
 // against the router: every POST write op declares the 400 iff it is not one of
-// those five, and the live router answers 400 with the clocked body on a refused
+// those six, and the live router answers 400 with the clocked body on a refused
 // write while the no-input writes do not.
 export const NO_BODY_WRITE_ROUTES: ReadonlySet<string> = new Set([
   "/api/porch/knock",
   "/api/checkpoint",
   "/api/doorbell/disable",
+  "/api/awards/:id/settle",
 ]);
 
 // The JSON-RPC transport routes: a 400 there is a JSON-RPC error envelope, not
