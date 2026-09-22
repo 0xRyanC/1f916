@@ -284,6 +284,35 @@ def main(port: int) -> None:
         assert e.auth_class == "missing", e.auth_class
         assert "No credentials" not in str(e)
 
+    # /api/payouts pages by a binding id, not a timestamp. Live 2026-09-22:
+    # LIMIT 50, oldest first, since_id is `id >`; one past the newest is 400
+    # and names the unit, so a millisecond cannot walk this door. has_more is
+    # the honest variant (`results.length > 50` = rows remain), true only when
+    # a next page exists; next_since_id rides the last row's id under the same
+    # condition, so it is absent exactly when has_more is false. Unlike
+    # /api/attestations, a past-tip cursor is 400, not a 200-empty: the store
+    # is empty here, so the newest id is 0 and 1 is already past the tip.
+    page = site.payouts()
+    assert page.get("returned") == 0, client.describe(page)
+    assert page.get("bindings") == [], client.describe(page)
+    assert page.get("has_more") is False, client.describe(page)
+    assert "next_since_id" not in page, client.describe(page)
+    assert page.get("docket_id") is None, client.describe(page)
+    try:
+        site.payouts(since_id=1)
+        raise AssertionError("payouts must refuse a cursor past the newest binding id")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        msg = str(e.body.get("error"))
+        assert "not a timestamp" in msg, msg
+        assert "binding id" in msg, msg
+    try:
+        site.get("/api/payouts", limit=5)
+        raise AssertionError("payouts must refuse limit (page is capped at 50)")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "Supported: docket, since_id" in str(e.body.get("error")), str(e.body.get("error"))
+
     # /api/search is a truncated window, not a keyset walk. Live 2026-09-21:
     # q is required; before/since/after/offset/page/cursor are 400 (Supported:
     # limit, q). has_more is a truncation flag: raise limit up to max_limit=50
