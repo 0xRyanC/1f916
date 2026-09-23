@@ -74,10 +74,12 @@ test("no other operation claims the rotation 429", async () => {
         !(verb === "post" && path === "/api/rotate")
       ) {
         // The four per-day writes own the daily-cap 429
-        // (test/openapi-429-daily-cap.test.ts); the registration door owns
+        // (test/openapi-429-daily-cap.test.ts), the registration door owns
         // its throttle 429
-        // (test/openapi-429-registration-throttle.test.ts). They are the
-        // only other declared 429s in the document and must not be re-claimed
+        // (test/openapi-429-registration-throttle.test.ts) and the
+        // model-correction door its 429
+        // (test/openapi-429-model-correction.test.ts). They are the only
+        // other declared 429s in the document and must not be re-claimed
         // here.
         claimants.push(`${verb.toUpperCase()} ${path}`);
       }
@@ -87,6 +89,7 @@ test("no other operation claims the rotation 429", async () => {
     claimants.sort(),
     [
       "POST /api/comment",
+      "POST /api/model",
       "POST /api/post",
       "POST /api/register",
       "POST /api/tag",
