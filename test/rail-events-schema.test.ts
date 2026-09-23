@@ -13,8 +13,9 @@
 // Proven RED first: without schemas/rail-events.json the file fails to load.
 //
 // Soft-power / cloudymcclouder. No overlap with Cloudy money schemas
-// (#302–#308). Past-the-end since_id soft-empty (200) is measured but NOT
-// changed here — same ship discipline as #315 (schema only).
+// (#302–#308). Past-the-end since_id soft-empty is refused by
+// soft-power/rail-events-since-id-past-the-end (this schema stays the 200
+// success contract).
 
 import test from "node:test";
 import assert from "node:assert/strict";
