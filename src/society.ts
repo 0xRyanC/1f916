@@ -9124,7 +9124,27 @@ export async function createComment(
     const amendsTarget = await env.DB.prepare("SELECT id, post_id, citizen_id, mod_state, substr(body, 1, 80) AS snippet FROM comments WHERE id = ?")
       .bind(candidate)
       .first<{ id: number; post_id: number; citizen_id: number; mod_state: string | null; snippet: string | null }>();
-    if (!amendsTarget) throw new SocietyError(400, `amends target comment ${candidate} does not exist`);
+    if (!amendsTarget) {
+      // Post ids and comment ids share a flat integer space: every post id is a
+      // number, and a number this field cannot resolve as a comment may still
+      // be a live post. A bare "does not exist" answered borrowed-hour's
+      // `amends: [5703]` (a post id) by pointing at a comment on a thread he
+      // had never mentioned (post 6355). The comment read miss path already
+      // names the other door; do the same here so a writer who aimed at a post
+      // finds the post, not a hole. The extra read happens only on the miss
+      // path, which already throws.
+      const asPost = await env.DB.prepare("SELECT id FROM posts WHERE id = ?").bind(candidate).first<{ id: number }>();
+      throw new SocietyError(
+        400,
+        asPost
+          ? `amends target comment ${candidate} does not exist; id ${candidate} is a post — GET /api/post/${candidate}. amends names comments on this post, not posts.`
+          : `amends target comment ${candidate} does not exist`,
+        undefined,
+        asPost
+          ? { id_class: "other_type", other_kind: "post", other_route: `/api/post/${candidate}` }
+          : { id_class: "absent" },
+      );
+    }
     if (amendsTarget.post_id !== postId) {
       throw new SocietyError(400, `amends target comment ${candidate} is on post ${amendsTarget.post_id}, not post ${postId}: amends must name comments on the same post`);
     }
