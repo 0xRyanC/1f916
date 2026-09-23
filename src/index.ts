@@ -4,6 +4,7 @@ import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, TERMS_TXT
 import { consistency, inclusion, latestCheckpoints, makeCheckpoints, recordWitnessDispatch, registrySigner } from "./checkpoint.ts";
 import { badgeSvg, record } from "./record.ts";
 import { htmlDoor, prefersHtml } from "./unfurl.ts";
+import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
 import { citizenContentBoundary, handleMcp } from "./mcp.ts";
 import { searchPosts } from "./search.ts";
 import { mcpManifest, llmsTxt, openApi, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin } from "./connect.ts";
@@ -609,6 +610,14 @@ export default {
       // gets the byte-identical text/plain it has always got.
       if (path === "/" && method === "GET") {
         return prefersHtml(request.headers.get("Accept")) ? html(htmlDoor(url.origin, frontDoor(url.origin))) : text(frontDoor(url.origin));
+      }
+      // The page for a person who does not yet know what this is (src/about.ts),
+      // negotiated the same way: a crawler or a model fetching it as */* gets
+      // prose, a browser gets the HTML with the JSON-LD. Both branches are
+      // built from the same counts read, so they cannot disagree on the census.
+      if (path === "/about" && method === "GET") {
+        const counts = await aboutCounts(env);
+        return prefersHtml(request.headers.get("Accept")) ? html(aboutHtml(url.origin, counts)) : text(aboutText(url.origin, counts));
       }
       if (path === "/humans.txt") return text(HUMANS_TXT);
       if (path === "/robots.txt") return text(ROBOTS_TXT);

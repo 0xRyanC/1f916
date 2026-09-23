@@ -20,7 +20,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
 import worker from "../src/index.ts";
-import { CREATED_ROUTES } from "../src/connect.ts";
+import { CREATED_ROUTES, OPTIONAL_PLAIN_JSON_401 } from "../src/connect.ts";
 import { SURFACE } from "../src/surface.ts";
 
 const schema = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
@@ -84,12 +84,17 @@ test("the document declares 201 on exactly the created routes and 200 everywhere
   // against the router). The success code itself is asserted here exactly as
   // before; the 401 is filtered out of the count so this file stays the
   // single owner of the 200/201 split.
-  const bearerOps = new Set<string>();
+  // The operations that carry a declared 401: every bearer-guarded operation
+  // plus the optional-auth routes that serve the plain society JSON 401 for a
+  // broken secret (see OPTIONAL_PLAIN_JSON_401). test/openapi-error-statuses.
+  // test.ts keeps that declaration honest; this file only filters the 401 out
+  // of the 200/201 split, so the membership set must match it exactly.
+  const opsWith401 = new Set<string>();
   for (const r of SURFACE) {
-    if (r.auth !== "bearer") continue;
+    if (r.auth !== "bearer" && !(r.auth === "optional" && OPTIONAL_PLAIN_JSON_401.has(r.path))) continue;
     const p = r.path.replace(/:([A-Za-z_]+)/g, "{$1}").replace(/\{handle\}\.svg$/, "{handle}.svg");
     const verbs = r.verbs ?? (r.method === "*" ? ["GET"] : [r.method]);
-    for (const v of verbs) bearerOps.add(`${p} ${v.toLowerCase()}`);
+    for (const v of verbs) opsWith401.add(`${p} ${v.toLowerCase()}`);
   }
   const declared201: string[] = [];
   for (const [path, ops] of Object.entries(doc.paths)) {
@@ -97,14 +102,22 @@ test("the document declares 201 on exactly the created routes and 200 everywhere
       // The non-success statuses are owned by their own files: 401 by
       // test/openapi-error-statuses.test.ts, the typed-absence 404 by
       // test/openapi-404-id-class.test.ts, the daily-cap 429 by
-      // test/openapi-429-daily-cap.test.ts, and the conditional-GET 304 by
-      // test/openapi-304-conditional.test.ts. Filter all four out so
-      // this file stays the single owner of the 200/201 success split.
-      const codes = Object.keys(op.responses).filter((c) => c !== "401" && c !== "404" && c !== "429" && c !== "304");
+      // test/openapi-429-daily-cap.test.ts, the taken-handle 409 by
+      // test/openapi-register-409.test.ts, the conditional-GET 304 by
+      // test/openapi-304-conditional.test.ts, the refused-write 400 by
+      // test/openapi-write-400.test.ts, the permission 403 by
+      // test/openapi-403-forbidden.test.ts, the query-parameter 400 by
+      // test/openapi-400-query-params.test.ts (the two 400s share one code), the
+      // x402 patron challenge 402 by test/openapi-402-patron.test.ts, the
+      // door-screen refusal 422 by test/openapi-screen-422.test.ts, and the
+      // already-applied 409 by test/openapi-409-already-applied.test.ts.
+      // Filter them all out so this file stays the single owner of the
+      // 200/201 success split.
+      const codes = Object.keys(op.responses).filter((c) => c !== "401" && c !== "402" && c !== "403" && c !== "404" && c !== "429" && c !== "304" && c !== "400" && c !== "422" && c !== "409");
       const want = verb === "post" && CREATED_ROUTES.has(toTemplate(path)) ? "201" : "200";
       assert.deepEqual(codes, [want], `${verb.toUpperCase()} ${path} success code`);
-      // The 401 belongs exactly to the bearer operations and nothing else.
-      assert.equal(Object.keys(op.responses).includes("401"), bearerOps.has(`${path} ${verb}`), `${verb.toUpperCase()} ${path} 401 membership`);
+      // The 401 belongs exactly to the 401 operations above (bearer plus the optional plain-JSON route) and nothing else.
+      assert.equal(Object.keys(op.responses).includes("401"), opsWith401.has(`${path} ${verb}`), `${verb.toUpperCase()} ${path} 401 membership`);
       if (want === "201") declared201.push(toTemplate(path));
     }
   }
@@ -121,11 +134,18 @@ test("the writes a client meets first declare what the router sends: comment and
     paths: Record<string, Record<string, { responses: Record<string, unknown> }>>;
   };
   // All three are bearer-guarded, so each now declares its 401 beside the
-  // success code the router sends, and all three also carry a per-day budget,
-  // so each declares its 429 too (test/openapi-429-daily-cap.test.ts owns that
-  // declaration). The codes are integer-like keys, which order numerically
-  // ascending, so the success code (200/201) precedes 401 and 429.
-  assert.deepEqual(Object.keys(doc.paths["/api/comment"].post.responses), ["201", "401", "429"]);
-  assert.deepEqual(Object.keys(doc.paths["/api/vote"].post.responses), ["200", "401", "429"]);
-  assert.deepEqual(Object.keys(doc.paths["/api/post"].post.responses), ["201", "401", "429"]);
+  // success code the router sends; post and vote are also in the
+  // permission-403 set (test/openapi-403-forbidden.test.ts owns that
+  // declaration); post and vote each answer an already-recorded act with 409 so
+  // each declares its 409 too (test/openapi-409-already-applied.test.ts owns
+  // that declaration; the flag and withdraw 409s share the class, and comment
+  // is not in the set); post and comment are door-screen gated, so each also
+  // declares its 422 (test/openapi-screen-422.test.ts owns that declaration);
+  // and all three also carry a per-day budget, so each declares its 429 too
+  // (test/openapi-429-daily-cap.test.ts owns that declaration). The codes are
+  // integer-like keys, which order numerically ascending, so the success code
+  // (200/201) precedes 400, then 401, then 403, then 409, then 422, then 429.
+  assert.deepEqual(Object.keys(doc.paths["/api/comment"].post.responses), ["201", "400", "401", "422", "429"]);
+  assert.deepEqual(Object.keys(doc.paths["/api/vote"].post.responses), ["200", "400", "401", "403", "409", "429"]);
+  assert.deepEqual(Object.keys(doc.paths["/api/post"].post.responses), ["201", "400", "401", "403", "409", "422", "429"]);
 });
