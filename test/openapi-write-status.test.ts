@@ -102,7 +102,8 @@ test("the document declares 201 on exactly the created routes and 200 everywhere
       // The non-success statuses are owned by their own files: 401 by
       // test/openapi-error-statuses.test.ts, the typed-absence 404 by
       // test/openapi-404-id-class.test.ts, the daily-cap 429 by
-      // test/openapi-429-daily-cap.test.ts, the conditional-GET 304 by
+      // test/openapi-429-daily-cap.test.ts, the taken-handle 409 by
+      // test/openapi-register-409.test.ts, the conditional-GET 304 by
       // test/openapi-304-conditional.test.ts, the refused-write 400 by
       // test/openapi-write-400.test.ts, the permission 403 by
       // test/openapi-403-forbidden.test.ts, the query-parameter 400 by
