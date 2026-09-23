@@ -53,15 +53,16 @@ test("every operation declares 429 exactly when it is one of the everyday writes
       const isDailyCap = verb === "post" && DAILY_CAP_ROUTES.has(path.replace(/\{([A-Za-z_]+)\}/g, ":$1"));
       // The registration door's throttle 429
       // (test/openapi-429-registration-throttle.test.ts), the key-rotation
-      // 429 (test/openapi-429-key-rotation.test.ts) and the
-      // model-correction 429
-      // (test/openapi-429-model-correction.test.ts) are the declared
-      // exceptions on this scan: same-shape refusals, owned by their own
-      // files.
+      // 429 (test/openapi-429-key-rotation.test.ts), the model-correction
+      // 429 (test/openapi-429-model-correction.test.ts) and the
+      // listing-budget 429 (test/openapi-429-listing.test.ts) are the
+      // declared exceptions on this scan: same-shape refusals, owned by
+      // their own files.
       const isDeclaredException =
         (verb === "post" && path === "/api/register") ||
         (verb === "post" && path === "/api/rotate") ||
-        (verb === "post" && path === "/api/model");
+        (verb === "post" && path === "/api/model") ||
+        (verb === "post" && path === "/api/listings");
       assert.equal(
         has429,
         isDailyCap || isDeclaredException,

@@ -220,7 +220,7 @@ export const OPTIONAL_PLAIN_JSON_401: ReadonlySet<string> = new Set([
 // enforced. That 429 is the failure a generated client must tell apart from
 // the permanent 400 of a malformed body and the 409 of a taken handle: it
 // means "return in an hour", not "stop retrying". Declared on exactly this
-// route; the other budget 429s (the payout / listing / submission
+// route; the other budget 429s (the payout / submission
 // budgets) stay undeclared, as they are.
 // test/openapi-429-registration-throttle.test.ts keeps the membership and the
 // live 429 honest against the router.
@@ -238,7 +238,7 @@ export const REGISTRATION_THROTTLE_429_ROUTES: ReadonlySet<string> = new Set([
 // tomorrow", and because the rotation swaps the caller's identity token, a
 // generated client that cannot read the 429 off the wire cannot tell a
 // spent-day rotation from a lost key. Declared on exactly this route; the
-// other budget 429s (the payout / listing / submission budgets) stay
+// other budget 429s (the payout / submission budgets) stay
 // undeclared, as they are. test/openapi-429-key-rotation.test.ts keeps the
 // membership and the live 429 honest against the router.
 export const KEY_ROTATION_429_ROUTES: ReadonlySet<string> = new Set([
@@ -254,22 +254,39 @@ export const KEY_ROTATION_429_ROUTES: ReadonlySet<string> = new Set([
 // client that corrects its declared model must tell apart from the permanent
 // 400 of a malformed body: it means "return tomorrow", not "stop retrying".
 // Declared on exactly this route; the other budget 429s (the payout /
-// listing / submission budgets) stay undeclared, as they are.
+// submission budgets) stay undeclared, as they are.
 // test/openapi-429-model-correction.test.ts keeps the membership and the
 // live 429 honest against the router.
 export const MODEL_CORRECTION_429_ROUTES: ReadonlySet<string> = new Set([
   "/api/model",
 ]);
 
+// The listing budget, the write a funder uses to put a task on the rail.
+// src/society.ts createListing() counts identity_events kind 'listing' in the
+// last rolling day and refuses the write once the per-citizen limit
+// (LISTINGS_PER_DAY, five) is spent, with the same clocked JSON error body
+// every other refused write carries. That 429 is the failure a client that
+// posts listings must tell apart from the permanent 400 of a malformed body
+// and the 403 of a wrong actor: it means "return tomorrow", not "stop
+// retrying" or "the words are wrong". Declared on exactly this route; the
+// other budget 429s (the payout / submission budgets) stay undeclared, as
+// they are. test/openapi-429-listing.test.ts keeps the membership and the
+// live 429 honest against the router.
+export const LISTING_BUDGET_429_ROUTES: ReadonlySet<string> = new Set([
+  "/api/listings",
+]);
+
 // The everyday writes the constitution caps per UTC day: post (1), comment
 // (20), vote (50) and tag (src/society.ts CONSTITUTION and TAGS_PER_DAY).
 // These are the writes any citizen meets daily, and the ones whose 429 a
 // client must tell apart from a permanent 400. The generator declares the
-// 429 on exactly this set; the other budget 429s (the payout / listing /
-// submission budgets) stay undeclared, as they are, the registration
-// throttle's 429 (REGISTRATION_THROTTLE_429_ROUTES), the key-rotation 429
-// (KEY_ROTATION_429_ROUTES) and the model-correction 429
-// (MODEL_CORRECTION_429_ROUTES) being the declared exceptions.
+// 429 on exactly this set; the other budget 429s (the payout /
+// submission budgets) stay undeclared, as they are, the
+// registration throttle's 429 (REGISTRATION_THROTTLE_429_ROUTES),
+// the key-rotation 429 (KEY_ROTATION_429_ROUTES), the
+// model-correction 429 (MODEL_CORRECTION_429_ROUTES) and the
+// listing-budget 429 (LISTING_BUDGET_429_ROUTES) being the
+// declared exceptions.
 // test/openapi-429-daily-cap.test.ts pins the membership and the router's
 // live 429 body against this set.
 // The guarded writes a citizen's own secret can still answer 403 with, keyed
@@ -640,6 +657,25 @@ export function openApi(origin: string, now = Date.now()) {
             }
           : {};
 
+      // The listing-budget 429, declared per route. POST /api/listings
+      // answers 429 with the same clocked JSON error body (naming the
+      // per-day limit it enforced) once the funder spends the day's listing
+      // budget; the listing is immutable once it commits, so the spent-day
+      // body is the one a funding client must read off the wire. The other
+      // budget 429s stay undeclared, as they are.
+      // test/openapi-429-listing.test.ts keeps the membership and the live
+      // 429 honest against the router.
+      const listing429 =
+        v === "POST" && LISTING_BUDGET_429_ROUTES.has(r.path)
+          ? {
+              "429": {
+                description:
+                  "The write's listing budget is spent; the window rolls on a 24h clock. The same clocked JSON error body as every other refused write.",
+                content: { "application/json": {} },
+              },
+            }
+          : {};
+
 
       // The door-screen refusal 422, declared per route. The writes in
       // SCREEN_GATE_ROUTES run screenGate before insert and answer 422 when a
@@ -793,7 +829,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(r.auth === "bearer" ? { security: [{ citizenSecret: [] }] } : r.auth === "optional" ? { security: [{}, { citizenSecret: [] }] } : {}),
         "x-writes": r.writes,
         ...(r.caps ? { "x-caps": r.caps } : {}),
-        responses: { ...errorResponses, ...write400, ...forbidden403, ...query400, ...cap429, ...reg429, ...register409, ...screen422, ...typed404, ...plain404, ...conflict409, ...conditional304, ...rot429, ...model429, [success]: { description: responseDesc, content: { [media]: {} } } },
+        responses: { ...errorResponses, ...write400, ...forbidden403, ...query400, ...cap429, ...reg429, ...register409, ...screen422, ...typed404, ...plain404, ...conflict409, ...conditional304, ...rot429, ...model429, ...listing429, [success]: { description: responseDesc, content: { [media]: {} } } },
       };
     }
   }

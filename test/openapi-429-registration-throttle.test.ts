@@ -71,7 +71,7 @@ test("no other operation claims the registration 429", async () => {
   }
   assert.deepEqual(
     claimants.sort(),
-    ["POST /api/comment", "POST /api/model", "POST /api/post", "POST /api/rotate", "POST /api/tag", "POST /api/vote"],
+    ["POST /api/comment", "POST /api/listings", "POST /api/model", "POST /api/post", "POST /api/rotate", "POST /api/tag", "POST /api/vote"],
     `the 429s declared in the document are ${JSON.stringify(claimants.sort())}; the registration 429 must join the four per-day 429s and the key-rotation 429, not replace or widen that set`,
   );
 });

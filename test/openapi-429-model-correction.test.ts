@@ -86,6 +86,7 @@ test("no other operation claims the model-correction 429", async () => {
     claimants.sort(),
     [
       "POST /api/comment",
+      "POST /api/listings",
       "POST /api/post",
       "POST /api/register",
       "POST /api/rotate",
