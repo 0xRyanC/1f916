@@ -22,6 +22,8 @@
 //   /mcp, /mcp/read -- the JSON-RPC transport: a 400 there carries a JSON-RPC
 //     error envelope (rpcError, code -32600), not the society clocked body, the
 //     same reason the /mcp 401 was kept out of the society-body 401 declaration.
+//   /api/a2a -- the A2A door (A2A_ROUTES), a JSON-RPC read that writes nothing:
+//     its 400 is the same JSON-RPC envelope class as the MCP doors'.
 //
 // This file keeps the declaration honest against the router in-process: every
 // POST write op declares the 400 iff it is not one of those six, the body is
@@ -34,7 +36,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
 import worker from "../src/index.ts";
-import { NO_BODY_WRITE_ROUTES, MCP_ROUTES } from "../src/connect.ts";
+import { NO_BODY_WRITE_ROUTES, MCP_ROUTES, A2A_ROUTES } from "../src/connect.ts";
 import { SURFACE } from "../src/surface.ts";
 
 const schema = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
@@ -58,13 +60,15 @@ test("the no-body and MCP exception sets are the six expected routes", () => {
     "the no-body write set drifted",
   );
   assert.deepEqual([...MCP_ROUTES].sort(), ["/mcp", "/mcp/read"], "the MCP set drifted");
-  // The two sets are disjoint: a route is kept out for one reason, not both.
-  for (const p of NO_BODY_WRITE_ROUTES) assert.ok(!MCP_ROUTES.has(p), `${p} is in both exception sets`);
+  assert.deepEqual([...A2A_ROUTES], ["/api/a2a"], "the A2A set drifted");
+  // The sets are disjoint: a route is kept out for one reason, not two.
+  for (const p of NO_BODY_WRITE_ROUTES) assert.ok(!MCP_ROUTES.has(p) && !A2A_ROUTES.has(p), `${p} is in two exception sets`);
+  for (const p of MCP_ROUTES) assert.ok(!A2A_ROUTES.has(p), `${p} is in two exception sets`);
 });
 
 test("every exception route is a declared POST route", () => {
   const posts = new Set(SURFACE.filter((r) => r.method === "POST" || (r.verbs?.includes("POST") ?? false)).map((r) => r.path));
-  for (const p of [...NO_BODY_WRITE_ROUTES, ...MCP_ROUTES]) assert.ok(posts.has(p), `${p} is an exception but SURFACE has no POST row for it`);
+  for (const p of [...NO_BODY_WRITE_ROUTES, ...MCP_ROUTES, ...A2A_ROUTES]) assert.ok(posts.has(p), `${p} is an exception but SURFACE has no POST row for it`);
 });
 
 test("every POST write op declares 400 exactly when it is not one of the six exceptions", async () => {
@@ -83,7 +87,7 @@ test("every POST write op declares 400 exactly when it is not one of the six exc
       // load-bearing: the old "(:$1)" produced (:id) and matched nothing.
       const template = path.replace(/\{([A-Za-z_]+)\}/g, ":$1");
       const has400 = Object.keys(op.responses).includes("400");
-      const shouldBe = !NO_BODY_WRITE_ROUTES.has(template) && !MCP_ROUTES.has(template);
+      const shouldBe = !NO_BODY_WRITE_ROUTES.has(template) && !MCP_ROUTES.has(template) && !A2A_ROUTES.has(template);
       assert.equal(
         has400,
         shouldBe,
@@ -96,7 +100,7 @@ test("every POST write op declares 400 exactly when it is not one of the six exc
   // Every POST op is checked, and the count that declares is the total minus
   // the six exceptions -- so the membership is held in both directions.
   assert.ok(checked >= 40, `only ${checked} POST ops found; the POST-op scan has drifted`);
-  assert.equal(declares, checked - NO_BODY_WRITE_ROUTES.size - MCP_ROUTES.size, "the declared set is the POST set minus the six exceptions");
+  assert.equal(declares, checked - NO_BODY_WRITE_ROUTES.size - MCP_ROUTES.size - A2A_ROUTES.size, "the declared set is the POST set minus the seven exceptions");
 });
 
 test("the declared 400 carries the clocked JSON error body, not an empty default", async () => {
