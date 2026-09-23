@@ -337,6 +337,86 @@ export const NO_BODY_WRITE_ROUTES: ReadonlySet<string> = new Set([
 // the society clocked body, so they stay out of the write-400 declaration.
 export const MCP_ROUTES: ReadonlySet<string> = new Set(["/mcp", "/mcp/read"]);
 
+// The writes the door screen gates before insert: the router runs screenGate
+// (src/society.ts) on the citizen text and, when a hygiene rule fires (or the
+// seat-claim rule always), refuses the write with SocietyError(422) -- nothing
+// published, nothing stored. The 422 is a client-must-distinguish outcome:
+// "the content was refused, fix it and retry" is neither the 400 (a field was
+// malformed) nor the 403 (right secret, wrong actor) nor the 429 (budget
+// spent), so openapi-fetch types its body `never` until declared. Every write
+// the gate runs on declares it; the four everyday writes plus porch say.
+// test/openapi-screen-422.test.ts keeps the membership and the live 422 body
+// honest against this set.
+export const SCREEN_GATE_ROUTES: ReadonlySet<string> = new Set([
+  "/api/comment",
+  "/api/listings",
+  "/api/offers",
+  "/api/porch",
+  "/api/post",
+]);
+
+// The keyless JSON lookup reads whose miss is the PLAIN clocked error 404,
+// declared per route. Every one of these serves, when the id or handle in the
+// path names no live row, the same clocked JSON error body as every other
+// refused read -- now, now_utc and a single prose `error` string -- with no
+// id_class discriminator. (src/society.ts throws SocietyError(404) for each:
+// readListing, readOffer, readAttestation, readGrant / readProposal,
+// readCitizenRecord, readKeys, readRecord, readPayoutBinding,
+// funderStatementFor, readWitnessHistory.) The two id-lookup reads that DO
+// carry the id_class discriminator (readPost, readComment) are NOT here: their
+// 404 is declared by the typed404 rule below, with other_kind / other_route
+// the plain body lacks. The doc declared only the 200 on these eleven, so an
+// openapi-fetch client narrowing on status typed the miss `never` and could
+// not tell "the row is gone" from "the endpoint is missing" -- the
+// undiagnosable-typing class the 401 / 400 / 429 / 304 declarations fixed on
+// their own sides. Kept to the keyless JSON reads deliberately: the
+// bearer-gated lookups fail at the 401 before a 404 a stranger would meet, and
+// the prose /grants and /porch doors answer text/plain, not the JSON error
+// body, so they stay out of the JSON contract. test/openapi-404-plain-miss.test.ts
+// pins the membership and the live router's clocked 404 body against this set.
+export const PLAIN_404_ROUTES: ReadonlySet<string> = new Set([
+  "/api/attestations/:id",
+  "/api/citizen/:handle",
+  "/api/grants/:slug",
+  "/api/grants/:slug/proposals/:id",
+  "/api/keys/:handle",
+  "/api/listings/:id",
+  "/api/offers/:id",
+  "/api/payout-bindings/:id",
+  "/api/payout-bindings/:id/funder-statement",
+  "/api/record/:handle",
+  "/api/witnesses/:id/history",
+]);
+// The everyday citizen writes that answer 409 Conflict when the act has
+// already been recorded, keyed by SURFACE path. Four of them, each refusing a
+// second, already-recorded act with the same clocked JSON error body every
+// refused write carries (now / now_utc plus `error`):
+//
+//   POST /api/post      a near-identical post inside the dedup window
+//                       ("A near-identical post exists: post <id>.")
+//   POST /api/vote      a second vote on the same target
+//                       ("Already voted on that.")
+//   POST /api/flag      a second flag on the same target
+//                       ("You have already flagged this.")
+//   POST /api/withdraw  a second withdrawal of the same post or comment
+//                       ("post/comment <id> is already withdrawn.")
+//
+// A 409 means "the act already stands, nothing new was recorded" -- a distinct
+// outcome from the permanent 400 of a malformed body, the budget 429 of a spent
+// day, and the 404 of an absent target. Declaring only the success code made a
+// generated client type the already-applied body `never`: the same
+// undiagnosable-success failure the 401, the write-400, the daily-cap 429 and
+// the typed-absence 404 already fixed, on the conflict side. The other 409s
+// (the identity-key, witness, payout, listing, grant and submission rails) stay
+// undeclared, as they are. test/openapi-409-already-applied.test.ts keeps the
+// membership and the router's live 409 honest against this set.
+export const ALREADY_APPLIED_409_ROUTES: ReadonlySet<string> = new Set([
+  "/api/flag",
+  "/api/post",
+  "/api/vote",
+  "/api/withdraw",
+]);
+
 export function openApi(origin: string, now = Date.now()) {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const r of SURFACE) {
@@ -452,6 +532,26 @@ export function openApi(origin: string, now = Date.now()) {
               },
             }
           : {};
+      // The door-screen refusal 422, declared per route. The writes in
+      // SCREEN_GATE_ROUTES run screenGate before insert and answer 422 when a
+      // hygiene finding fires (or the seat-claim rule always): a clocked JSON
+      // error string, the same body the other refused writes carry. The
+      // author's hygiene_override publishes past the gate, so the 422 is the
+      // gate's refusal, not the write's. Declaring it lets a generated client
+      // read a content refusal as the fix-and-retry class rather than the
+      // malformed-body 400 or the wrong-actor 403 it is not.
+      // test/openapi-screen-422.test.ts pins the membership and the live 422
+      // body against the router.
+      const screen422 =
+        v === "POST" && SCREEN_GATE_ROUTES.has(r.path)
+          ? {
+              "422": {
+                description:
+                  "The door check refused the write before publishing: the citizen text tripped a hygiene rule (or the seat-claim rule, which has no override). The same clocked JSON error body as every other refused write -- a single clocked `error` string naming the rule. Nothing was published or stored. The author's hygiene_override publishes past the gate.",
+                content: { "application/json": {} },
+              },
+            }
+          : {};
       const typed404 =
         v === "GET" && (path === "/api/post/{id}" || path === "/api/comment/{id}")
           ? {
@@ -472,6 +572,54 @@ export function openApi(origin: string, now = Date.now()) {
                     },
                   },
                 },
+              },
+            }
+          : {};
+      // The plain clocked-error 404, declared per route. The keyless lookup
+      // reads in PLAIN_404_ROUTES answer a miss with the same clocked JSON
+      // error body as every other refused read (now, now_utc, a single prose
+      // `error` string) and no id_class discriminator -- distinct from the
+      // typed 404 above, whose body carries id_class / other_kind /
+      // other_route. Declaring only the 200 made an openapi-fetch client type
+      // the miss `never`: it could not read off the wire that the row it asked
+      // for is gone, as opposed to the endpoint itself being absent.
+      // test/openapi-404-plain-miss.test.ts pins the membership and the live
+      // 404 body against the router.
+      const plain404 =
+        v === "GET" && PLAIN_404_ROUTES.has(r.path)
+          ? {
+              "404": {
+                description:
+                  "The id or handle in the path names no live row. The same clocked JSON error body as every other refused read -- a single prose `error` string, no id_class discriminator (the two id-lookup reads that carry one are declared separately).",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      properties: {
+                        error: { type: "string" },
+                      },
+                      required: ["error"],
+                    },
+                  },
+                },
+              },
+            }
+          : {};
+            // The already-applied 409, declared per route. The four everyday citizen
+      // writes in ALREADY_APPLIED_409_ROUTES answer 409 when the act has already
+      // been recorded (a near-identical post, a second vote, a second flag, a
+      // second withdrawal), with the same clocked JSON error body the 401 and the
+      // daily-cap 429 carry. Declaring it is what lets a generated client read an
+      // already-recorded act as the conflict class -- "nothing new was written" --
+      // rather than a permanent 400 or a retry-later 429: openapi-fetch types the
+      // 409 body `never` until it is declared.
+      const conflict409 =
+        v === "POST" && ALREADY_APPLIED_409_ROUTES.has(r.path)
+          ? {
+              "409": {
+                description:
+                  "The act is already recorded: a near-identical post inside the window, a second vote, a second flag, or a second withdrawal of the same target. Nothing new was written. The same clocked JSON error body as every other refused write.",
+                content: { "application/json": {} },
               },
             }
           : {};
@@ -515,7 +663,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(r.auth === "bearer" ? { security: [{ citizenSecret: [] }] } : r.auth === "optional" ? { security: [{}, { citizenSecret: [] }] } : {}),
         "x-writes": r.writes,
         ...(r.caps ? { "x-caps": r.caps } : {}),
-        responses: { ...errorResponses, ...write400, ...forbidden403, ...query400, ...cap429, ...typed404, ...conditional304, [success]: { description: responseDesc, content: { [media]: {} } } },
+        responses: { ...errorResponses, ...write400, ...forbidden403, ...query400, ...cap429, ...screen422, ...typed404, ...plain404, ...conflict409, ...conditional304, [success]: { description: responseDesc, content: { [media]: {} } } },
       };
     }
   }
