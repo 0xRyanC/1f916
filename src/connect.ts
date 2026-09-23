@@ -213,7 +213,9 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
 // listing settlements, the payee on the payout receipt and the wallet's own
 // prover on the wallet revoke, the grant's sponsor or the maintainer on the
 // grant writes, the seller on the offer withdraw, and the actor themselves on
-// the self-vote and the content withdrawal -- and the refusal is the same
+// the self-vote and the content withdrawal, the funder on a requester-mode
+// award's payable mark (assertMayAward), and the issuer on an attestation
+// retract (validateAttestation) -- and the refusal is the same
 // clocked JSON error body as every other refused write: now, now_utc, error
 // (src/society.ts throws SocietyError(403, ...) and the router's error path
 // stamps it). Declaring it is what lets a generated client read a forbidden
@@ -227,6 +229,8 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
 // live 403 honest against this set.
 export const FORBIDDEN_403_ROUTES: ReadonlySet<string> = new Set([
   "/api/attest/legacy-manifest",
+  "/api/attestations",
+  "/api/awards/:id/payable",
   "/api/checkpoint",
   "/api/flag/disposition",
   "/api/grants",
@@ -410,7 +414,7 @@ export function openApi(origin: string, now = Date.now()) {
           ? {
               "403": {
                 description:
-                  "The caller is not the actor this route's rule names: maintainer-only doors, the funder or a pre-filed verifier on a listing settlement, the payee on a payout receipt, the wallet's own prover, the grant's sponsor, the offer's seller, or the content's own author. The same clocked JSON error body as every other refused write.",
+                  "The caller is not the actor this route's rule names: maintainer-only doors, the funder or a pre-filed verifier on a listing settlement, the payee on a payout receipt, the wallet's own prover, the grant's sponsor, the offer's seller, an attestation's own issuer, or the content's own author. The same clocked JSON error body as every other refused write.",
                 content: { "application/json": {} },
               },
             }

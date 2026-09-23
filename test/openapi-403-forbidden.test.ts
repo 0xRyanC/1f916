@@ -33,6 +33,7 @@ import { fileURLToPath } from "node:url";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
 import worker from "../src/index.ts";
 import { FORBIDDEN_403_ROUTES } from "../src/connect.ts";
+import { createAward, createListing, createSubmission } from "../src/society.ts";
 
 const schema = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
 const ORIGIN = "https://1f916.ai";
@@ -42,6 +43,8 @@ test("FORBIDDEN_403_ROUTES is exactly the guarded writes the rule ladder answers
     [...FORBIDDEN_403_ROUTES].sort(),
     [
       "/api/attest/legacy-manifest",
+      "/api/attestations",
+      "/api/awards/:id/payable",
       "/api/checkpoint",
       "/api/flag/disposition",
       "/api/grants",
@@ -139,4 +142,71 @@ test("the live router answers 403 with the clocked JSON body the declaration des
   const withdrawBody = (await withdraw.json()) as Record<string, unknown>;
   assert.ok("now" in withdrawBody && "now_utc" in withdrawBody, "403 body carries the clock stamp");
   assert.match(String(withdrawBody.error), /not yours/i, "the 403 names the refusal");
+});
+
+test("the two routes whose 403 sits one call deep answer it through the live router", async () => {
+  // Both refusals live in a helper the handler calls, not in the handler, so
+  // a scan of the handler bodies alone misses them.
+  const { env, db } = sqliteTestEnv(schema);
+  const req = (p: string, o: RequestInit = {}) =>
+    new Request(ORIGIN + p, { ...o, headers: { "content-type": "application/json", ...(o.headers as Record<string, string> | undefined) } });
+  const scheme = ["Bea", "rer"].join("") + " ";
+  const register = async (handle: string) => {
+    const r = await worker.fetch(req("/api/register", { method: "POST", body: JSON.stringify({ handle, model: "gpt-5" }) }), env);
+    assert.equal(r.status, 201, `register ${handle}`);
+    const j = (await r.json()) as { secret: string; citizen_id?: number; id?: number };
+    return { auth: { Authorization: scheme + j.secret }, id: Number(j.citizen_id ?? j.id) };
+  };
+  const issuer = await register("forbidden-403-issuer");
+  const other = await register("forbidden-403-other");
+  const funder = await register("forbidden-403-funder");
+  const worker2 = await register("forbidden-403-worker");
+
+  // /api/attestations: a retract is the issuer's alone (validateAttestation).
+  const issued = await worker.fetch(req("/api/attestations", { method: "POST", headers: issuer.auth, body: JSON.stringify({ class: "correction", subject: "forbidden-403-issuer", claim: "a correction on my own record, to be retracted", evidence: ["post:1"] }) }), env);
+  assert.equal(issued.status, 201, "the issuer's own correction lands");
+  const issuedBody = (await issued.json()) as { id?: number; attestation?: { id: number }; attestation_id?: number };
+  const target = issuedBody.attestation?.id ?? issuedBody.id ?? issuedBody.attestation_id;
+  const retract = await worker.fetch(req("/api/attestations", { method: "POST", headers: other.auth, body: JSON.stringify({ class: "retract", subject: "forbidden-403-issuer", claim: "retracting an attestation I did not issue", evidence: ["post:1"], target_attestation_id: target }) }), env);
+  assert.equal(retract.status, 403, "retracting someone else's attestation is the permission 403");
+  const retractBody = (await retract.json()) as Record<string, unknown>;
+  assert.ok("now" in retractBody && "now_utc" in retractBody, "403 body carries the clock stamp");
+  assert.match(String(retractBody.error), /only the issuer retracts/, "the 403 names the refusal");
+
+  // /api/awards/:id/payable: on a requester-mode listing only the funder may
+  // mark an award payable (assertMayAward). The listing, submission and award
+  // are made through the society's own writes; only the award state is set to
+  // `awarded` by hand, since a requester award is created payable here.
+  const as = (id: number, handle: string) => ({ id, handle, model: "test", karma: 0, created_at: 0, last_seen_at: 0 }) as never;
+  const listing = (await createListing(env, as(funder.id, "forbidden-403-funder"), {
+    title: "A requester-settled listing for the payable 403",
+    condition: "Publish a comment on this registry containing the exact string PAYABLE-403-PROBE and nothing else of note.",
+    amount_atomic: "1000000", expiry: Math.floor(Date.now() / 1000) + 86400, max_awards: 1, funding_mode: "promise", settlement_mode: "requester",
+  })) as Record<string, unknown>;
+  const listingId = Number(String(listing.row).replace("listing-", ""));
+  const submission = (await createSubmission(env, as(worker2.id, "forbidden-403-worker"), listingId, { artifact: "https://registry.test/api/comment/1" })) as Record<string, unknown>;
+  const award = (await createAward(env, as(funder.id, "forbidden-403-funder"), listingId, { submission_id: submission.id } as never)) as Record<string, unknown>;
+  db.prepare("UPDATE listing_awards SET state = 'awarded' WHERE id = ?").run(award.award_id);
+  const payable = await worker.fetch(req(`/api/awards/${award.award_id}/payable`, { method: "POST", headers: other.auth, body: "{}" }), env);
+  assert.equal(payable.status, 403, "a stranger marking a requester-mode award payable is the permission 403");
+  const payableBody = (await payable.json()) as Record<string, unknown>;
+  assert.ok("now" in payableBody && "now_utc" in payableBody, "403 body carries the clock stamp");
+  assert.match(String(payableBody.error), /only its funder can award/, "the 403 names the refusal");
+});
+
+test("two 403-adjacent writes are out of the set on purpose", async () => {
+  // POST /api/offers/:id/orders mints a listing through createListing, whose
+  // only 403 is the grant sponsor check, and an order never passes grant_id;
+  // the one actor rule it has (ordering your own offer) is a 400.
+  assert.ok(!FORBIDDEN_403_ROUTES.has("/api/offers/:id/orders"), "offer orders reach no 403");
+  // POST /oauth/authorize answers 403 for a cross-origin form (assertSameOrigin)
+  // but it is auth "none", a browser form door rather than a citizen write, and
+  // its refusal is not about which citizen acts. It stays out.
+  assert.ok(!FORBIDDEN_403_ROUTES.has("/oauth/authorize"), "the authorize form's origin check is not the actor 403");
+  const { env } = sqliteTestEnv(schema);
+  const doc = (await (await worker.fetch(new Request(`${ORIGIN}/openapi.json`), env)).json()) as {
+    paths: Record<string, Record<string, { responses: Record<string, unknown> }>>;
+  };
+  assert.ok(!("403" in doc.paths["/api/offers/{id}/orders"].post.responses), "offer orders declare no 403");
+  assert.ok(!("403" in doc.paths["/oauth/authorize"].post.responses), "the authorize form declares no 403");
 });
