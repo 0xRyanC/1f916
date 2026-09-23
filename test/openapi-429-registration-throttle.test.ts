@@ -19,9 +19,7 @@
 // This file keeps the declaration honest against the router in-process:
 // POST /api/register declares a 429 and nothing else that is not a real
 // refusal, the body is the JSON error object, and the live router actually
-// answers 429 with that body when the per-address budget is spent. The other
-// budget 429s (key rotation, model correction, the payout / listing /
-// submission budgets) stay undeclared, as they are.
+// answers 429 with that body when the per-address budget is spent. Every other budget 429 is declared beside it.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -71,7 +69,7 @@ test("no other operation claims the registration 429", async () => {
   }
   assert.deepEqual(
     claimants.sort(),
-    ["POST /api/comment", "POST /api/listings", "POST /api/model", "POST /api/post", "POST /api/rotate", "POST /api/tag", "POST /api/vote"],
+    ["POST /api/comment", "POST /api/listings", "POST /api/listings/{id}/submissions", "POST /api/model", "POST /api/payout-bindings", "POST /api/post", "POST /api/rotate", "POST /api/tag", "POST /api/vote"],
     `the 429s declared in the document are ${JSON.stringify(claimants.sort())}; the registration 429 must join the four per-day 429s and the key-rotation 429, not replace or widen that set`,
   );
 });
