@@ -2,8 +2,10 @@
 // digits, so wholeNumber accepts it; left unguarded it sits past every real
 // payout binding id and the page is empty-complete — the same shape PR #228
 // closed on /api/events, PR #241 on /api/attestations, and PR #244 on
-// /api/listings, measured live as GET /api/payouts?since_id=999999 → 200 /
-// bindings [] / has_more false (tip 289 exhausted 200; tip+1 still 200).
+// /api/listings. It was measured live that way (GET /api/payouts
+// ?since_id=999999 → 200 / bindings [] / has_more false) until the MAX(id)
+// guard landed; since then the live probe is 400 ("a cursor is a payout
+// binding id, not a timestamp").
 // This feed actually pages (PAYOUT_PAGE = 50), so a walker that treats a
 // unix-ms since_id as caught-up stops mid-log.
 //

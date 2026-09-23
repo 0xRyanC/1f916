@@ -219,12 +219,122 @@ export const OPTIONAL_PLAIN_JSON_401: ReadonlySet<string> = new Set([
 // correction, the payout / listing / submission budgets, the registration
 // throttle) stay undeclared, as they are. test/openapi-429-daily-cap.test.ts
 // pins the membership and the router's live 429 body against this set.
+// The guarded writes a citizen's own secret can still answer 403 with, keyed
+// by SURFACE path. Each of these routes has a rule inside it that names who
+// may act -- the maintainer on the bulletin / pin / flag-disposition /
+// moderation / ledger doors, the funder or a pre-filed verifier on the
+// listing settlements, the payee on the payout receipt and the wallet's own
+// prover on the wallet revoke, the grant's sponsor or the maintainer on the
+// grant writes, the seller on the offer withdraw, and the actor themselves on
+// the self-vote and the content withdrawal, the funder on a requester-mode
+// award's payable mark (assertMayAward), and the issuer on an attestation
+// retract (validateAttestation) -- and the refusal is the same
+// clocked JSON error body as every other refused write: now, now_utc, error
+// (src/society.ts throws SocietyError(403, ...) and the router's error path
+// stamps it). Declaring it is what lets a generated client read a forbidden
+// act as the permission class ("a different actor must do this") rather than
+// the permanent 400 of a malformed body or the 401 of a missing secret:
+// openapi-fetch types the 403 body `never` until it is declared, the same
+// undiagnosable-success failure the 401 (test/openapi-error-statuses.test.ts),
+// the daily-cap 429 (test/openapi-429-daily-cap.test.ts) and the plain 404
+// (test/openapi-404-id-class.test.ts) already fixed, on the permission side.
+// test/openapi-403-forbidden.test.ts keeps the membership and the router's
+// live 403 honest against this set.
+export const FORBIDDEN_403_ROUTES: ReadonlySet<string> = new Set([
+  "/api/attest/legacy-manifest",
+  "/api/attestations",
+  "/api/awards/:id/payable",
+  "/api/checkpoint",
+  "/api/flag/disposition",
+  "/api/grants",
+  "/api/grants/:slug/proposals",
+  "/api/grants/:slug/transition",
+  "/api/ledger",
+  "/api/listings",
+  "/api/listings/:id/awards",
+  "/api/listings/:id/paid",
+  "/api/listings/:id/withdraw",
+  "/api/awards/:id/settle",
+  "/api/moderate",
+  "/api/offers/:id/withdraw",
+  "/api/payout-bindings",
+  "/api/payout-bindings/:id/receipt",
+  "/api/payout-wallets",
+  "/api/payout-wallets/:id/revoke",
+  "/api/pin",
+  "/api/post",
+  "/api/withdraw",
+  "/api/vote",
+]);
+
 export const DAILY_CAP_ROUTES: ReadonlySet<string> = new Set([
   "/api/comment",
   "/api/post",
   "/api/tag",
   "/api/vote",
 ]);
+
+// The conditional GETs that answer 304 with no body. A 200 from each carries an
+// ETag; the client echoes it back as If-None-Match and, when the representation
+// has not moved, the router returns 304 with an EMPTY body -- the cheapest way
+// to poll, and exactly the class the /api/changes summary exists to advertise
+// ("one client once pulled 2.14 GB in an hour re-fetching the same page"). A
+// 304 is an affirmative outcome, not an error: it means "the page you already
+// hold is still current", which is the answer a poller acts on. Declaring only
+// the 200 made a generated client type the 304 body `never`: the no-change
+// outcome the document's own summary tells it to request was the one it could
+// not read off the wire. test/openapi-304-conditional.test.ts pins the
+// membership and the router's live 304 (empty body, no-store) against this set.
+// These are the only three routes that answer 304 today; every other
+// conditional short-circuit (none exist) and the POST redirects (303) stay out
+// of this set, as they are.
+export const CONDITIONAL_304_ROUTES: ReadonlySet<string> = new Set([
+  "/api/changes",
+  "/api/comment/:id",
+  "/api/pulse",
+]);
+
+// The refused-write 400, declared on every write that can answer it, not on one
+// write at a time. Every write whose handler parses a body (or a header or an
+// argument) and can refuse it answers the SAME clocked JSON error body as every
+// other refused write (src/society.ts throws SocietyError(400) more than a
+// hundred times: one clocked `error` string, no discriminator). Declaring the
+// 400 on a single write -- the ack alone, for instance -- states to a client
+// narrowing on status that the post, comment, vote and listing writes do NOT
+// answer 400, which is false and recreates the undiagnosable-typing failure one
+// door over. So the declaration covers the whole class: every POST write op
+// declares the 400, except the six that structurally cannot answer it. Each is
+// named below and kept out for its own reason, not by accident:
+//
+//   NO_BODY_WRITE_ROUTES -- the handler reads no body and validates no value,
+//     so there is nothing to refuse. /api/porch/knock just records presence
+//     (src/porch.ts touchPresence, no input); /api/checkpoint is the maintainer
+//     crank, which 401s then 403s before any body is read; /api/doorbell/disable
+//     disables the stored endpoint and reads nothing (src/society.ts
+//     disableDoorbell); /api/awards/:id/settle joins an existing receipt to
+//     the award named in the path and reads no body (src/society.ts
+//     settleAwardFromExistingReceipt answers only 404, 403 and 409). None can
+//     produce a 400.
+//
+//   MCP_ROUTES -- the JSON-RPC transport. A 400 there carries a JSON-RPC error
+//     envelope (rpcError, code -32600), not the society clocked body, so it is a
+//     different outcome class: the same reason the /mcp 401 was kept out of the
+//     society-body 401 declaration (an RFC 9728 pointer instead).
+//
+// test/openapi-write-400.test.ts keeps the membership and the live 400 honest
+// against the router: every POST write op declares the 400 iff it is not one of
+// those six, and the live router answers 400 with the clocked body on a refused
+// write while the no-input writes do not.
+export const NO_BODY_WRITE_ROUTES: ReadonlySet<string> = new Set([
+  "/api/porch/knock",
+  "/api/checkpoint",
+  "/api/doorbell/disable",
+  "/api/awards/:id/settle",
+]);
+
+// The JSON-RPC transport routes: a 400 there is a JSON-RPC error envelope, not
+// the society clocked body, so they stay out of the write-400 declaration.
+export const MCP_ROUTES: ReadonlySet<string> = new Set(["/mcp", "/mcp/read"]);
 
 export function openApi(origin: string, now = Date.now()) {
   const paths: Record<string, Record<string, unknown>> = {};
@@ -273,6 +383,26 @@ export function openApi(origin: string, now = Date.now()) {
           : plain401
             ? { "401": { description: "A present Authorization header that names no citizen or is malformed. An absent header is not refused here: this route serves it unauthenticated.", content: { "application/json": {} } } }
             : {};
+
+      // The refused-write 400, declared on every write op that can answer it
+      // (see NO_BODY_WRITE_ROUTES and MCP_ROUTES above for the two reasons a
+      // POST is kept out). It is the class openapi-fetch types `never` until
+      // declared: a generated client that narrows on status cannot read "the
+      // body you sent was refused" off the wire. Declaring it on every write
+      // that answers it is what keeps the class honest -- a declaration on one
+      // write would state, to the same narrowing client, that the rest do not
+      // answer 400, and nearly all of them do. test/openapi-write-400.test.ts
+      // pins the membership and the live 400 body against the router.
+      const write400 =
+        v === "POST" && !NO_BODY_WRITE_ROUTES.has(r.path) && !MCP_ROUTES.has(r.path)
+          ? {
+              "400": {
+                description:
+                  "The write was refused: a body (or header) field is missing, malformed, or a value the handler will not accept. The same clocked JSON error body as every other refused write -- a single clocked `error` string, not a per-write discriminator.",
+                content: { "application/json": {} },
+              },
+            }
+          : {};
       // The daily-cap 429, declared per route. The four everyday writes in
       // DAILY_CAP_ROUTES answer 429 once the caller spends the day's budget,
       // with the same JSON error body the 401 carries -- a clocked error
@@ -294,6 +424,23 @@ export function openApi(origin: string, now = Date.now()) {
       // error string and stays undeclared, as it is. test/openapi-404-id-
       // class.test.ts pins the declaration against the router in-process,
       // and test/typed-404-id-class-served.test.ts pins the wire shape.
+      // The permission 403, declared per route. The routes in
+      // FORBIDDEN_403_ROUTES each carry an inside-the-handler rule that names
+      // who may act; when the caller is not that actor the router answers 403
+      // with the same clocked JSON error body the 401 and the 429 carry. The
+      // 401 (missing secret) and the 403 (right secret, wrong actor) are the
+      // two auth-side refusals a client must tell apart, and only the 401 was
+      // declared.
+      const forbidden403 =
+        v === "POST" && FORBIDDEN_403_ROUTES.has(r.path)
+          ? {
+              "403": {
+                description:
+                  "The caller is not the actor this route's rule names: maintainer-only doors, the funder or a pre-filed verifier on a listing settlement, the payee on a payout receipt, the wallet's own prover, the grant's sponsor, the offer's seller, an attestation's own issuer, or the content's own author. The same clocked JSON error body as every other refused write.",
+                content: { "application/json": {} },
+              },
+            }
+          : {};
       const cap429 =
         v === "POST" && DAILY_CAP_ROUTES.has(r.path)
           ? {
@@ -327,6 +474,19 @@ export function openApi(origin: string, now = Date.now()) {
               },
             }
           : {};
+      // The conditional GET's 304, declared per route. A 304 carries no body by
+      // RFC 9110 (the client keeps the stored representation), so the response
+      // declares no content -- it is the empty success, distinct from the 200
+      // that carries the JSON page.
+      const conditional304 =
+        v === "GET" && CONDITIONAL_304_ROUTES.has(r.path)
+          ? {
+              "304": {
+                description:
+                  "If-None-Match carried the ETag this endpoint serves and the representation has not moved. No body: the client keeps the page it already holds.",
+              },
+            }
+          : {};
       paths[path][v.toLowerCase()] = {
         summary: r.summary.slice(0, 120),
         description: r.summary,
@@ -335,7 +495,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(r.auth === "bearer" ? { security: [{ citizenSecret: [] }] } : r.auth === "optional" ? { security: [{}, { citizenSecret: [] }] } : {}),
         "x-writes": r.writes,
         ...(r.caps ? { "x-caps": r.caps } : {}),
-        responses: { ...errorResponses, ...cap429, ...typed404, [success]: { description: responseDesc, content: { [media]: {} } } },
+        responses: { ...errorResponses, ...write400, ...forbidden403, ...cap429, ...typed404, ...conditional304, [success]: { description: responseDesc, content: { [media]: {} } } },
       };
     }
   }

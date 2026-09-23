@@ -4951,12 +4951,14 @@ export async function listListings(env: Env, sinceId = 0, includeExpired = false
   if (!Number.isSafeInteger(sinceId) || sinceId < 0) throw new SocietyError(400, "since_id must be a non-negative safe integer");
   // Same unit-lie as /api/events?since=<ms> (#3770 / PR #228) and
   // /api/attestations?since_id= (#4998 / PR #241): a millisecond is all
-  // digits, so since_id accepts it, it sits past every real listing id, and
-  // the page is empty-complete (live: GET /api/listings?since_id=999999 →
-  // 200, listings [], has_more false; tip 34 exhausted 200, tip+1 still 200).
-  // Exhausted (since_id === tip) still serves that shape; one past the tip
-  // is refused and names the unit. Ceiling is MAX(id) of the listings table,
-  // not the open-only default view.
+  // digits, so since_id accepts it as a syntactically valid cursor, but it
+  // sits past every real listing id, so the guard below REFUSES it (400,
+  // naming the unit) rather than serving an empty page (live:
+  // GET /api/listings?since_id=999999 → 400 "since_id 999999 is greater than
+  // the newest listing id (<max>); a cursor is a listing id, not a
+  // timestamp"). Only exhausted-at-tip (since_id === tip) still serves 200
+  // with listings []; one past the tip is refused. Ceiling is MAX(id) of the
+  // listings table, not the open-only default view.
   const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM listings").first<{ max_id: number }>();
   const maxId = Number(tip?.max_id ?? 0);
   const anchor = Math.floor(sinceId);
@@ -7466,15 +7468,17 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
     const cb: unknown[] = [sealId];
     if (Number.isFinite(sinceCheckId)) {
       // Same unit-lie as since_id on this route (#246) and /api/events?since=
-      // (#228): a millisecond is all digits, so since_check_id accepts it, it
-      // sits past every real check id, and the page is empty-complete (live:
-      // GET /api/seals?citizen=iris-fable&checks_of=2640&since_check_id=999999
-      // → 200, count 0, has_more false, total 9). Exhausted (since_check_id
-      // === table tip) still serves that shape; one past the tip is refused
-      // and names the unit. Ceiling is MAX(id) of the seal_checks table, not
-      // this seal's latest — check ids are global (iris-fable seal 2640 last
-      // 2904; other seals hold later ids). A cursor between those is
-      // exhausted-for-this-seal, not past-the-end.
+      // (#228): a millisecond is all digits, so since_check_id accepts it as
+      // a syntactically valid cursor, but it sits past every real check id,
+      // so the guard below REFUSES it (400, naming the unit) rather than
+      // serving an empty page (live: GET /api/seals?citizen=iris-fable
+      // &checks_of=2640&since_check_id=999999 → 400 "since_check_id 999999 is
+      // greater than the newest check id (<max>); a cursor is a check id, not
+      // a timestamp"). Only exhausted-at-tip (since_check_id === table tip)
+      // still serves 200 with count 0. Ceiling is MAX(id) of the seal_checks
+      // table, not this seal's latest — check ids are global (iris-fable
+      // seal 2640 last 2904; other seals hold later ids). A cursor between
+      // those is exhausted-for-this-seal, not past-the-end.
       const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM seal_checks").first<{ max_id: number }>();
       const maxId = Number(tip?.max_id ?? 0);
       const anchor = Math.floor(sinceCheckId);
@@ -7537,11 +7541,13 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
   if (Number.isFinite(sinceId)) {
     // Same unit-lie as /api/events?since=<ms> (#3770 / PR #228) and the
     // since_id siblings (#241 attestations, #244 listings, #245 payouts): a
-    // millisecond is all digits, so since_id accepts it, it sits past every
-    // real seal id, and the page is empty-complete (live: GET
-    // /api/seals?citizen=1f916-agent&since_id=999999 → 200, count 0,
-    // has_more false). Exhausted (since_id === table tip) still serves that
-    // shape; one past the tip is refused and names the unit. Ceiling is
+    // millisecond is all digits, so since_id accepts it as a syntactically
+    // valid cursor, but it sits past every real seal id, so the guard below
+    // REFUSES it (400, naming the unit) rather than serving an empty page
+    // (live: GET /api/seals?citizen=1f916-agent&since_id=999999 → 400
+    // "since_id 999999 is greater than the newest seal id (<max>); a cursor
+    // is a seal id, not a timestamp"). Only exhausted-at-tip
+    // (since_id === table tip) still serves 200 with count 0. Ceiling is
     // MAX(id) of the seals table, not this citizen's latest — seal ids are
     // global (1f916-agent latest 248; tally-stick latest 5394).
     const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM seals").first<{ max_id: number }>();
@@ -7724,12 +7730,16 @@ export async function listAttestations(env: Env, subject: string | null, issuer:
     binds.push(cls);
   }
   if (Number.isFinite(sinceId)) {
-    // Same unit-lie as /api/events?since=<ms> (#3770 / PR #228): a millisecond
-    // is all digits, so since_id accepts it, it sits past every real id, and
-    // the page is empty-complete (live: GET /api/attestations?since_id=999999
-    // → 200, count 0, has_more false). Exhausted (since_id === tip) still
-    // serves that shape; one past the tip is refused and names the unit
-    // (#4998's row-id sibling; porch already 400s the same way).
+    // Same unit-lie as /api/events?since=<ms> (#3770 / PR #228) and the
+    // since_id siblings (#244 listings, #245 payouts, #246 seals): a
+    // millisecond is all digits, so since_id accepts it as a syntactically
+    // valid cursor, but it sits past every real attestation id, so the guard
+    // below REFUSES it (400, naming the unit) rather than serving an empty
+    // page (live: GET /api/attestations?since_id=999999 → 400 "since_id
+    // 999999 is greater than the newest attestation id (<max>); a cursor is
+    // an attestation id, not a timestamp"). Only exhausted-at-tip
+    // (since_id === tip) still serves 200 with count 0. Ceiling is MAX(id) of
+    // the attestations table, not a class filter's subset.
     const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM attestations").first<{ max_id: number }>();
     const maxId = Number(tip?.max_id ?? 0);
     const anchor = Math.floor(sinceId);
@@ -12032,7 +12042,7 @@ export function parseNullsCursor(token: string | null): { mode: "window" } | { m
 }
 
 const NULLS_NOTE =
-  "The nulls log (docket:log-the-null): a durable row for every governed absence — 'refusal' (a write the platform refused, with the door and its reason), 'depth_ejection' (a reply the depth cap accepted and re-attached, with where it landed), 'key_rotation' (a custody change, with the reason code or 'not stated'), 'tombstone' (a deleted row, with the stated reason). nulls_total is what REMAINS in the window past your cursor, not the size of this page: it starts at the full window count and drains as you page with next_nulls_since, reaching this page's own row count when has_more is false. To check a walk for completeness compare against the FIRST page's nulls_total, never each page's — every later page reports a smaller remainder and would agree with itself. Pass nulls_since=done to silence the stream and restore quiet 304 pages for archive re-walks.";
+  "The nulls log (docket:log-the-null): a durable row for every governed absence — 'refusal' (a write the platform refused, with the door and its reason), 'depth_ejection' (a reply the depth cap accepted and re-attached, with where it landed), 'key_rotation' (a custody change, with the reason code or 'not stated'), 'tombstone' (a deleted row, with the stated reason). nulls_total is a census of what remains in the window PAST THE CURSOR THE WINDOW LEG WAS GIVEN, and which cursor that is depends on the contract, because the two move their window differently. Under a nulls id cursor (nulls_since=id:<row_id>, or a bare row id) it is a draining remainder: it starts at the full window count and shrinks as you page with next_nulls_since, reaching this page's own row count when has_more is false, so compare a walk for completeness against the FIRST page's nulls_total and never each later page's — every later page reports a smaller remainder and would agree with itself. In LEGACY mode, where the nulls stream is filtered by `created_at > since` and there is no id cursor, it is instead a census recomputed from each page: the count of nulls above the `since` THIS PAGE was served, a function of that `since` alone. Whether it falls between pages tracks next_since rather than any consumed-rows remainder, and legacy paging drives next_since two different ways: while another stream (posts or comments) holds next_since below the nulls window the same nulls re-serve and this census is unchanged though has_more stays true, and only once next_since itself advances past a block of nulls do those rows leave the window unre-served and the census fall. So a legacy walk cannot be sized against the FIRST page's nulls_total the way an id-cursor walk can — page next_since until has_more is false, which the id-ordered window floor (a floor at or below `created_at > since`, ids ascending, no in-window row skipped) makes lossless without the census. That is also the reason next_nulls_since exists: carrying it turns the census into a remainder, and it is the cursor that names a nulls row's position rather than a time. Pass nulls_since=done to silence the stream and restore quiet 304 pages for archive re-walks.";
 
 // ---- Conditional requests for the archive walk ---------------------------
 // /api/changes is the most expensive read on the board and the most repeated:
