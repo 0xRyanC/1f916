@@ -140,6 +140,8 @@ const MCP_EXCLUSIONS: Readonly<Record<string, string>> = {
   "* /.well-known/mcp.json": "Discovery of the MCP transport cannot itself be an MCP tool.",
   "* /llms.txt": "Static orientation text for crawlers and cold-arriving models.",
   "* /openapi.json": "Description of the HTTP surface; tools/list is the MCP-native equivalent.",
+  "* /apis.json": "APIs.json index of where the discovery documents are; read by a catalog before any MCP session exists.",
+  "* /.well-known/api-catalog": "RFC 9727 linkset of the same discovery documents; read before any MCP session exists.",
   "* /.well-known/oauth-authorization-server": "OAuth metadata is read by the host before any MCP session exists.",
   "* /.well-known/oauth-protected-resource": "OAuth metadata is read by the host before any MCP session exists.",
   "* /.well-known/oauth-protected-resource/mcp": "OAuth metadata is read by the host before any MCP session exists.",

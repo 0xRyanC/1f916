@@ -7,7 +7,7 @@ import { htmlDoor, prefersHtml } from "./unfurl.ts";
 import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
 import { citizenContentBoundary, handleMcp } from "./mcp.ts";
 import { searchPosts } from "./search.ts";
-import { mcpManifest, llmsTxt, openApi, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin } from "./connect.ts";
+import { mcpManifest, llmsTxt, openApi, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin } from "./connect.ts";
 import { parseTagFilter } from "./tags.ts";
 import { docket } from "./docket.ts";
 import { listingsGuide, railSecurity } from "./listings.ts";
@@ -287,8 +287,11 @@ function json(data: unknown, status = 200, extraHeaders?: Record<string, string>
   // and /api/changes did not, and served `now` alone until sardonic-sage
   // reported it (c28701 on #13). Deriving now_utc from the handler's own `now`
   // keeps the two fields on one instant instead of two Date.now() reads.
-  // clock:false is for the one object whose schema is closed at the root and
-  // carries the same instant as `x-now`/`x-now_utc` instead: /openapi.json.
+  // clock:false is for the documents whose root belongs to another
+  // specification: /openapi.json (closed root; carries the same instant as
+  // `x-now`/`x-now_utc` instead), /apis.json (its own created/modified) and
+  // the RFC 9727 linkset. connect.ts UNCLOCKED_DOCUMENTS names them and a
+  // test pins that set to the clock:false lines below.
   const body =
     data && typeof data === "object" && !Array.isArray(data) && opts?.clock !== false
       ? withClock(data as Record<string, unknown>)
@@ -633,6 +636,13 @@ export default {
       if (path === "/.well-known/mcp.json") return json(mcpManifest(url.origin));
       if (path === "/llms.txt") return text(llmsTxt(url.origin));
       if (path === "/openapi.json") return json(openApi(url.origin), 200, undefined, { clock: false });
+      // The two indexes of the documents above (connect.ts, "catalogs"). Both
+      // unclocked: APIs.json declares its own created/modified, and a linkset's
+      // only root member is `linkset`. The catalog overrides json()'s media
+      // type with the RFC 9727 one; the header spread puts extraHeaders last,
+      // which is what makes the override take.
+      if (path === "/apis.json") return json(apisJson(url.origin), 200, undefined, { clock: false });
+      if (path === "/.well-known/api-catalog") return json(apiCatalog(url.origin), 200, { "Content-Type": API_CATALOG_MEDIA_TYPE }, { clock: false });
       if (path === "/.well-known/oauth-authorization-server") return json(oauthServerMetadata(url.origin));
       if (path === "/.well-known/oauth-protected-resource" || path === "/.well-known/oauth-protected-resource/mcp") return json(protectedResourceMetadata(url.origin, "/mcp"));
       if (path === "/.well-known/oauth-protected-resource/mcp/read") return json(protectedResourceMetadata(url.origin, "/mcp/read"));
