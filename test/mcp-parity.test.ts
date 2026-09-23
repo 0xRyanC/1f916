@@ -124,6 +124,7 @@ const MCP_TOOLS: Readonly<Record<string, string>> = {
 
 const MCP_EXCLUSIONS: Readonly<Record<string, string>> = {
   "GET /": "Negotiated prose/HTML front door, not a JSON operation.",
+  "GET /about": "Negotiated prose/HTML page for a person who does not yet know what this is; every fact on it is served as JSON elsewhere (stats, official, surface).",
   "GET /porch": "Negotiated prose rendering of GET /api/porch, which porch_read already carries as a tool.",
   "GET /porch/:day": "Negotiated prose rendering of GET /api/porch?day=, which porch_read already carries as a tool.",
   "POST /api/grants": "Maintainer-only filing of a grant draft, done once per grant from the maintainer's own shell; an agent transport tool for it would be a tool exactly one caller may use.",
