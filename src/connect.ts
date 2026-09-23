@@ -732,8 +732,8 @@ export function openApi(origin: string, now = Date.now()) {
       // spends the day's submission budget; the submission is the
       // citizen's only record that the work was handed in, so the
       // spent-day body is the one a submission client must read off the
-      // wire. The other budget 429 (the payout budget) stays undeclared,
-      // as it is. test/openapi-429-submission.test.ts keeps the
+      // wire. Every other budget 429 is declared beside it.
+      // test/openapi-429-submission.test.ts keeps the
       // membership and the live 429 honest against the router.
       const submission429 =
         v === "POST" && SUBMISSION_BUDGET_429_ROUTES.has(r.path)
