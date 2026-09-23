@@ -485,10 +485,13 @@ export const SCREEN_GATE_ROUTES: ReadonlySet<string> = new Set([
 // not tell "the row is gone" from "the endpoint is missing" -- the
 // undiagnosable-typing class the 401 / 400 / 429 / 304 declarations fixed on
 // their own sides. Kept to the keyless JSON reads deliberately: the
-// bearer-gated lookups fail at the 401 before a 404 a stranger would meet, and
-// the prose /grants and /porch doors answer text/plain, not the JSON error
-// body, so they stay out of the JSON contract. test/openapi-404-plain-miss.test.ts
-// pins the membership and the live router's clocked 404 body against this set.
+// bearer-gated lookups fail at the 401 before a 404 a stranger would meet.
+// The prose doors are out too: /porch/:day answers an empty text page, not a
+// JSON error, and the prose grants door's JSON 404 (a miss, or a draft that is
+// invisible until it opens) is declared by the prose404 rule beside this one,
+// not by the keyless-lookup set. test/openapi-404-plain-miss.test.ts pins the
+// membership and the live router's clocked 404 body against this set, and
+// test/openapi-404-prose-grant.test.ts pins the prose door's 404.
 export const PLAIN_404_ROUTES: ReadonlySet<string> = new Set([
   "/api/attestations/:id",
   "/api/citizen/:handle",
@@ -856,6 +859,45 @@ export function openApi(origin: string, now = Date.now()) {
               },
             }
           : {};
+      // The prose-door miss 404, declared on the one prose read that answers a
+      // JSON 404: GET /grants/:slug. It is the human prose door for one grant
+      // (produces text/plain, negotiated like /porch), so its success is the
+      // text page -- but when the slug in the path names no grant, or the
+      // grant is still a draft and so invisible until it opens, readGrant
+      // (src/grants.ts) answers through openGrant with SocietyError(404,
+      // "no grant <slug>"), the same clocked JSON error body as every other
+      // refused read, and that refusal runs before the content negotiation,
+      // so the client receives a JSON 404 whether it asked for HTML or plain
+      // text. The JSON twin, GET /api/grants/:slug, already declares this 404
+      // (it is in PLAIN_404_ROUTES); the prose door declared only its 200 text
+      // page and the query 400. Declaring it is what lets a client following
+      // the human link read "the grant is gone (or not open yet)" off the
+      // wire instead of typing the miss `never` -- the same absence contract
+      // the JSON twin carries, and the one the /porch prose doors do not have
+      // (they answer an empty page, not a JSON error). The body is a single
+      // prose `error` string with no id_class discriminator, like the plain
+      // 404 beside it. test/openapi-404-prose-grant.test.ts pins the
+      // declaration and the live 404 against the router in-process.
+      const prose404 =
+        v === "GET" && r.path === "/grants/:slug"
+          ? {
+              "404": {
+                description:
+                  "The slug in the path names no grant, or the grant is still a draft and so invisible until it opens. The same clocked JSON error body as every other refused read -- a single prose `error` string, no id_class discriminator. Served as JSON even on a text/plain or HTML door: the refusal runs before the content negotiation, so the 200 is the only text response on this route.",
+                content: {
+                  "application/json": {
+                    schema: {
+                      type: "object",
+                      properties: {
+                        error: { type: "string" },
+                      },
+                      required: ["error"],
+                    },
+                  },
+                },
+              },
+            }
+          : {};
             // The already-applied 409, declared per route. The four everyday citizen
       // writes in ALREADY_APPLIED_409_ROUTES answer 409 when the act has already
       // been recorded (a near-identical post, a second vote, a second flag, a
@@ -944,6 +986,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(screen422 as Record<string, unknown>),
         ...(typed404 as Record<string, unknown>),
         ...(plain404 as Record<string, unknown>),
+        ...(prose404 as Record<string, unknown>),
         ...(conflict409 as Record<string, unknown>),
         ...(conditional304 as Record<string, unknown>),
         ...(rot429 as Record<string, unknown>),

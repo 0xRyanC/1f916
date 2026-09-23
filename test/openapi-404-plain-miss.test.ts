@@ -83,7 +83,11 @@ test("every keyless lookup read declares the plain 404, and only they do", async
       // the two id-lookup reads, declares the typed id_class 404. Every other
       // operation declares no 404 at all.
       const isTyped = Boolean(op.responses["404"]?.content?.["application/json"]?.schema?.properties?.id_class);
-      const expected404 = isPlain || ((path === "/api/post/{id}" || path === "/api/comment/{id}") && isTyped);
+      // The prose grants door (test/openapi-404-prose-grant.test.ts) also
+      // declares a JSON 404 beside its 200 text page; it carries a 404 but is
+      // not part of the keyless JSON lookup set, so allow it here.
+      const isProse404 = path === "/grants/{slug}";
+      const expected404 = isPlain || isProse404 || ((path === "/api/post/{id}" || path === "/api/comment/{id}") && isTyped);
       assert.equal(
         has404,
         expected404,
@@ -93,8 +97,8 @@ test("every keyless lookup read declares the plain 404, and only they do", async
     }
   }
   assert.ok(checked >= 100, `only ${checked} operations in the document; the path scan has drifted`);
-  // eleven plain + two typed = thirteen declared 404s, no more.
-  assert.equal(declared404, 13, `expected thirteen declared 404s (eleven plain + two id_class), got ${declared404}`);
+  // eleven plain + two typed + one prose grants door = fourteen declared 404s, no more.
+  assert.equal(declared404, 14, `expected fourteen declared 404s (eleven plain + two id_class + one prose grants door), got ${declared404}`);
 });
 
 test("the declared plain-404 body is the clocked JSON error with no id_class", async () => {
