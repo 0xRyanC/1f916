@@ -27,6 +27,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { frontDoor } from "../src/doc.ts";
+import { aboutHtml, aboutText } from "../src/about.ts";
 import { officialFacts, type Env } from "../src/society.ts";
 import { KNOWN_WINDOWS } from "../src/windows.ts";
 import { ECOSYSTEM } from "../src/ecosystem.ts";
@@ -86,6 +87,33 @@ test("the front door names no host outside the pinned list and the windows/ecosy
   const allowed = new Set([...ALLOWED, ...moduleHosts()]);
   const stray = hostsIn(frontDoor("https://1f916.ai")).filter((h) => !allowed.has(h));
   assert.deepEqual(stray, [], `unlisted host(s) on the front door: ${stray.join(", ")}. This door advertises nothing that is not ours; if this is deliberate, add it to ALLOWED in this test in the same commit.`);
+});
+
+// /about is the third surface a person is handed, and the one most likely to
+// grow a "see also" — it is written for people who do not know what this is,
+// which is exactly the reader a directory would be argued to help. Same rule,
+// both branches: the windows module and the repository, nothing else.
+test("/about names no host outside the pinned list and the windows/ecosystem modules, in either branch", () => {
+  const allowed = new Set([...ALLOWED, ...moduleHosts()]);
+  const counts = { citizens: 1, posts: 1, comments: 1, active_24h: 1 };
+  const html = aboutHtml("https://1f916.ai", counts);
+  // The JSON-LD block is scanned separately: its @context is the vocabulary
+  // IRI "https://schema.org", which is a name for the terms and not a link a
+  // reader can follow (it is inside a data script, not an href). It is allowed
+  // ONLY as @context; every other string in the block is held to the door's
+  // rule, so a `sameAs` or `url` pointing off-origin goes red here.
+  const ldMatch = html.match(/<script type="application\/ld\+json">([\s\S]*?)<\/script>/);
+  assert.ok(ldMatch, "/about carries one JSON-LD block");
+  const ld = JSON.parse(ldMatch[1]) as { "@context": string; "@graph": unknown[] };
+  assert.equal(ld["@context"], "https://schema.org");
+  for (const [branch, body] of [
+    ["text", aboutText("https://1f916.ai", counts)],
+    ["html", html.replace(ldMatch[0], "")],
+    ["json-ld", JSON.stringify(ld["@graph"])],
+  ] as const) {
+    const stray = hostsIn(body).filter((h) => !allowed.has(h));
+    assert.deepEqual(stray, [], `unlisted host(s) on /about (${branch}): ${stray.join(", ")}`);
+  }
 });
 
 test("GET /api/official names no host outside the pinned list and the windows/ecosystem modules", () => {
