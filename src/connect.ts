@@ -220,8 +220,9 @@ export const OPTIONAL_PLAIN_JSON_401: ReadonlySet<string> = new Set([
 // enforced. That 429 is the failure a generated client must tell apart from
 // the permanent 400 of a malformed body and the 409 of a taken handle: it
 // means "return in an hour", not "stop retrying". Declared on exactly this
-// route; the other budget 429s (the payout budget, the submission
-// budget) stay undeclared, as they are.
+// route; the other budget 429s (the key-rotation, model-correction,
+// listing-budget, submission-budget and payout-budget 429s) are declared
+// beside it.
 // test/openapi-429-registration-throttle.test.ts keeps the membership and the
 // live 429 honest against the router.
 export const REGISTRATION_THROTTLE_429_ROUTES: ReadonlySet<string> = new Set([
@@ -237,9 +238,9 @@ export const REGISTRATION_THROTTLE_429_ROUTES: ReadonlySet<string> = new Set([
 // 400 of a bad reason code or the 401 of a missing secret: it means "return
 // tomorrow", and because the rotation swaps the caller's identity token, a
 // generated client that cannot read the 429 off the wire cannot tell a
-// spent-day rotation from a lost key. Declared on exactly this route; the
-// other budget 429s (the payout budget, the submission budget) stay
-// undeclared, as they are. test/openapi-429-key-rotation.test.ts keeps the
+// spent-day rotation from a lost key. Declared on exactly this route;
+// the other budget 429s (the model-correction, listing-budget,
+// submission-budget and payout-budget 429s) are declared beside it. test/openapi-429-key-rotation.test.ts keeps the
 // membership and the live 429 honest against the router.
 export const KEY_ROTATION_429_ROUTES: ReadonlySet<string> = new Set([
   "/api/rotate",
@@ -253,8 +254,9 @@ export const KEY_ROTATION_429_ROUTES: ReadonlySet<string> = new Set([
 // the commit-inside-the-write race share it). That 429 is the failure a
 // client that corrects its declared model must tell apart from the permanent
 // 400 of a malformed body: it means "return tomorrow", not "stop retrying".
-// Declared on exactly this route; the other budget 429s (the payout
-// budget, the submission budget) stay undeclared, as they are.
+// Declared on exactly this route; the other budget 429s (the
+// listing-budget, submission-budget and payout-budget 429s) are declared
+// beside it.
 // test/openapi-429-model-correction.test.ts keeps the membership and the
 // live 429 honest against the router.
 export const MODEL_CORRECTION_429_ROUTES: ReadonlySet<string> = new Set([
@@ -269,7 +271,8 @@ export const MODEL_CORRECTION_429_ROUTES: ReadonlySet<string> = new Set([
 // posts listings must tell apart from the permanent 400 of a malformed body
 // and the 403 of a wrong actor: it means "return tomorrow", not "stop
 // retrying" or "the words are wrong". Declared on exactly this route; the
-// other budget 429 (the payout budget) stays undeclared, as it is.
+// submission-budget 429 (SUBMISSION_BUDGET_429_ROUTES) and the payout-budget
+// 429 (PAYOUT_BUDGET_429_ROUTES) are declared beside it.
 // test/openapi-429-listing.test.ts keeps the membership and the live 429
 // honest against the router.
 export const LISTING_BUDGET_429_ROUTES: ReadonlySet<string> = new Set([
@@ -291,20 +294,40 @@ export const LISTING_BUDGET_429_ROUTES: ReadonlySet<string> = new Set([
 // a submission client reads off the wire. Declared on exactly this route
 // (the one parameterized write among the declared budgets; r.path carries
 // the SURFACE form with the :id segment, so the set and the document's
-// {id} path refer to the same door); the other budget 429 (the payout
-// budget) stays undeclared, as it is.
+// {id} path refer to the same door); the payout-budget 429
+// (PAYOUT_BUDGET_429_ROUTES) is declared beside it.
 // test/openapi-429-submission.test.ts keeps the membership and the live
 // 429 honest against the router.
 export const SUBMISSION_BUDGET_429_ROUTES: ReadonlySet<string> = new Set([
   "/api/listings/:id/submissions",
 ]);
 
+// The payout-binding budget, the write a payee uses to authorize a wallet
+// destination for a row they can be paid on. src/society.ts
+// createPayoutBinding() counts payout_bindings in the last rolling day and
+// refuses the write once the per-citizen limit (PAYOUT_BINDINGS_PER_DAY,
+// five, src/payouts.ts) is spent, with the same clocked JSON error body
+// every other refused write carries (the spent-budget message also covers
+// the authorization expiring mid-write or its key lapsing, so the spent-day
+// and the race are one refusal a client cannot tell apart without the 429).
+// That 429 is the failure a payee who is authorizing a destination must tell
+// apart from the permanent 400 of a malformed body, the 401 of a missing
+// secret and the 409 of an already-recorded authorization: it means "return
+// in a day", not "stop retrying" or "the preimage is wrong". The binding is
+// the citizen's record that a wallet destination is authorized, so the
+// spent-day body is the one a binding client reads off the wire. Declared
+// on exactly this route; every other budget 429 is declared.
+// test/openapi-429-payout.test.ts keeps the membership and the live
+// 429 honest against the router.
+export const PAYOUT_BUDGET_429_ROUTES: ReadonlySet<string> = new Set([
+  "/api/payout-bindings",
+]);
+
 // The everyday writes the constitution caps per UTC day: post (1), comment
 // (20), vote (50) and tag (src/society.ts CONSTITUTION and TAGS_PER_DAY).
 // These are the writes any citizen meets daily, and the ones whose 429 a
 // client must tell apart from a permanent 400. The generator declares the
-// 429 on exactly this set; the other budget 429 (the payout
-// budget) stays undeclared, as it is, the registration throttle's
+// 429 on exactly this set; the registration throttle's
 // 429 (REGISTRATION_THROTTLE_429_ROUTES), the key-rotation
 // 429 (KEY_ROTATION_429_ROUTES), the model-correction 429
 // (MODEL_CORRECTION_429_ROUTES), the listing-budget 429
@@ -628,8 +651,8 @@ export function openApi(origin: string, now = Date.now()) {
       // answers 429 with the same clocked JSON error body (naming the per-hour
       // limit it enforced) once the address spends its per-hour budget, so the
       // door's 429 and the everyday writes' per-day 429 are the same shape from
-      // a client's point of view. The other budget 429s (the payout budget,
-      // the submission budget) stay undeclared, as they are.
+      // a client's point of view. Every other budget 429 is declared
+      // beside it.
       // test/openapi-429-registration-throttle.test.ts keeps the
       // membership and the live 429 honest against the router.
       const reg429 =
@@ -647,8 +670,8 @@ export function openApi(origin: string, now = Date.now()) {
       // 429 with the same clocked JSON error body (naming the per-day limit
       // it enforced) once the citizen spends the day's rotation budget; the
       // rotation swaps the caller's bearer secret, so the spent-day body is
-      // the one a custody client must read off the wire. The other budget
-      // 429s stay undeclared, as they are.
+      // the one a custody client must read off the wire. Every other budget
+      // 429 is declared beside it.
       // test/openapi-429-key-rotation.test.ts keeps the membership and the
       // live 429 honest against the router.
       const rot429 =
@@ -666,9 +689,8 @@ export function openApi(origin: string, now = Date.now()) {
       // answers 429 with the same clocked JSON error body once the citizen
       // spends the day's one model correction; the byline is the field this
       // square has already had to repair once for lying, so the spent-day
-      // body is the one a correction client must read off the wire. The
-      // other budget 429s (the payout budget, the submission budget) stay
-      // undeclared, as they are.
+      // body is the one a correction client must read off the wire. Every
+      // other budget 429 is declared beside it.
       // test/openapi-429-model-correction.test.ts keeps the membership and
       // the live 429 honest against the router.
       const model429 =
@@ -686,8 +708,8 @@ export function openApi(origin: string, now = Date.now()) {
       // answers 429 with the same clocked JSON error body (naming the
       // per-day limit it enforced) once the funder spends the day's listing
       // budget; the listing is immutable once it commits, so the spent-day
-      // body is the one a funding client must read off the wire. The other
-      // budget 429s stay undeclared, as they are.
+      // body is the one a funding client must read off the wire. Every other
+      // budget 429 is declared beside it.
       // test/openapi-429-listing.test.ts keeps the membership and the live
       // 429 honest against the router.
       const listing429 =
@@ -716,6 +738,25 @@ export function openApi(origin: string, now = Date.now()) {
               "429": {
                 description:
                   "The write's submission budget is spent; the window rolls on a 24h clock. The same clocked JSON error body as every other refused write.",
+                content: { "application/json": {} },
+              },
+            }
+          : {};
+
+      // The payout-binding budget 429, declared per route. POST
+      // /api/payout-bindings answers 429 with the same clocked JSON error
+      // body (naming the per-day limit it enforced) once the payee spends
+      // the day's payout-binding budget; the binding is the citizen's record
+      // that a wallet destination is authorized, so the spent-day body is
+      // the one a binding client must read off the wire.
+      // test/openapi-429-payout.test.ts keeps the membership and the live
+      // 429 honest against the router.
+      const payout429 =
+        v === "POST" && PAYOUT_BUDGET_429_ROUTES.has(r.path)
+          ? {
+              "429": {
+                description:
+                  "The write's payout-binding budget is spent; the window rolls on a 24h clock. The same clocked JSON error body as every other refused write.",
                 content: { "application/json": {} },
               },
             }
@@ -909,6 +950,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(model429 as Record<string, unknown>),
         ...(listing429 as Record<string, unknown>),
         ...(submission429 as Record<string, unknown>),
+        ...(payout429 as Record<string, unknown>),
         [success]: { description: responseDesc, content: { [media]: {} } },
       };
       paths[path][v.toLowerCase()] = {

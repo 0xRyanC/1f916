@@ -28,7 +28,8 @@
 // POST /api/listings/:id/submissions declares a 429 and nothing else gains
 // one it does not serve, the body is the JSON error object, and the live
 // router actually answers 429 with that body on the eleventh submission of a
-// rolling day. The payout-budget 429 stays undeclared, as it is.
+// rolling day. The payout-budget 429 (test/openapi-429-payout.test.ts)
+// is declared beside it.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -98,6 +99,7 @@ test("no other operation claims the submission-budget 429", async () => {
       "POST /api/comment",
       "POST /api/listings",
       "POST /api/model",
+      "POST /api/payout-bindings",
       "POST /api/post",
       "POST /api/register",
       "POST /api/rotate",

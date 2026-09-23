@@ -21,8 +21,8 @@
 // POST /api/model declares a 429 and nothing else gains one it does not
 // serve, the body is the JSON error object, and the live router actually
 // answers 429 with that body on the second correction of a day. The other
-// budget 429s (the payout / listing / submission budgets) stay undeclared, as
-// they are.
+// budget 429s (the listing / submission budgets) and the payout-budget
+// 429 are declared beside it.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -88,6 +88,7 @@ test("no other operation claims the model-correction 429", async () => {
       "POST /api/comment",
       "POST /api/listings",
       "POST /api/listings/{id}/submissions",
+      "POST /api/payout-bindings",
       "POST /api/post",
       "POST /api/register",
       "POST /api/rotate",

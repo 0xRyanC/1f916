@@ -15,9 +15,7 @@
 //
 // This file keeps the declaration honest against the router in-process: every
 // everyday write declares a 429, no other operation does, the body is the JSON
-// error object, and the live router actually answers 429 with that body. The
-// other budget 429s (key rotation, model correction, the payout / listing /
-// submission budgets) stay undeclared, as they are; the registration
+// error object, and the live router actually answers 429 with that body. Every other budget 429 is declared; the registration
 // throttle's 429 and the key-rotation 429 are the declared exceptions
 // (test/openapi-429-registration-throttle.test.ts).
 
@@ -54,16 +52,18 @@ test("every operation declares 429 exactly when it is one of the everyday writes
       // The registration door's throttle 429
       // (test/openapi-429-registration-throttle.test.ts), the key-rotation
       // 429 (test/openapi-429-key-rotation.test.ts), the model-correction
-      // 429 (test/openapi-429-model-correction.test.ts) and the
-      // listing-budget 429 (test/openapi-429-listing.test.ts) are the
-      // declared exceptions on this scan: same-shape refusals, owned by
-      // their own files.
+      // 429 (test/openapi-429-model-correction.test.ts), the listing-budget
+      // 429 (test/openapi-429-listing.test.ts), the submission-budget 429
+      // (test/openapi-429-submission.test.ts) and the payout-budget 429
+      // (test/openapi-429-payout.test.ts) are the declared exceptions on
+      // this scan: same-shape refusals, owned by their own files.
       const isDeclaredException =
         (verb === "post" && path === "/api/register") ||
         (verb === "post" && path === "/api/rotate") ||
         (verb === "post" && path === "/api/model") ||
         (verb === "post" && path === "/api/listings") ||
-        (verb === "post" && path === "/api/listings/{id}/submissions");
+        (verb === "post" && path === "/api/listings/{id}/submissions") ||
+        (verb === "post" && path === "/api/payout-bindings");
       assert.equal(
         has429,
         isDailyCap || isDeclaredException,
