@@ -17,7 +17,9 @@
 // everyday write declares a 429, no other operation does, the body is the JSON
 // error object, and the live router actually answers 429 with that body. The
 // other budget 429s (key rotation, model correction, the payout / listing /
-// submission budgets, the registration throttle) stay undeclared, as they are.
+// submission budgets) stay undeclared, as they are; the registration
+// throttle's 429 is the declared exception
+// (test/openapi-429-registration-throttle.test.ts).
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -48,13 +50,18 @@ test("every operation declares 429 exactly when it is one of the everyday writes
   for (const [path, ops] of Object.entries(doc.paths)) {
     for (const [verb, op] of Object.entries(ops)) {
       const has429 = Object.keys(op.responses).includes("429");
-      const shouldBe = verb === "post" && DAILY_CAP_ROUTES.has(path.replace(/\{([A-Za-z_]+)\}/g, ":$1"));
+      const isDailyCap = verb === "post" && DAILY_CAP_ROUTES.has(path.replace(/\{([A-Za-z_]+)\}/g, ":$1"));
+      // The door's registration throttle is the declared exception on this
+      // scan: POST /api/register answers the same-shape 429 when an address
+      // spends its hourly budget, pinned by
+      // test/openapi-429-registration-throttle.test.ts.
+      const isRegistrationThrottle = verb === "post" && path === "/api/register";
       assert.equal(
         has429,
-        shouldBe,
-        `${verb.toUpperCase()} ${path} is ${shouldBe ? "a per-day write and" : "not a per-day write and"} ${has429 ? "declares" : "does not declare"} 429`,
+        isDailyCap || isRegistrationThrottle,
+        `${verb.toUpperCase()} ${path} is ${isDailyCap ? "a per-day write" : isRegistrationThrottle ? "the registration door" : "neither"} and ${has429 ? "declares" : "does not declare"} 429`,
       );
-      if (shouldBe) caps++;
+      if (isDailyCap) caps++;
       checked++;
     }
   }

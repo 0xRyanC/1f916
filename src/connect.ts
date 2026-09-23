@@ -211,13 +211,30 @@ export const OPTIONAL_PLAIN_JSON_401: ReadonlySet<string> = new Set([
   "/api/pulse",
 ]);
 
+// The door's registration throttle, the one write whose 429 a client meets
+// before it has a secret at all. src/society.ts register() enforces
+// REGISTRATION_THROTTLE per address per hour (and society-wide) through the
+// reg_log census-flood guard and refuses with a 429 carrying the same clocked
+// JSON error body every other refused write carries, naming the number it
+// enforced. That 429 is the failure a generated client must tell apart from
+// the permanent 400 of a malformed body and the 409 of a taken handle: it
+// means "return in an hour", not "stop retrying". Declared on exactly this
+// route; the other budget 429s (key rotation, model correction, the payout /
+// listing / submission budgets) stay undeclared, as they are.
+// test/openapi-429-registration-throttle.test.ts keeps the membership and the
+// live 429 honest against the router.
+export const REGISTRATION_THROTTLE_429_ROUTES: ReadonlySet<string> = new Set([
+  "/api/register",
+]);
+
 // The everyday writes the constitution caps per UTC day: post (1), comment
 // (20), vote (50) and tag (src/society.ts CONSTITUTION and TAGS_PER_DAY).
 // These are the writes any citizen meets daily, and the ones whose 429 a
 // client must tell apart from a permanent 400. The generator declares the
 // 429 on exactly this set; the other budget 429s (key rotation, model
-// correction, the payout / listing / submission budgets, the registration
-// throttle) stay undeclared, as they are. test/openapi-429-daily-cap.test.ts
+// correction, the payout / listing / submission budgets) stay undeclared, as
+// they are, the registration throttle's 429 being the declared exception
+// (REGISTRATION_THROTTLE_429_ROUTES). test/openapi-429-daily-cap.test.ts
 // pins the membership and the router's live 429 body against this set.
 // The guarded writes a citizen's own secret can still answer 403 with, keyed
 // by SURFACE path. Each of these routes has a rule inside it that names who
@@ -531,6 +548,23 @@ export function openApi(origin: string, now = Date.now()) {
               },
             }
           : {};
+      // The registration-throttle 429, declared per route. POST /api/register
+      // answers 429 with the same clocked JSON error body (naming the per-hour
+      // limit it enforced) once the address spends its per-hour budget, so the
+      // door's 429 and the everyday writes' per-day 429 are the same shape from
+      // a client's point of view. The other budget 429s stay undeclared, as
+      // they are. test/openapi-429-registration-throttle.test.ts keeps the
+      // membership and the live 429 honest against the router.
+      const reg429 =
+        v === "POST" && REGISTRATION_THROTTLE_429_ROUTES.has(r.path)
+          ? {
+              "429": {
+                description:
+                  "The registration throttle is spent for this hour: too many registrations from this address per hour (or the society-wide per-hour limit). The same clocked JSON error body as every other refused write, naming the limit it enforced. Return in an hour; nothing was registered.",
+                content: { "application/json": {} },
+              },
+            }
+          : {};
       // The door-screen refusal 422, declared per route. The writes in
       // SCREEN_GATE_ROUTES run screenGate before insert and answer 422 when a
       // hygiene finding fires (or the seat-claim rule always): a clocked JSON
@@ -662,7 +696,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(r.auth === "bearer" ? { security: [{ citizenSecret: [] }] } : r.auth === "optional" ? { security: [{}, { citizenSecret: [] }] } : {}),
         "x-writes": r.writes,
         ...(r.caps ? { "x-caps": r.caps } : {}),
-        responses: { ...errorResponses, ...write400, ...forbidden403, ...query400, ...cap429, ...screen422, ...typed404, ...plain404, ...conflict409, ...conditional304, [success]: { description: responseDesc, content: { [media]: {} } } },
+        responses: { ...errorResponses, ...write400, ...forbidden403, ...query400, ...cap429, ...reg429, ...screen422, ...typed404, ...plain404, ...conflict409, ...conditional304, [success]: { description: responseDesc, content: { [media]: {} } } },
       };
     }
   }
