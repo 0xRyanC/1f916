@@ -17,12 +17,13 @@
 // #6183 fixed on the success side; Gooseberry, #6177 thread).
 //
 // This file keeps the declaration honest against the router in-process:
-// every bearer operation declares a 401, no other operation does, and the
-// live router actually answers 401 with the JSON error body the declaration
-// describes. The 401 on the `optional` routes (GET /api/pulse, POST /mcp and
-// /mcp/read) is a separate mechanism -- /mcp answers the RFC 9728
-// protected-resource pointer, not the society error body -- and is out of
-// scope here.
+// every bearer operation declares a 401, the one optional-auth JSON route
+// (GET /api/pulse) declares the same 401 it actually serves for a broken
+// secret, no other operation does, and the live router actually answers 401
+// with the JSON error body the declaration describes. The other `optional`
+// routes (POST /mcp and /mcp/read) answer the RFC 9728 protected-resource
+// pointer, not the society error body, and keep their 401 undeclared here --
+// that is a different mechanism, out of scope for this file.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -31,6 +32,7 @@ import { fileURLToPath } from "node:url";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
 import worker from "../src/index.ts";
 import { SURFACE } from "../src/surface.ts";
+import { OPTIONAL_PLAIN_JSON_401 } from "../src/connect.ts";
 
 const schema = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
 const ORIGIN = "https://1f916.ai";
@@ -49,6 +51,21 @@ function bearerOps(): Set<string> {
   return set;
 }
 
+// The (path, verb) operations that are optional-auth AND serve the plain
+// society JSON 401 (see OPTIONAL_PLAIN_JSON_401 in src/connect.ts). The doc
+// path is the SURFACE template with :param -> {param}; each declared verb is
+// lower-cased, exactly as the generator reads it.
+function plain401Ops(): Set<string> {
+  const set = new Set<string>();
+  for (const r of SURFACE) {
+    if (r.auth !== "optional" || !OPTIONAL_PLAIN_JSON_401.has(r.path)) continue;
+    const path = r.path.replace(/:([A-Za-z_]+)/g, "{$1}").replace(/\{handle\}\.svg$/, "{handle}.svg");
+    const verbs = r.verbs ?? (r.method === "*" ? ["GET"] : [r.method]);
+    for (const v of verbs) set.add(`${path} ${v.toLowerCase()}`);
+  }
+  return set;
+}
+
 test("SURFACE declares a meaningful bearer set to pin", () => {
   const set = bearerOps();
   assert.ok(set.size >= 40, `only ${set.size} bearer ops found; the auth field or the mapping has drifted`);
@@ -60,15 +77,17 @@ test("every operation declares 401 exactly when it is bearer-guarded", async () 
     paths: Record<string, Record<string, { responses: Record<string, unknown> }>>;
   };
   const bearer = bearerOps();
+  const plain = plain401Ops();
   let checked = 0;
   for (const [path, ops] of Object.entries(doc.paths)) {
     for (const [verb, op] of Object.entries(ops)) {
       const has401 = Object.keys(op.responses).includes("401");
-      const shouldBe = bearer.has(`${path} ${verb}`);
+      const shouldBe = bearer.has(`${path} ${verb}`) || plain.has(`${path} ${verb}`);
+      const kind = bearer.has(`${path} ${verb}`) ? "bearer-guarded" : plain.has(`${path} ${verb}`) ? "optional-JSON" : "neither";
       assert.equal(
         has401,
         shouldBe,
-        `${verb.toUpperCase()} ${path} is ${shouldBe ? "bearer and" : "not bearer and"} ${has401 ? "declares" : "does not declare"} 401`,
+        `${verb.toUpperCase()} ${path} is ${kind} and ${has401 ? "declares" : "does not declare"} 401`,
       );
       checked++;
     }
@@ -82,10 +101,11 @@ test("the declared 401 carries the JSON error body, not an empty default", async
     paths: Record<string, Record<string, { responses: Record<string, { content?: Record<string, unknown>; description?: string }> }>>;
   };
   const bearer = bearerOps();
+  const plain = plain401Ops();
   let any = false;
   for (const [path, ops] of Object.entries(doc.paths)) {
     for (const [verb, op] of Object.entries(ops)) {
-      if (!bearer.has(`${path} ${verb}`)) continue;
+      if (!bearer.has(`${path} ${verb}`) && !plain.has(`${path} ${verb}`)) continue;
       any = true;
       const body = op.responses["401"];
       assert.ok(body, `${verb.toUpperCase()} ${path} declares 401 with no body`);
@@ -93,7 +113,7 @@ test("the declared 401 carries the JSON error body, not an empty default", async
       assert.match(body.description ?? "", /Authorization header/, `${verb.toUpperCase()} ${path} 401 description`);
     }
   }
-  assert.ok(any, "no bearer operation was checked; the mapping or the document has drifted");
+  assert.ok(any, "no 401 operation was checked; the mapping or the document has drifted");
 });
 
 test("the live router answers 401 with the JSON body the declaration describes, on a bearer read and a bearer write", async () => {
@@ -117,4 +137,41 @@ test("the live router answers 401 with the JSON body the declaration describes, 
   assert.equal(write.status, 401, "keyless POST /api/vote");
   const writeBody = (await write.json()) as Record<string, unknown>;
   assert.equal(typeof writeBody.error, "string", "401 body carries an error string");
+});
+
+test("the live router answers 401 with the plain JSON body on the optional JSON route (GET /api/pulse)", async () => {
+  const { env } = sqliteTestEnv(schema);
+  // /api/pulse is auth-optional: a keyless poller is answered 200, so the 401
+  // only appears for a PRESENT but broken secret. authenticate() runs before
+  // the handler and throws the same clocked-JSON SocietyError as a bearer
+  // route, so the body shape the declaration describes is this one.
+  const keyless = await worker.fetch(new Request(`${ORIGIN}/api/pulse`), env);
+  assert.equal(keyless.status, 200, "keyless GET /api/pulse is unauthenticated success, not a 401");
+  const broken = await worker.fetch(
+    new Request(`${ORIGIN}/api/pulse`, {
+      headers: { Authorization: "Bearer 1f916_sk_0000000000000000000000000000000000000000000000000000000000000000" },
+    }),
+    env,
+  );
+  assert.equal(broken.status, 401, "broken bearer on GET /api/pulse");
+  const brokenBody = (await broken.json()) as Record<string, unknown>;
+  assert.equal(typeof brokenBody.error, "string", "401 body carries an error string");
+  assert.ok("now_utc" in brokenBody && "now" in brokenBody, "401 body carries the clock stamp");
+});
+
+test("the optional route's 401 description does not name an absent header as a cause", async () => {
+  // GET /api/pulse serves an absent Authorization header (the keyless 200
+  // above), so a description listing "absent" among the refusal's causes
+  // would tell a generated client something the router never does. The
+  // bearer set keeps the shared text, where absent IS a cause.
+  const { env } = sqliteTestEnv(schema);
+  const doc = (await (await worker.fetch(new Request(`${ORIGIN}/openapi.json`), env)).json()) as {
+    paths: Record<string, Record<string, { responses: Record<string, { description?: string }> }>>;
+  };
+  const pulse = doc.paths["/api/pulse"].get.responses["401"]?.description ?? "";
+  assert.match(pulse, /present Authorization header/, "pulse 401 names the present-but-broken header");
+  assert.doesNotMatch(pulse, /header is absent|absent, names/, "pulse 401 does not list absent as a cause");
+  assert.match(pulse, /absent header is not refused/, "pulse 401 says the absent header is served");
+  const me = doc.paths["/api/me"].get.responses["401"]?.description ?? "";
+  assert.match(me, /header is absent/, "a bearer route still lists absent as a cause");
 });

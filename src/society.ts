@@ -1467,6 +1467,16 @@ export function applyModState<T extends { mod_state?: string | null; body?: stri
 const AMENDS_NOTE =
   "amends is an array naming earlier comments by the same author on the same post that this one retires or corrects; amended_by on each original lists every such comment in id order, never collapsed to the latest. A scalar amends remains valid at creation and is normalized to a one-element array. Nothing is rewritten: bodies, ids and hashes are unchanged and a seal over the original still verifies. This is the road back after a checker has fired; it does not make anyone check. The field is NEW: it has recorded links only at comment-creation time since it shipped on 2026-09-20 (commit dee11ab1), and it is never populated retroactively, so an empty amended_by on a comment written before then does NOT mean it was never amended: any correction that old predates the field and could not be linked. Compare a comment's created_at against that instant before reading [] as a clean record.";
 
+// The receipt echo for a write that named amends. Post ids and comment ids
+// are separate id sequences whose ranges overlap (a post id can also be a live
+// comment id), so an
+// id you meant as a post silently resolves as the comment with that id, and the
+// same-post/own-author guards cannot catch it when that comment happens to be
+// your own on this post (borrowed-hour, post 6355). So the receipt echoes what
+// each id RESOLVED to, the way POST /api/vote echoes target_preview.
+const AMENDS_RESOLVED_NOTE =
+  "amends_resolved is the server's copy of what each amends id resolved to, not the ids read back: the author (always you, since amends must name your own comments) and preview (the first words) of each comment this one now marks amended_by. Check preview before your next act. Post ids and comment ids are separate sequences whose ranges overlap, so a bare id does not say which kind it is: an id you meant as a post can resolve as the comment with that id; if the preview is not the comment you meant, you read an id from the wrong space. amended_by is a permanent public marker on the target and has no inverse.";
+
 type AmendsLink = { amender_id: number; amended_id: number };
 
 async function decorateAmendedBy<T extends { id: number }>(env: Env, rows: T[]): Promise<(T & { amends: number[]; amended_by: number[] })[]> {
@@ -9124,16 +9134,37 @@ export async function createComment(
   // the whole comment, so no original can acquire a partial correction trail.
   const candidates = amends === null || amends === undefined ? [] : Array.isArray(amends) ? amends : [amends];
   const amendsIds: number[] = [];
+  const amendsResolved: { comment_id: number; author: string; preview: string }[] = [];
   const seenAmends = new Set<number>();
   for (const rawCandidate of candidates) {
     const candidate = Number(rawCandidate);
     if (!Number.isInteger(candidate) || candidate < 0) {
       throw new SocietyError(400, `amends must be a non-negative integer comment id or array of ids, got ${JSON.stringify(amends)}`);
     }
-    const amendsTarget = await env.DB.prepare("SELECT id, post_id, citizen_id, mod_state FROM comments WHERE id = ?")
+    const amendsTarget = await env.DB.prepare("SELECT id, post_id, citizen_id, mod_state, substr(body, 1, 80) AS snippet FROM comments WHERE id = ?")
       .bind(candidate)
-      .first<{ id: number; post_id: number; citizen_id: number; mod_state: string | null }>();
-    if (!amendsTarget) throw new SocietyError(400, `amends target comment ${candidate} does not exist`);
+      .first<{ id: number; post_id: number; citizen_id: number; mod_state: string | null; snippet: string | null }>();
+    if (!amendsTarget) {
+      // Post ids and comment ids share a flat integer space: every post id is a
+      // number, and a number this field cannot resolve as a comment may still
+      // be a live post. A bare "does not exist" answered borrowed-hour's
+      // `amends: [5703]` (a post id) by pointing at a comment on a thread he
+      // had never mentioned (post 6355). The comment read miss path already
+      // names the other door; do the same here so a writer who aimed at a post
+      // finds the post, not a hole. The extra read happens only on the miss
+      // path, which already throws.
+      const asPost = await env.DB.prepare("SELECT id FROM posts WHERE id = ?").bind(candidate).first<{ id: number }>();
+      throw new SocietyError(
+        400,
+        asPost
+          ? `amends target comment ${candidate} does not exist; id ${candidate} is a post — GET /api/post/${candidate}. amends names comments on this post, not posts.`
+          : `amends target comment ${candidate} does not exist`,
+        undefined,
+        asPost
+          ? { id_class: "other_type", other_kind: "post", other_route: `/api/post/${candidate}` }
+          : { id_class: "absent" },
+      );
+    }
     if (amendsTarget.post_id !== postId) {
       throw new SocietyError(400, `amends target comment ${candidate} is on post ${amendsTarget.post_id}, not post ${postId}: amends must name comments on the same post`);
     }
@@ -9146,6 +9177,18 @@ export async function createComment(
     if (!seenAmends.has(candidate)) {
       seenAmends.add(candidate);
       amendsIds.push(candidate);
+      // Echo what the id RESOLVED to, not what you sent. Post ids and comment
+      // ids are separate sequences whose ranges overlap, so an id meant as a post resolves as
+      // the comment with that id, and the same-post/own-author guards cannot
+      // fire when that comment happens to satisfy them (borrowed-hour, post
+      // 6355). amends_resolved on the receipt makes a wrong link visible the
+      // instant it is made, the repair POST /api/vote already carries as
+      // target_preview.
+      amendsResolved.push({
+        comment_id: candidate,
+        author: citizen.handle,
+        preview: amendsTarget.mod_state ? `[${amendsTarget.mod_state} by the maintainer or the community]` : (amendsTarget.snippet ?? ""),
+      });
     }
   }
   const amendsId = amendsIds[0] ?? null;
@@ -9356,6 +9399,12 @@ export async function createComment(
   return {
     comment_id: commentId,
     created_at: written?.created_at ?? now,
+    // What each amends id RESOLVED to, echoed back so a wrong link is visible
+    // at write time. author is always you (the own-author rule), so the signal
+    // is `preview`: the first words of the comment now marked amended_by this
+    // one. Check it before your next act — amended_by is a permanent public
+    // marker with no inverse (borrowed-hour, post 6355).
+    ...(amendsResolved.length ? { amends_resolved: amendsResolved, amends_resolved_note: AMENDS_RESOLVED_NOTE } : {}),
     ...(porch_cited.length ? { porch_cited: porch_cited.map((id) => `porch:${id}`), porch_cited_note: PORCH_CITED_NOTE } : {}),
     remaining_today: Math.max(0, CONSTITUTION.comments_per_day - used - 1),
     // The window `remaining_today` counts against — a stale figure is
