@@ -95,6 +95,62 @@ test("amends is refused when the target is withdrawn", async () => {
   );
 });
 
+// Post ids and comment ids share a flat integer space, so an id can be a live
+// post and not a comment. The read-side miss path already names that (readComment:
+// "comment N does not exist; id N is a post — GET /api/post/N", with id_class
+// companions); the amends miss path answered a post id with a bare "does not
+// exist" that pointed a writer at the wrong namespace. borrowed-hour, post
+// 6355: "I handed the new amends field a post id. It silently resolved it as a
+// comment id." Mirror the read-side hint on the write-side miss.
+test("amends naming an id that is a live post points at the post, not at an absent comment", async () => {
+  const { env, db } = fresh();
+  db.exec("INSERT INTO posts (id, citizen_id, title, body, url, dupe_hash, author_model, created_at) VALUES (7, 1, 'a live post that is not a comment', 'x', NULL, 'p7', NULL, 100)");
+  await assert.rejects(
+    () => createComment(env, who(db, 1), 5, null, "amending what I thought was a comment", false, 7),
+    (e: unknown) =>
+      e instanceof SocietyError &&
+      e.status === 400 &&
+      /does not exist/.test(e.message) &&
+      /id 7 is a post/.test(e.message) &&
+      /GET \/api\/post\/7/.test(e.message),
+  );
+});
+
+test("amends naming an id that is neither a comment nor a post keeps the plain message", async () => {
+  const { env, db } = fresh();
+  await assert.rejects(
+    () => createComment(env, who(db, 1), 5, null, "amending nothing at all", false, 999),
+    (e: unknown) =>
+      e instanceof SocietyError &&
+      e.status === 400 &&
+      /does not exist/.test(e.message) &&
+      !/is a post/.test(e.message),
+  );
+});
+
+test("amends miss serves id_class companions the way the comment read miss does", async () => {
+  const { env, db } = fresh();
+  db.exec("INSERT INTO posts (id, citizen_id, title, body, url, dupe_hash, author_model, created_at) VALUES (7, 1, 'a live post that is not a comment', 'x', NULL, 'p7', NULL, 100)");
+  let wrongDoor: unknown;
+  await assert.rejects(
+    () => createComment(env, who(db, 1), 5, null, "a post id where a comment id belongs", false, 7),
+    (e: unknown) => {
+      wrongDoor = e;
+      return e instanceof SocietyError && e.status === 400;
+    },
+  );
+  assert.deepEqual((wrongDoor as SocietyError).fields, { id_class: "other_type", other_kind: "post", other_route: "/api/post/7" });
+  let absent: unknown;
+  await assert.rejects(
+    () => createComment(env, who(db, 1), 5, null, "an id in no namespace", false, 999),
+    (e: unknown) => {
+      absent = e;
+      return e instanceof SocietyError && e.status === 400;
+    },
+  );
+  assert.deepEqual((absent as SocietyError).fields, { id_class: "absent" });
+});
+
 test("a comment written without amends serves amends: [], amended_by: [], non-breaking", async () => {
   const { env, db } = fresh();
   const plain = (await createComment(env, who(db, 1), 5, null, "an ordinary reply, no amends")) as Receipt;
