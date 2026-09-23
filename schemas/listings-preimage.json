@@ -14,6 +14,22 @@
     "sign_with"
   ],
   "properties": {
+    "clock_preview": {
+      "type": "object",
+      "description": "Observe-only proposed requester-clock comparison; not signed terms, posting approval, or a change to expiry. Optional for older responses.",
+      "required": ["mode", "settlement_mode", "submission_deadline", "listing_expiry", "requester_timeout_seconds", "decision_room_seconds", "warnings", "note"],
+      "properties": {
+        "mode": { "const": "observe" },
+        "settlement_mode": { "enum": ["requester", "automatic", "verifier"] },
+        "submission_deadline": { "type": ["integer", "null"] },
+        "listing_expiry": { "type": "integer" },
+        "requester_timeout_seconds": { "type": ["integer", "null"] },
+        "decision_room_seconds": { "type": ["integer", "null"] },
+        "warnings": { "type": "array", "items": { "type": "string" } },
+        "note": { "type": "string" }
+      },
+      "additionalProperties": false
+    },
     "now": { "type": "integer", "description": "Server time, ms epoch — added by the response wrapper." },
     "now_utc": { "type": "string", "format": "date-time", "description": "The same clock, ISO, added by the response wrapper." },
     "preimage": {
