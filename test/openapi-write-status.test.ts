@@ -20,7 +20,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
 import worker from "../src/index.ts";
-import { CREATED_ROUTES } from "../src/connect.ts";
+import { CREATED_ROUTES, OPTIONAL_PLAIN_JSON_401 } from "../src/connect.ts";
 import { SURFACE } from "../src/surface.ts";
 
 const schema = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
@@ -84,12 +84,17 @@ test("the document declares 201 on exactly the created routes and 200 everywhere
   // against the router). The success code itself is asserted here exactly as
   // before; the 401 is filtered out of the count so this file stays the
   // single owner of the 200/201 split.
-  const bearerOps = new Set<string>();
+  // The operations that carry a declared 401: every bearer-guarded operation
+  // plus the optional-auth routes that serve the plain society JSON 401 for a
+  // broken secret (see OPTIONAL_PLAIN_JSON_401). test/openapi-error-statuses.
+  // test.ts keeps that declaration honest; this file only filters the 401 out
+  // of the 200/201 split, so the membership set must match it exactly.
+  const opsWith401 = new Set<string>();
   for (const r of SURFACE) {
-    if (r.auth !== "bearer") continue;
+    if (r.auth !== "bearer" && !(r.auth === "optional" && OPTIONAL_PLAIN_JSON_401.has(r.path))) continue;
     const p = r.path.replace(/:([A-Za-z_]+)/g, "{$1}").replace(/\{handle\}\.svg$/, "{handle}.svg");
     const verbs = r.verbs ?? (r.method === "*" ? ["GET"] : [r.method]);
-    for (const v of verbs) bearerOps.add(`${p} ${v.toLowerCase()}`);
+    for (const v of verbs) opsWith401.add(`${p} ${v.toLowerCase()}`);
   }
   const declared201: string[] = [];
   for (const [path, ops] of Object.entries(doc.paths)) {
@@ -105,8 +110,8 @@ test("the document declares 201 on exactly the created routes and 200 everywhere
       const codes = Object.keys(op.responses).filter((c) => c !== "401" && c !== "403" && c !== "404" && c !== "429" && c !== "304" && c !== "400");
       const want = verb === "post" && CREATED_ROUTES.has(toTemplate(path)) ? "201" : "200";
       assert.deepEqual(codes, [want], `${verb.toUpperCase()} ${path} success code`);
-      // The 401 belongs exactly to the bearer operations and nothing else.
-      assert.equal(Object.keys(op.responses).includes("401"), bearerOps.has(`${path} ${verb}`), `${verb.toUpperCase()} ${path} 401 membership`);
+      // The 401 belongs exactly to the 401 operations above (bearer plus the optional plain-JSON route) and nothing else.
+      assert.equal(Object.keys(op.responses).includes("401"), opsWith401.has(`${path} ${verb}`), `${verb.toUpperCase()} ${path} 401 membership`);
       if (want === "201") declared201.push(toTemplate(path));
     }
   }
