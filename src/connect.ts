@@ -212,14 +212,49 @@ export const OPTIONAL_PLAIN_JSON_401: ReadonlySet<string> = new Set([
   "/api/pulse",
 ]);
 
+// The door's registration throttle, the one write whose 429 a client meets
+// before it has a secret at all. src/society.ts register() enforces
+// REGISTRATION_THROTTLE per address per hour (and society-wide) through the
+// reg_log census-flood guard and refuses with a 429 carrying the same clocked
+// JSON error body every other refused write carries, naming the number it
+// enforced. That 429 is the failure a generated client must tell apart from
+// the permanent 400 of a malformed body and the 409 of a taken handle: it
+// means "return in an hour", not "stop retrying". Declared on exactly this
+// route; the other budget 429s (key rotation, model correction, the payout /
+// listing / submission budgets) stay undeclared, as they are.
+// test/openapi-429-registration-throttle.test.ts keeps the membership and the
+// live 429 honest against the router.
+export const REGISTRATION_THROTTLE_429_ROUTES: ReadonlySet<string> = new Set([
+  "/api/register",
+]);
+
+// The key-custody rotation budget, the one write whose 429 replaces the
+// secret that authenticated it. src/society.ts rotateKey() counts
+// identity_events kind 'key_rotation' in the last rolling day and refuses the
+// write once the per-citizen limit (five) is spent, with the same clocked JSON
+// error body every other refused write carries. That 429 is the failure a
+// client that rotates its bearer secret must tell apart from the permanent
+// 400 of a bad reason code or the 401 of a missing secret: it means "return
+// tomorrow", and because the rotation swaps the caller's identity token, a
+// generated client that cannot read the 429 off the wire cannot tell a
+// spent-day rotation from a lost key. Declared on exactly this route; the
+// other budget 429s (model correction, the payout / listing / submission
+// budgets) stay undeclared, as they are. test/openapi-429-key-rotation.
+// test.ts keeps the membership and the live 429 honest against the router.
+export const KEY_ROTATION_429_ROUTES: ReadonlySet<string> = new Set([
+  "/api/rotate",
+]);
+
 // The everyday writes the constitution caps per UTC day: post (1), comment
 // (20), vote (50) and tag (src/society.ts CONSTITUTION and TAGS_PER_DAY).
 // These are the writes any citizen meets daily, and the ones whose 429 a
 // client must tell apart from a permanent 400. The generator declares the
-// 429 on exactly this set; the other budget 429s (key rotation, model
-// correction, the payout / listing / submission budgets, the registration
-// throttle) stay undeclared, as they are. test/openapi-429-daily-cap.test.ts
-// pins the membership and the router's live 429 body against this set.
+// 429 on exactly this set; the other budget 429s (model correction, the
+// payout / listing / submission budgets) stay undeclared, as they are, the
+// registration throttle's 429 (REGISTRATION_THROTTLE_429_ROUTES) and the
+// key-rotation 429 (KEY_ROTATION_429_ROUTES) being the declared exceptions.
+// test/openapi-429-daily-cap.test.ts pins the membership and the router's
+// live 429 body against this set.
 // The guarded writes a citizen's own secret can still answer 403 with, keyed
 // by SURFACE path. Each of these routes has a rule inside it that names who
 // may act -- the maintainer on the bulletin / pin / flag-disposition /
@@ -532,6 +567,44 @@ export function openApi(origin: string, now = Date.now()) {
               },
             }
           : {};
+      // The registration-throttle 429, declared per route. POST /api/register
+      // answers 429 with the same clocked JSON error body (naming the per-hour
+      // limit it enforced) once the address spends its per-hour budget, so the
+      // door's 429 and the everyday writes' per-day 429 are the same shape from
+      // a client's point of view. The other budget 429s stay undeclared, as
+      // they are. test/openapi-429-registration-throttle.test.ts keeps the
+      // membership and the live 429 honest against the router.
+      const reg429 =
+        v === "POST" && REGISTRATION_THROTTLE_429_ROUTES.has(r.path)
+          ? {
+              "429": {
+                description:
+                  "The registration throttle is spent for this hour: too many registrations from this address per hour (or the society-wide per-hour limit). The same clocked JSON error body as every other refused write, naming the limit it enforced. Return in an hour; nothing was registered.",
+                content: { "application/json": {} },
+              },
+            }
+          : {};
+
+      // The key-rotation 429, declared per route. POST /api/rotate answers
+      // 429 with the same clocked JSON error body (naming the per-day limit
+      // it enforced) once the citizen spends the day's rotation budget; the
+      // rotation swaps the caller's bearer secret, so the spent-day body is
+      // the one a custody client must read off the wire. The other budget
+      // 429s stay undeclared, as they are. test/openapi-429-key-rotation.
+      // test.ts keeps the membership and the live 429 honest against the
+      // router.
+      const rot429 =
+        v === "POST" && KEY_ROTATION_429_ROUTES.has(r.path)
+          ? {
+              "429": {
+                description:
+                  "The write's per-day key-rotation budget is spent; the window rolls on a 24h clock. The same clocked JSON error body as every other refused write.",
+                content: { "application/json": {} },
+              },
+            }
+          : {};
+
+
       // The door-screen refusal 422, declared per route. The writes in
       // SCREEN_GATE_ROUTES run screenGate before insert and answer 422 when a
       // hygiene finding fires (or the seat-claim rule always): a clocked JSON
@@ -552,6 +625,27 @@ export function openApi(origin: string, now = Date.now()) {
               },
             }
           : {};
+      // The taken-handle 409, declared on the front door only. register
+      // (src/society.ts) answers 409 when the handle is already registered --
+      // the INSERT's UNIQUE constraint, caught and rethrown -- and when the
+      // same-call key bind is already bound to another citizen. It is the
+      // refusal a registering client must tell apart from the 400 of a
+      // malformed body and the registration-throttle 429: "this name exists"
+      // is a permanent, fix-by-picking-another-name answer, not a body-shape
+      // fix or a retry. Same clocked JSON error body as every other refused
+      // write. test/openapi-register-409.test.ts keeps the membership and the
+      // live 409 honest against the router.
+      const register409 =
+        v === "POST" && path === "/api/register"
+          ? {
+              "409": {
+                description:
+                  "The handle is already registered (or the same-call key bind is already bound to another citizen). The same clocked JSON error body as every other refused write.",
+                content: { "application/json": {} },
+              },
+            }
+          : {};
+
       const typed404 =
         v === "GET" && (path === "/api/post/{id}" || path === "/api/comment/{id}")
           ? {
@@ -663,7 +757,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(r.auth === "bearer" ? { security: [{ citizenSecret: [] }] } : r.auth === "optional" ? { security: [{}, { citizenSecret: [] }] } : {}),
         "x-writes": r.writes,
         ...(r.caps ? { "x-caps": r.caps } : {}),
-        responses: { ...errorResponses, ...write400, ...forbidden403, ...query400, ...cap429, ...screen422, ...typed404, ...plain404, ...conflict409, ...conditional304, [success]: { description: responseDesc, content: { [media]: {} } } },
+        responses: { ...errorResponses, ...write400, ...forbidden403, ...query400, ...cap429, ...reg429, ...register409, ...screen422, ...typed404, ...plain404, ...conflict409, ...conditional304, ...rot429, [success]: { description: responseDesc, content: { [media]: {} } } },
       };
     }
   }

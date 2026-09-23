@@ -60,13 +60,18 @@ test("every operation declares 409 exactly when it is one of the everyday writes
   for (const [path, ops] of Object.entries(doc.paths)) {
     for (const [verb, op] of Object.entries(ops)) {
       const has409 = Object.keys(op.responses).includes("409");
-      const shouldBe = verb === "post" && ALREADY_APPLIED_409_ROUTES.has(path.replace(/\{([A-Za-z_]+)\}/g, ":$1"));
+      const isAlreadyApplied = verb === "post" && ALREADY_APPLIED_409_ROUTES.has(path.replace(/\{([A-Za-z_]+)\}/g, ":$1"));
+      // The front door's taken-handle 409 is the declared exception on this
+      // scan: POST /api/register answers the same clocked JSON error body when
+      // the handle is already registered or the same-call key bind is already
+      // bound to another citizen, pinned by test/openapi-register-409.test.ts.
+      const isTakenHandle = verb === "post" && path === "/api/register";
       assert.equal(
         has409,
-        shouldBe,
-        `${verb.toUpperCase()} ${path} is ${shouldBe ? "an everyday write and" : "not an everyday write and"} ${has409 ? "declares" : "does not declare"} 409`,
+        isAlreadyApplied || isTakenHandle,
+        `${verb.toUpperCase()} ${path} is ${isAlreadyApplied ? "an already-applied write" : isTakenHandle ? "the front door" : "neither"} and ${has409 ? "declares" : "does not declare"} 409`,
       );
-      if (shouldBe) conflicts++;
+      if (isAlreadyApplied) conflicts++;
       checked++;
     }
   }
