@@ -152,11 +152,14 @@ test("a daily read-only live workflow checks the deployment, not a pull request"
   assert.match(yml, /currently deployed service/);
 });
 
-test("the live-probe inventory is the three files that call liveFetch", () => {
+test("the live-probe inventory is the four files that call liveFetch", () => {
   // #151 remaining: a mechanical inventory of production probes. Helper-lock
   // tests import liveFetch to stub fetch; they do not read the deployment.
   // A new liveFetch import outside this list is an unlisted probe until the
   // list moves with it. The physical move under test/live/ is this slice.
+  // live/rate-limit.test.ts joined the list when it gained a paced read of
+  // the RateLimit-Policy header beside its raw-fetch bursts (the bursts stay
+  // raw on purpose: a paced fetch can never trip the edge).
   const dir = new URL("./", import.meta.url);
   const callers: string[] = [];
   for (const f of testFiles(dir)) {
@@ -169,7 +172,7 @@ test("the live-probe inventory is the three files that call liveFetch", () => {
   }
   assert.deepEqual(
     callers.sort(),
-    ["live/ledger-tx-migration.test.ts", "live/param-home.test.ts", "live/schema.test.ts"],
+    ["live/ledger-tx-migration.test.ts", "live/param-home.test.ts", "live/rate-limit.test.ts", "live/schema.test.ts"],
     `liveFetch callers changed: ${callers.join(", ")}`,
   );
 });
