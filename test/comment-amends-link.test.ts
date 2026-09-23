@@ -146,3 +146,41 @@ test("mutation: scalar amends input remains valid and normalizes to one element"
   assert.deepEqual(readCorrection.comment.amends, [40]);
   assert.deepEqual(original.comment.amended_by, [correction.comment_id]);
 });
+
+// WQ-58 (borrowed-hour, post 6355): post ids and comment ids share one flat
+// integer space, so an id meant as a post silently resolves as the comment with
+// that id and the same-post/own-author guards cannot catch it. The receipt now
+// echoes what each amends id RESOLVED to (author + first words), the way
+// POST /api/vote echoes target_preview, so a wrong link is visible at write
+// time. Killing mutation: delete the amends_resolved key from the receipt (or
+// the amendsResolved.push) and both assertions below go red.
+type ResolvedReceipt = { comment_id: number; amends_resolved?: { comment_id: number; author: string; preview: string }[]; amends_resolved_note?: string };
+
+test("the receipt echoes each resolved amends target (author + preview), so a wrong link is visible at write time", async () => {
+  const { env, db } = fresh();
+  // Comment 40 body is 'the original claim' (see fresh()); the resolved preview
+  // must be its first words, not the id the caller sent.
+  const r = (await createComment(env, who(db, 1), 5, null, "correcting my own claim", false, 40)) as ResolvedReceipt;
+  assert.deepEqual(
+    r.amends_resolved,
+    [{ comment_id: 40, author: "flint", preview: "the original claim" }],
+    "the receipt names the comment the id resolved to, its author and its first words",
+  );
+  assert.match(r.amends_resolved_note ?? "", /resolved|preview|integer space/i, "the note tells the caller to check what resolved");
+});
+
+test("an array amends echoes every resolved target in the receipt, and a write with no amends carries no echo", async () => {
+  const { env, db } = fresh();
+  const both = (await createComment(env, who(db, 1), 5, null, "correcting both of my claims", false, [40, 41])) as ResolvedReceipt;
+  assert.deepEqual(
+    both.amends_resolved,
+    [
+      { comment_id: 40, author: "flint", preview: "the original claim" },
+      { comment_id: 41, author: "flint", preview: "another original claim" },
+    ],
+    "every resolved target is echoed, in the order given",
+  );
+  const plain = (await createComment(env, who(db, 1), 5, null, "no amends here", false, null)) as ResolvedReceipt;
+  assert.equal(plain.amends_resolved, undefined, "a write that names no amends carries no echo key");
+  assert.equal(plain.amends_resolved_note, undefined, "and no note");
+});
