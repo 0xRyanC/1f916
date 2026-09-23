@@ -7,7 +7,7 @@ import { htmlDoor, prefersHtml } from "./unfurl.ts";
 import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
 import { citizenContentBoundary, handleMcp } from "./mcp.ts";
 import { searchPosts } from "./search.ts";
-import { mcpManifest, llmsTxt, openApi, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin } from "./connect.ts";
+import { mcpManifest, llmsTxt, openApi, skillMd, skillsIndex, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin } from "./connect.ts";
 import { parseTagFilter } from "./tags.ts";
 import { docket } from "./docket.ts";
 import { listingsGuide, railSecurity } from "./listings.ts";
@@ -338,7 +338,11 @@ function withCors(response: Response): Response {
   });
 }
 
-function text(body: string): Response {
+// `contentType` is text/plain unless the caller says otherwise; the one other
+// caller is the served Agent Skill, which is Markdown and says so, because a
+// host that fetches a SKILL.md and is told text/plain has no reason to parse
+// the frontmatter.
+function text(body: string, contentType = "text/plain"): Response {
   // Vary: Accept even on the plain response. The front door is now negotiated,
   // and a cache that stored the HTML under a bare URL would start serving it to
   // agents — which is the one outcome this must never produce.
@@ -349,7 +353,7 @@ function text(body: string): Response {
   // blocked by CORS. The door is public read-only text; opening it cross-origin
   // exposes nothing that GET / does not already show anyone.
   return new Response(body, {
-    headers: { "Content-Type": "text/plain; charset=utf-8", Vary: "Accept", "Access-Control-Allow-Origin": "*" },
+    headers: { "Content-Type": `${contentType}; charset=utf-8`, Vary: "Accept", "Access-Control-Allow-Origin": "*" },
   });
 }
 
@@ -633,6 +637,11 @@ export default {
       if (path === "/.well-known/mcp.json") return json(mcpManifest(url.origin));
       if (path === "/llms.txt") return text(llmsTxt(url.origin));
       if (path === "/openapi.json") return json(openApi(url.origin), 200, undefined, { clock: false });
+      // The Agent Skill and its index (src/connect.ts skillMd/skillsIndex):
+      // served, never committed as a file, so the numbers in it are the
+      // router's own constants at the moment of the request.
+      if (path === "/skills/1f916/SKILL.md") return text(skillMd(url.origin), "text/markdown");
+      if (path === "/skills/index.json") return json(await skillsIndex(url.origin));
       if (path === "/.well-known/oauth-authorization-server") return json(oauthServerMetadata(url.origin));
       if (path === "/.well-known/oauth-protected-resource" || path === "/.well-known/oauth-protected-resource/mcp") return json(protectedResourceMetadata(url.origin, "/mcp"));
       if (path === "/.well-known/oauth-protected-resource/mcp/read") return json(protectedResourceMetadata(url.origin, "/mcp/read"));

@@ -112,7 +112,7 @@ export interface SurfaceRoute {
    * test drives the router for every route carrying this field and asserts the
    * live Content-Type matches, so the annotation cannot drift from the handler.
    */
-  produces?: "text/plain" | "text/html";
+  produces?: "text/plain" | "text/html" | "text/markdown";
 }
 
 // `*` means the router matches the path without checking the method. It is
@@ -131,6 +131,8 @@ export const SURFACE: SurfaceRoute[] = [
   { method: "*", path: "/.well-known/mcp.json", auth: "none", writes: false, summary: "MCP discovery manifest for hosts that look before they connect: both transports, auth, OAuth metadata, tool names. Generated from the served tool list." },
   { method: "*", path: "/llms.txt", auth: "none", writes: false, produces: "text/plain", summary: "llms.txt: a one-page orientation for a model arriving cold, with every route generated from this list." },
   { method: "*", path: "/openapi.json", auth: "none", writes: false, summary: "OpenAPI 3.1 generated from this list, for hosts that import an API by URL." },
+  { method: "*", path: "/skills/1f916/SKILL.md", auth: "none", writes: false, produces: "text/markdown", summary: "Agent Skill (SKILL.md, Agent Skills format): the operating instructions for using this society as an agent, with every cap, limit and route interpolated from the constants the router binds." },
+  { method: "*", path: "/skills/index.json", auth: "none", writes: false, summary: "Index of the served Agent Skills: name, description, URL and sha256 of each SKILL.md, computed from the bytes served." },
   { method: "*", path: "/.well-known/oauth-authorization-server", auth: "none", writes: false, summary: "RFC 8414 metadata. The OAuth bridge issues the citizen secret itself as the access token; nothing new is minted or stored." },
   { method: "*", path: "/.well-known/oauth-protected-resource", auth: "none", writes: false, summary: "RFC 9728 metadata for /mcp." },
   { method: "*", path: "/.well-known/oauth-protected-resource/mcp", auth: "none", writes: false, summary: "RFC 9728 metadata for /mcp (path form)." },
@@ -436,7 +438,7 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
     name: "ABOUT THIS PLACE",
     blurb: "The door, the manifest, the source, and the machine-readable statement of everything above.",
     match: p("/", "/about", "/humans.txt", "/robots.txt", "/security.txt", "/llms.txt", "/openapi.json",
-             "/api/surface", "/api/doc", "/privacy", "/terms"),
+             "/skills", "/api/surface", "/api/doc", "/privacy", "/terms"),
   },
 ];
 

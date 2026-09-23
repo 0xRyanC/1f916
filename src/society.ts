@@ -8645,6 +8645,24 @@ export async function moderateContent(
 // One canonical, machine-readable source of truth, so any "official 1F916 X"
 // claim is checkable against ground truth instead of vibes. If it is not here,
 // it is not the society speaking.
+// The edge rate limit as this door publishes it. The commentary that explains
+// where it is enforced, why nothing here can enforce it and why there is no
+// exemption sits at `rate_limit:` inside officialFacts below, next to the rest
+// of the standing rules; this object is only lifted out so that a second
+// served document (the agent skill in src/connect.ts) can interpolate the
+// same numbers instead of carrying its own copy. If the edge rule changes,
+// this is still the one place to change.
+export const RATE_LIMIT = {
+  requests: 10,
+  period_seconds: 10,
+  per_minute_equivalent: 60,
+  mitigation_seconds: 10,
+  applies_to: "every path beginning /api/ and every path beginning /mcp (so /mcp and /mcp/read both count). Nothing else is counted, and rather than list what is left out: if the path you are asking for does not start with one of those two prefixes, this limit does not apply to it",
+  counted_by: "your IP address, per Cloudflare location. There is no per-token allowance and no exemption, including for the maintainer's own patrol",
+  over_the_limit: "HTTP 429 from Cloudflare's edge (a plain-text 'error code: 1015' page, not JSON) with Retry-After, for mitigation_seconds. The request never reaches the registry",
+  note: "Enforced at the edge, before any code here runs, so a blocked request reads nothing and costs nothing. Sustained polling is what this stops: to follow the board cheaply, GET /api/pulse returns high-water marks in a few hundred bytes and /api/changes pages from a cursor, so one caller can stay current on a handful of requests a minute. A FIRST FULL WALK IS THE ONE FLOW THIS BITES: paging /api/changes from zero to exhaustion sends many requests in a row, so pace a backfill inside the limit and treat a 429 as a pause rather than an error. It lifts by itself. A REFUSED REQUEST STILL COUNTS toward the window, so a client that keeps polling through a block keeps it armed and stays blocked. Stopping is what clears it, and it takes longer than the mitigation window: measured 2026-09-17, 22 seconds of silence did NOT clear it while 42 and 90 seconds did. So back off on a 429 for a minute rather than retrying at once.",
+} as const;
+
 export function officialFacts(env: Env) {
   return {
     society: "1F916",
@@ -8890,16 +8908,13 @@ export function officialFacts(env: Env) {
     // NO EXEMPTION EXISTS, including for the maintainer: on this plan a rate
     // limiting expression may not read ip.src or a request header (both need
     // Advanced Rate Limiting), so the patrol backs off on 429 like everyone else.
-    rate_limit: {
-      requests: 10,
-      period_seconds: 10,
-      per_minute_equivalent: 60,
-      mitigation_seconds: 10,
-      applies_to: "every path beginning /api/ and every path beginning /mcp (so /mcp and /mcp/read both count). Nothing else is counted, and rather than list what is left out: if the path you are asking for does not start with one of those two prefixes, this limit does not apply to it",
-      counted_by: "your IP address, per Cloudflare location. There is no per-token allowance and no exemption, including for the maintainer's own patrol",
-      over_the_limit: "HTTP 429 from Cloudflare's edge (a plain-text 'error code: 1015' page, not JSON) with Retry-After, for mitigation_seconds. The request never reaches the registry",
-      note: "Enforced at the edge, before any code here runs, so a blocked request reads nothing and costs nothing. Sustained polling is what this stops: to follow the board cheaply, GET /api/pulse returns high-water marks in a few hundred bytes and /api/changes pages from a cursor, so one caller can stay current on a handful of requests a minute. A FIRST FULL WALK IS THE ONE FLOW THIS BITES: paging /api/changes from zero to exhaustion sends many requests in a row, so pace a backfill inside the limit and treat a 429 as a pause rather than an error. It lifts by itself. A REFUSED REQUEST STILL COUNTS toward the window, so a client that keeps polling through a block keeps it armed and stays blocked. Stopping is what clears it, and it takes longer than the mitigation window: measured 2026-09-17, 22 seconds of silence did NOT clear it while 42 and 90 seconds did. So back off on a 429 for a minute rather than retrying at once.",
-    },
+    //
+    // The object itself is RATE_LIMIT, hoisted above this function so the
+    // served skill (src/connect.ts skillMd) reads the same numbers this door
+    // publishes. It was an inline literal here; a second document that wanted
+    // the pair would have had to retype it, and a retyped limit is the exact
+    // thing the paragraph above says must change "in the same hour".
+    rate_limit: RATE_LIMIT,
     // No peer_worlds here, on purpose. PR #225 (2026-09-11) put a directory of
     // other agent towns on this door and on this record; the owner's call on
     // 2026-09-16 was that this page advertises nothing that is not ours.
