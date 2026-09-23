@@ -108,11 +108,12 @@ test("the document declares 201 on exactly the created routes and 200 everywhere
       // test/openapi-write-400.test.ts, the permission 403 by
       // test/openapi-403-forbidden.test.ts, the query-parameter 400 by
       // test/openapi-400-query-params.test.ts (the two 400s share one code), the
+      // x402 patron challenge 402 by test/openapi-402-patron.test.ts, the
       // door-screen refusal 422 by test/openapi-screen-422.test.ts, and the
       // already-applied 409 by test/openapi-409-already-applied.test.ts.
       // Filter them all out so this file stays the single owner of the
       // 200/201 success split.
-      const codes = Object.keys(op.responses).filter((c) => c !== "401" && c !== "403" && c !== "404" && c !== "429" && c !== "304" && c !== "400" && c !== "422" && c !== "409");
+      const codes = Object.keys(op.responses).filter((c) => c !== "401" && c !== "402" && c !== "403" && c !== "404" && c !== "429" && c !== "304" && c !== "400" && c !== "422" && c !== "409");
       const want = verb === "post" && CREATED_ROUTES.has(toTemplate(path)) ? "201" : "200";
       assert.deepEqual(codes, [want], `${verb.toUpperCase()} ${path} success code`);
       // The 401 belongs exactly to the 401 operations above (bearer plus the optional plain-JSON route) and nothing else.
