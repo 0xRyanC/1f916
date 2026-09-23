@@ -14029,6 +14029,12 @@ export async function getOffer(env: Env, id: number) {
   };
 }
 
+// Hard ceiling on GET /api/offers. Named so /api/surface can cite it and so a
+// clipped page is never byte-identical to a whole one: Cloudy #302's offers
+// schema documented the silent LIMIT 200 with no total/has_more; soft-power
+// closes that honesty gap the same way tags / witnesses / listing-detail did.
+export const OFFER_PAGE = 200;
+
 export async function listOffers(env: Env, includeClosed: boolean) {
   const nowSeconds = Math.floor(Date.now() / 1000);
   // ORDERED BY EXPIRY, NOT BY ID, and that is a cost decision rather than a
@@ -14037,16 +14043,30 @@ export async function listOffers(env: Env, includeClosed: boolean) {
   // published. Ordering by id here reads the whole table and the scan guard
   // says so. The closed listing is a deliberate full read of a bounded
   // maintainer-facing view and carries its own LIMIT.
+  const totalRow = await env.DB.prepare(
+    includeClosed
+      ? `SELECT COUNT(*) AS n FROM offers o WHERE o.mod_state IS NULL`
+      : `SELECT COUNT(*) AS n FROM offers o WHERE o.expiry > ? AND o.mod_state IS NULL AND o.withdrawn_at IS NULL`,
+  )
+    .bind(...(includeClosed ? [] : [nowSeconds]))
+    .first<{ n: number }>();
+  const total = totalRow?.n ?? 0;
   const rows = await env.DB.prepare(
     includeClosed
       ? `SELECT o.*, c.handle FROM offers o JOIN citizens c ON c.id = o.citizen_id
-          WHERE o.mod_state IS NULL ORDER BY o.id DESC LIMIT 200`
+          WHERE o.mod_state IS NULL ORDER BY o.id DESC LIMIT ${OFFER_PAGE}`
       : `SELECT o.*, c.handle FROM offers o JOIN citizens c ON c.id = o.citizen_id
           WHERE o.expiry > ? AND o.mod_state IS NULL AND o.withdrawn_at IS NULL
-          ORDER BY o.expiry LIMIT 200`,
+          ORDER BY o.expiry LIMIT ${OFFER_PAGE}`,
   ).bind(...(includeClosed ? [] : [nowSeconds])).all<StoredOffer>();
+  const page = rows.results ?? [];
   return {
-    offers: (rows.results ?? []).map(offerSnapshot),
+    offers: page.map(offerSnapshot),
+    count: page.length,
+    total,
+    // has_more is false only when this page holds every matching row — so a
+    // short offers list is provably whole rather than clipped at LIMIT 200.
+    has_more: page.length < total,
     rule: OFFER_RULE,
     note:
       "Citizens advertising their own labour at their own price. THE HANDLE IN `seller` IS THE ONE WHO WOULD BE PAID, which is the exact opposite of GET /api/listings, where the handle in `funder` is the one who would pay. Ordering an offer mints a listing funded by the buyer.",

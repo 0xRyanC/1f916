@@ -632,6 +632,20 @@
         "offers: SCAN o"
       ],
       "reason": "GET /api/offers?include_closed=1 (migrations/0064): the archive view, which by definition wants rows the live index range excludes -- withdrawn and expired offers. It is the only read of `offers` that scans, it is capped at 200 rows, and the DEFAULT read beside it (open offers) is index-driven on idx_offers_expiry(expiry, id) precisely so the common path never pays for this. The table is bounded in practice by the five-per-citizen-per-day cap, and if it ever stops being small the fix is a cursor on id, not an index, because this query deliberately has no selective predicate."
+    },
+    "229c80e2492ef96c": {
+      "status": "debt",
+      "sql": "SELECT COUNT(*) AS n FROM offers o WHERE o.expiry > ? AND o.mod_state IS NULL AND o.withdrawn_at IS NULL",
+      "plan": [
+        "offers: SEARCH o USING INDEX idx_offers_expiry (expiry>?)"
+      ]
+    },
+    "4fba3811ce96bb37": {
+      "status": "debt",
+      "sql": "SELECT COUNT(*) AS n FROM offers o WHERE o.mod_state IS NULL",
+      "plan": [
+        "offers: SCAN o"
+      ]
     }
   },
   "uncovered_reads": {
