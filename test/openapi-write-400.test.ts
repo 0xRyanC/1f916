@@ -10,7 +10,7 @@
 // and recreates the undiagnosable-typing failure one door over.
 //
 // The fix therefore covers the whole class: every POST write op declares the
-// 400, except the six that structurally cannot answer it, each named in
+// 400, except the seven that structurally cannot answer it, each named in
 // src/connect.ts (NO_BODY_WRITE_ROUTES, MCP_ROUTES) and kept out for its own
 // reason:
 //
@@ -26,7 +26,7 @@
 //     its 400 is the same JSON-RPC envelope class as the MCP doors'.
 //
 // This file keeps the declaration honest against the router in-process: every
-// POST write op declares the 400 iff it is not one of those six, the body is
+// POST write op declares the 400 iff it is not one of those seven, the body is
 // the clocked JSON error object, and the live router actually answers 400 with
 // that body on a refused write while the no-input writes do not.
 
@@ -53,7 +53,7 @@ function postWriteOps(): Set<string> {
   return set;
 }
 
-test("the no-body and MCP exception sets are the six expected routes", () => {
+test("the no-body, MCP and A2A exception sets are the seven expected routes", () => {
   assert.deepEqual(
     [...NO_BODY_WRITE_ROUTES].sort(),
     ["/api/awards/:id/settle", "/api/checkpoint", "/api/doorbell/disable", "/api/porch/knock"],
@@ -71,7 +71,7 @@ test("every exception route is a declared POST route", () => {
   for (const p of [...NO_BODY_WRITE_ROUTES, ...MCP_ROUTES, ...A2A_ROUTES]) assert.ok(posts.has(p), `${p} is an exception but SURFACE has no POST row for it`);
 });
 
-test("every POST write op declares 400 exactly when it is not one of the six exceptions", async () => {
+test("every POST write op declares 400 exactly when it is not one of the seven exceptions", async () => {
   const { env } = sqliteTestEnv(schema);
   const doc = (await (await worker.fetch(new Request(`${ORIGIN}/openapi.json`), env)).json()) as {
     paths: Record<string, Record<string, { responses: Record<string, unknown> }>>;
@@ -98,7 +98,7 @@ test("every POST write op declares 400 exactly when it is not one of the six exc
     }
   }
   // Every POST op is checked, and the count that declares is the total minus
-  // the six exceptions -- so the membership is held in both directions.
+  // the seven exceptions -- so the membership is held in both directions.
   assert.ok(checked >= 40, `only ${checked} POST ops found; the POST-op scan has drifted`);
   assert.equal(declares, checked - NO_BODY_WRITE_ROUTES.size - MCP_ROUTES.size - A2A_ROUTES.size, "the declared set is the POST set minus the seven exceptions");
 });

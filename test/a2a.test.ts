@@ -11,6 +11,7 @@ import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import worker from "../src/index.ts";
 import { A2A_SKILLS } from "../src/a2a.ts";
+import { openApi } from "../src/connect.ts";
 import { SURFACE } from "../src/surface.ts";
 import type { Env } from "../src/society.ts";
 
@@ -284,4 +285,12 @@ test("every response from the door declares charset=utf-8 and no-store, as every
     assert.equal(r.headers.get("Content-Type"), "application/json; charset=utf-8", `${name}: charset declared`);
     assert.equal(r.headers.get("Cache-Control"), "no-store", `${name}: no-store`);
   }
+});
+
+test("the card's version is the string openapi.json carries as info.version, so the two documents cannot drift", async () => {
+  // src/a2a.ts retypes "1" with a comment saying it is the same string as
+  // info.version. A comment is not a pin; this is.
+  const { env } = makeEnv();
+  const served = (await (await worker.fetch(req("/.well-known/agent-card.json"), env)).json()) as { version: string };
+  assert.equal(served.version, openApi(ORIGIN).info.version, "card.version is info.version");
 });
