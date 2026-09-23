@@ -90,6 +90,7 @@ test("no other operation claims the rotation 429", async () => {
     [
       "POST /api/comment",
       "POST /api/listings",
+      "POST /api/listings/{id}/submissions",
       "POST /api/model",
       "POST /api/post",
       "POST /api/register",

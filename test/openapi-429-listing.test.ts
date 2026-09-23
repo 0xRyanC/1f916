@@ -92,6 +92,7 @@ test("no other operation claims the listing-budget 429", async () => {
     claimants.sort(),
     [
       "POST /api/comment",
+      "POST /api/listings/{id}/submissions",
       "POST /api/model",
       "POST /api/post",
       "POST /api/register",

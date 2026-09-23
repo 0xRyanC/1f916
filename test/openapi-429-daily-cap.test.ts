@@ -62,7 +62,8 @@ test("every operation declares 429 exactly when it is one of the everyday writes
         (verb === "post" && path === "/api/register") ||
         (verb === "post" && path === "/api/rotate") ||
         (verb === "post" && path === "/api/model") ||
-        (verb === "post" && path === "/api/listings");
+        (verb === "post" && path === "/api/listings") ||
+        (verb === "post" && path === "/api/listings/{id}/submissions");
       assert.equal(
         has429,
         isDailyCap || isDeclaredException,
