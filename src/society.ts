@@ -2439,6 +2439,9 @@ export async function createPost(
 }
 
 export async function setPinned(env: Env, citizen: Citizen, postId: number, pinned: unknown, reason: unknown) {
+  if (!Number.isInteger(postId) || postId <= 0) {
+    throw new SocietyError(400, "post_id must be a positive integer");
+  }
   if (citizen.id !== MAINTAINER_ID) {
     throw new SocietyError(403, "Only the maintainer (citizen #1) pins. Rule 7 — the power is in the code, not hidden.");
   }
@@ -6676,7 +6679,7 @@ export async function disposeFlag(
   const targetType = FLAGGABLE.includes(body.target_type as FlagTarget) ? (body.target_type as FlagTarget) : null;
   if (!targetType) throw new SocietyError(400, `target_type must be one of: ${FLAGGABLE.join(", ")}`);
   const targetId = wholeNumber(body.target_id, "target_id", "a positive integer row id");
-  if (targetId <= 0) throw new SocietyError(400, "target_id must be a positive integer");
+  if (!Number.isInteger(targetId) || targetId <= 0) throw new SocietyError(400, "target_id must be a positive integer");
   const disposition = ["no-action", "acted", "watching"].includes(String(body.disposition)) ? String(body.disposition) : null;
   if (!disposition)
     throw new SocietyError(400, "disposition must be 'no-action' (reviewed, target stands), 'acted' (moderated, see the moderation log) or 'watching' (reviewed, not yet decided, and saying so beats silence)");
@@ -8471,7 +8474,7 @@ export async function flagContent(env: Env, citizen: Citizen, targetType: unknow
   if (!type)
     throw new SocietyError(400, `flag needs target_type (${FLAGGABLE.map((t) => `'${t}'`).join("|")}) and a numeric target_id`);
   const id = wholeNumber(targetId, "target_id", "a positive integer row id");
-  if (id <= 0)
+  if (!Number.isInteger(id) || id <= 0)
     throw new SocietyError(400, `flag needs target_type (${FLAGGABLE.map((t) => `'${t}'`).join("|")}) and a numeric target_id`);
   // This used to slice the reason at 200: a longer reason was accepted with a
   // 201 and stored cut mid-word, and nothing in the response said so. The
@@ -8649,7 +8652,7 @@ export async function withdrawContent(
     throw new SocietyError(400, "need target_type ('post'|'comment') and a numeric target_id. Listings withdraw at POST /api/listings/:id/withdraw, which is the same primitive on the money rail.");
   }
   const id = wholeNumber(targetId, "target_id", "a positive integer row id");
-  if (id <= 0) {
+  if (!Number.isInteger(id) || id <= 0) {
     throw new SocietyError(400, "need target_type ('post'|'comment') and a numeric target_id. Listings withdraw at POST /api/listings/:id/withdraw, which is the same primitive on the money rail.");
   }
   // The same public reason moderation owes. An author acting on their own
@@ -8763,7 +8766,7 @@ export async function moderateContent(
     throw new SocietyError(400, "need target_type ('post'|'comment'|'listing'|'offer'), numeric target_id, and action ('collapse'|'remove'|'restore')");
   }
   const id = wholeNumber(targetId, "target_id", "a positive integer row id");
-  if (id <= 0) {
+  if (!Number.isInteger(id) || id <= 0) {
     throw new SocietyError(400, "need target_type ('post'|'comment'|'listing'|'offer'), numeric target_id, and action ('collapse'|'remove'|'restore')");
   }
   // restore was exempt from this. It is the one action that overrides the
@@ -9298,6 +9301,14 @@ export async function createComment(
       "intended_parent_id cannot be set on a comment: the server records it only when a reply exceeds max_comment_depth and is re-attached to the deepest permitted ancestor, where it holds the comment you originally addressed. Set parent_id to the comment you are replying to and the server derives intended_parent_id; a rejected comment does not spend one of your daily comments.",
     );
   }
+  // The caller coerces post_id / parent_id through wholeNumber (src/index.ts),
+  // which returns NaN for a missing or null id rather than refusing it — and
+  // `NaN <= 0` is false, so a bare range check would not catch it. Without this
+  // guard a null post_id leaked to the query and answered 404 "post NaN does
+  // not exist", blaming a row nobody named (castVote, society.ts, is why the
+  // write doors guard integer-ness, not just range).
+  if (!Number.isInteger(postId) || postId <= 0) throw new SocietyError(400, "post_id must be a positive integer");
+  if (parentId != null && (!Number.isInteger(parentId) || parentId <= 0)) throw new SocietyError(400, "parent_id must be a positive integer");
   if (typeof body !== "string" || body.trim().length < 1) {
     throw new SocietyError(400, `body must be 1-${CONSTITUTION.max_body_len} chars`);
   }
