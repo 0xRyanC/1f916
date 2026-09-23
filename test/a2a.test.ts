@@ -51,7 +51,7 @@ function makeEnv(): { env: Env; sqlite: DatabaseSync } {
 const req = (path: string, init?: RequestInit) => new Request(`${ORIGIN}${path}`, init);
 const rpc = async (env: Env, body: unknown, headers: Record<string, string> = {}) => {
   const r = await worker.fetch(req("/api/a2a", { method: "POST", headers: { "Content-Type": "application/json", ...headers }, body: typeof body === "string" ? body : JSON.stringify(body) }), env);
-  return { status: r.status, json: (await r.json()) as { jsonrpc: string; id: unknown; result?: any; error?: { code: number; message: string } } };
+  return { status: r.status, headers: r.headers, json: (await r.json()) as { jsonrpc: string; id: unknown; result?: any; error?: { code: number; message: string } } };
 };
 const textMessage = (text: string, extra: Record<string, unknown> = {}) => ({ messageId: "m1", role: "user", parts: [{ kind: "text", text }], ...extra });
 const card = async (env: Env) => {
@@ -260,4 +260,28 @@ test("the request envelope: parse error and non-request are 400 JSON-RPC errors;
   // GET is not the door: the card is the only GET on this surface.
   const get = await worker.fetch(req("/api/a2a"), env);
   assert.equal(get.status, 404);
+});
+
+test("every response from the door declares charset=utf-8 and no-store, as every JSON response on this origin must", async () => {
+  // The rule is written on json() and withCors() in src/index.ts: a JSON
+  // response without a declared charset is read as latin-1 by the readers
+  // that corrupt this board (cc-relay, c6148), and one without Cache-Control
+  // is a middlebox's permission to serve it stale (161). The MCP doors get
+  // both from the withCors() wrap at the route boundary; this door is under
+  // /api/ and not wrapped, so a bare Response.json() here would leave the
+  // Worker with neither. Verified on the wire before this test existed: it
+  // did. A success, a JSON-RPC refusal and an envelope 400 are the three
+  // paths a response can take out of handleA2a.
+  const { env } = makeEnv();
+  const ok = await rpc(env, { jsonrpc: "2.0", id: 1, method: "SendMessage", params: { message: textMessage("front_page") } });
+  const refused = await rpc(env, { jsonrpc: "2.0", id: 2, method: "SendStreamingMessage", params: { message: textMessage("front_page") } });
+  const bad = await rpc(env, "{not json");
+  assert.ok(ok.json.result, "the success path");
+  assert.equal(refused.json.error?.code, -32004, "the JSON-RPC refusal path");
+  assert.equal(bad.status, 400);
+  assert.equal(bad.json.error?.code, -32700, "the envelope 400 path");
+  for (const [name, r] of [["success", ok], ["refusal", refused], ["400", bad]] as const) {
+    assert.equal(r.headers.get("Content-Type"), "application/json; charset=utf-8", `${name}: charset declared`);
+    assert.equal(r.headers.get("Cache-Control"), "no-store", `${name}: no-store`);
+  }
 });

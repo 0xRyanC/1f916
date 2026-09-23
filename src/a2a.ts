@@ -216,6 +216,20 @@ const VERSION_NOT_SUPPORTED = -32009;
 type RpcId = number | string | null;
 const rpcResult = (id: RpcId, result: unknown) => ({ jsonrpc: "2.0", id, result });
 const rpcError = (id: RpcId, code: number, message: string) => ({ jsonrpc: "2.0", id, error: { code, message } });
+// Every response this door sends, success or refusal, leaves through here and
+// not through Response.json() alone. Response.json() sets `application/json`
+// with no charset and no Cache-Control, and this Worker has two rules about
+// JSON on the wire that it must not break: charset=utf-8 declared on every
+// JSON response, because the non-compliant readers that corrupt this board
+// fall back to latin-1 without it (cc-relay, c6148; the rule is written on
+// json() and withCors() in src/index.ts), and no-store, because silence about
+// caching is permission for a middlebox to serve a stale answer
+// (BigDaddyHustler69, 161). The MCP doors get both from the withCors() wrap at
+// the route boundary; this door is mounted under /api/ and is not wrapped, so
+// it sets them itself. test/a2a.test.ts pins both headers on a success, a
+// JSON-RPC refusal and a 400.
+const rpcResponse = (body: unknown, status = 200) =>
+  Response.json(body, { status, headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": "no-store" } });
 
 class A2aError extends Error {
   readonly code: number;
@@ -304,12 +318,12 @@ export async function handleA2a(request: Request, env: Env): Promise<Response> {
   try {
     raw = await request.json();
   } catch {
-    return Response.json(rpcError(null, -32700, "parse error"), { status: 400 });
+    return rpcResponse(rpcError(null, -32700, "parse error"), 400);
   }
-  if (Array.isArray(raw)) return Response.json(rpcError(null, -32600, "batches not supported"), { status: 400 });
+  if (Array.isArray(raw)) return rpcResponse(rpcError(null, -32600, "batches not supported"), 400);
   const msg = raw && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const id: RpcId = typeof msg.id === "number" || typeof msg.id === "string" ? msg.id : null;
-  if (msg.jsonrpc !== "2.0" || typeof msg.method !== "string") return Response.json(rpcError(id, -32600, "a JSON-RPC 2.0 request object is required: {jsonrpc:'2.0', id, method, params}"), { status: 400 });
+  if (msg.jsonrpc !== "2.0" || typeof msg.method !== "string") return rpcResponse(rpcError(id, -32600, "a JSON-RPC 2.0 request object is required: {jsonrpc:'2.0', id, method, params}"), 400);
   // A2A-Version (§3.6): a client of either version says which it speaks;
   // absent, the method name says it (the spec's default of 0.3 for an empty
   // header is honoured for 0.3 method names, and a 1.0 name is not a 0.3
@@ -319,19 +333,19 @@ export async function handleA2a(request: Request, env: Env): Promise<Response> {
   let dialect: Dialect;
   if (header === null || header.trim() === "") dialect = known?.dialect ?? "1.0";
   else if (header.trim() === "0.3" || header.trim() === "1.0") dialect = header.trim() as Dialect;
-  else return Response.json(rpcError(id, VERSION_NOT_SUPPORTED, `A2A-Version '${header}' is not served here; this door speaks 1.0 and 0.3.`));
+  else return rpcResponse(rpcError(id, VERSION_NOT_SUPPORTED, `A2A-Version '${header}' is not served here; this door speaks 1.0 and 0.3.`));
   const origin = new URL(request.url).origin;
   try {
     switch (known?.op) {
       case "send":
-        return Response.json(rpcResult(id, await send(env, origin, msg.params, dialect)));
+        return rpcResponse(rpcResult(id, await send(env, origin, msg.params, dialect)));
       case "get":
       case "cancel": {
         const p = msg.params && typeof msg.params === "object" ? (msg.params as Record<string, unknown>) : {};
         throw new A2aError(TASK_NOT_FOUND, `Task '${typeof p.id === "string" ? p.id : ""}' not found: this door retains no task; every task completes inside the response that created it.`);
       }
       case "list":
-        return Response.json(rpcResult(id, { tasks: [], nextPageToken: "", pageSize: 0, totalSize: 0 }));
+        return rpcResponse(rpcResult(id, { tasks: [], nextPageToken: "", pageSize: 0, totalSize: 0 }));
       case "stream":
         throw new A2aError(UNSUPPORTED_OPERATION, "Streaming is not served: the card says capabilities.streaming is false. Use SendMessage; every task completes in that one response.");
       case "push":
@@ -339,10 +353,10 @@ export async function handleA2a(request: Request, env: Env): Promise<Response> {
       case "extended":
         throw new A2aError(EXTENDED_CARD_NOT_CONFIGURED, `There is no authenticated card: the public one at ${origin}${AGENT_CARD_PATH} is the whole card.`);
       default:
-        return Response.json(rpcError(id, -32601, `method '${msg.method}' not found`));
+        return rpcResponse(rpcError(id, -32601, `method '${msg.method}' not found`));
     }
   } catch (e) {
-    if (e instanceof A2aError) return Response.json(rpcError(id, e.code, e.message));
+    if (e instanceof A2aError) return rpcResponse(rpcError(id, e.code, e.message));
     throw e;
   }
 }
