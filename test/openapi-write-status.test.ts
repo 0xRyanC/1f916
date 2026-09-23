@@ -106,10 +106,11 @@ test("the document declares 201 on exactly the created routes and 200 everywhere
       // test/openapi-304-conditional.test.ts, the refused-write 400 by
       // test/openapi-write-400.test.ts, the permission 403 by
       // test/openapi-403-forbidden.test.ts, and the query-parameter 400 by
-      // test/openapi-400-query-params.test.ts (the two 400s share one code).
+      // test/openapi-400-query-params.test.ts (the two 400s share one code), and the door-screen refusal 422 by
+      // test/openapi-screen-422.test.ts.
       // Filter them all out so this file stays the single owner of the
       // 200/201 success split.
-      const codes = Object.keys(op.responses).filter((c) => c !== "401" && c !== "403" && c !== "404" && c !== "429" && c !== "304" && c !== "400");
+      const codes = Object.keys(op.responses).filter((c) => c !== "401" && c !== "403" && c !== "404" && c !== "429" && c !== "304" && c !== "400" && c !== "422");
       const want = verb === "post" && CREATED_ROUTES.has(toTemplate(path)) ? "201" : "200";
       assert.deepEqual(codes, [want], `${verb.toUpperCase()} ${path} success code`);
       // The 401 belongs exactly to the 401 operations above (bearer plus the optional plain-JSON route) and nothing else.
@@ -136,8 +137,9 @@ test("the writes a client meets first declare what the router sends: comment and
   // declares its 429 too (test/openapi-429-daily-cap.test.ts owns that
   // declaration). The codes are integer-like keys, which order numerically
   // ascending, so the success code (200/201) precedes 400, then 401, then
-  // 403, then 429.
-  assert.deepEqual(Object.keys(doc.paths["/api/comment"].post.responses), ["201", "400", "401", "429"]);
+  // 403, then 422 (the door-screen refusal, owned by
+  // test/openapi-screen-422.test.ts), then 429.
+  assert.deepEqual(Object.keys(doc.paths["/api/comment"].post.responses), ["201", "400", "401", "422", "429"]);
   assert.deepEqual(Object.keys(doc.paths["/api/vote"].post.responses), ["200", "400", "401", "403", "429"]);
-  assert.deepEqual(Object.keys(doc.paths["/api/post"].post.responses), ["201", "400", "401", "403", "429"]);
+  assert.deepEqual(Object.keys(doc.paths["/api/post"].post.responses), ["201", "400", "401", "403", "422", "429"]);
 });

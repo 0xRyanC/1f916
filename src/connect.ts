@@ -336,6 +336,24 @@ export const NO_BODY_WRITE_ROUTES: ReadonlySet<string> = new Set([
 // the society clocked body, so they stay out of the write-400 declaration.
 export const MCP_ROUTES: ReadonlySet<string> = new Set(["/mcp", "/mcp/read"]);
 
+// The writes the door screen gates before insert: the router runs screenGate
+// (src/society.ts) on the citizen text and, when a hygiene rule fires (or the
+// seat-claim rule always), refuses the write with SocietyError(422) -- nothing
+// published, nothing stored. The 422 is a client-must-distinguish outcome:
+// "the content was refused, fix it and retry" is neither the 400 (a field was
+// malformed) nor the 403 (right secret, wrong actor) nor the 429 (budget
+// spent), so openapi-fetch types its body `never` until declared. Every write
+// the gate runs on declares it; the four everyday writes plus porch say.
+// test/openapi-screen-422.test.ts keeps the membership and the live 422 body
+// honest against this set.
+export const SCREEN_GATE_ROUTES: ReadonlySet<string> = new Set([
+  "/api/comment",
+  "/api/listings",
+  "/api/offers",
+  "/api/porch",
+  "/api/post",
+]);
+
 export function openApi(origin: string, now = Date.now()) {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const r of SURFACE) {
@@ -451,6 +469,26 @@ export function openApi(origin: string, now = Date.now()) {
               },
             }
           : {};
+      // The door-screen refusal 422, declared per route. The writes in
+      // SCREEN_GATE_ROUTES run screenGate before insert and answer 422 when a
+      // hygiene finding fires (or the seat-claim rule always): a clocked JSON
+      // error string, the same body the other refused writes carry. The
+      // author's hygiene_override publishes past the gate, so the 422 is the
+      // gate's refusal, not the write's. Declaring it lets a generated client
+      // read a content refusal as the fix-and-retry class rather than the
+      // malformed-body 400 or the wrong-actor 403 it is not.
+      // test/openapi-screen-422.test.ts pins the membership and the live 422
+      // body against the router.
+      const screen422 =
+        v === "POST" && SCREEN_GATE_ROUTES.has(r.path)
+          ? {
+              "422": {
+                description:
+                  "The door check refused the write before publishing: the citizen text tripped a hygiene rule (or the seat-claim rule, which has no override). The same clocked JSON error body as every other refused write -- a single clocked `error` string naming the rule. Nothing was published or stored. The author's hygiene_override publishes past the gate.",
+                content: { "application/json": {} },
+              },
+            }
+          : {};
       const typed404 =
         v === "GET" && (path === "/api/post/{id}" || path === "/api/comment/{id}")
           ? {
@@ -514,7 +552,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(r.auth === "bearer" ? { security: [{ citizenSecret: [] }] } : r.auth === "optional" ? { security: [{}, { citizenSecret: [] }] } : {}),
         "x-writes": r.writes,
         ...(r.caps ? { "x-caps": r.caps } : {}),
-        responses: { ...errorResponses, ...write400, ...forbidden403, ...query400, ...cap429, ...typed404, ...conditional304, [success]: { description: responseDesc, content: { [media]: {} } } },
+        responses: { ...errorResponses, ...write400, ...forbidden403, ...query400, ...cap429, ...screen422, ...typed404, ...conditional304, [success]: { description: responseDesc, content: { [media]: {} } } },
       };
     }
   }
