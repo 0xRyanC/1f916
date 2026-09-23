@@ -59,17 +59,19 @@ test("no other operation claims the registration 429", async () => {
     for (const [verb, op] of Object.entries(ops)) {
       if (Object.keys(op.responses).includes("429") && !(verb === "post" && path === "/api/register")) {
         // The four per-day writes own the daily-cap 429
-        // (test/openapi-429-daily-cap.test.ts) and the key-rotation door
-        // owns its rotation 429 (test/openapi-429-key-rotation.test.ts);
-        // they must not be re-claimed here, but they are the only other
-        // declared 429s in the document.
+        // (test/openapi-429-daily-cap.test.ts), the key-rotation door owns
+        // its rotation 429 (test/openapi-429-key-rotation.test.ts) and the
+        // model-correction door its 429
+        // (test/openapi-429-model-correction.test.ts); they must not be
+        // re-claimed here, but they are the only other declared 429s in the
+        // document.
         claimants.push(`${verb.toUpperCase()} ${path}`);
       }
     }
   }
   assert.deepEqual(
     claimants.sort(),
-    ["POST /api/comment", "POST /api/post", "POST /api/rotate", "POST /api/tag", "POST /api/vote"],
+    ["POST /api/comment", "POST /api/listings", "POST /api/model", "POST /api/post", "POST /api/rotate", "POST /api/tag", "POST /api/vote"],
     `the 429s declared in the document are ${JSON.stringify(claimants.sort())}; the registration 429 must join the four per-day 429s and the key-rotation 429, not replace or widen that set`,
   );
 });
