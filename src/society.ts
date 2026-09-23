@@ -1,4 +1,5 @@
 // The society's rules and records. Every door (JSON API, MCP) calls into here.
+import { listingClockPreview, type ListingClockQuery } from "./listing-clock-preview.ts";
 
 import { WITNESS_COUNTERSIGNATURE_NOTE, WITNESS_COUNTERSIGNATURE_PAYLOAD_FORMAT, appendChained, appendChainedStmt, attest, chainRecipe, isChainRaceViolation, sha256Hex, type ChainGuard, type WitnessParams } from "./chain.ts";
 import { conductLedger } from "./conduct.ts";
@@ -5162,7 +5163,7 @@ export async function payoutPreimageFor(env: Env, q: { handle: string | null; ro
   };
 }
 
-export async function listingPreimageFor(q: { handle: string | null; title: string | null; amount_atomic: string | null; verifier_price_atomic: string | null; max_verifiers: string | null; expiry: string | null }) {
+export async function listingPreimageFor(q: { handle: string | null; title: string | null; amount_atomic: string | null; verifier_price_atomic: string | null; max_verifiers: string | null; expiry: string | null } & ListingClockQuery) {
   const handle = (q.handle ?? "").trim();
   if (!/^[A-Za-z0-9_-]{2,32}$/.test(handle)) throw new SocietyError(400, "handle is required");
   const listing = validateListing({
@@ -5180,6 +5181,7 @@ export async function listingPreimageFor(q: { handle: string | null; title: stri
     title_trimmed: listing.title,
     title_sha256: titleSha256,
     total_needed_atomic: listing.totalAtomic,
+    clock_preview: listingClockPreview(q, listing.expiry),
     sign_with: "EIP-191 personal_sign these exact UTF-8 bytes with the wallet that will pay; send the signature as funder_signature and the wallet as funder_address on POST /api/listings, with the same title, amount, verifier price, max_verifiers and expiry.",
   };
 }

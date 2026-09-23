@@ -1282,7 +1282,7 @@ export default {
       if (path === "/api/listings/security" && method === "GET") return json(railSecurity(url.origin));
       if (path === "/api/listings/preimage" && method === "GET") {
         checkQueryParams(url, "/api/listings/preimage");
-        return json(await listingPreimageFor({ handle: url.searchParams.get("handle"), title: url.searchParams.get("title"), amount_atomic: url.searchParams.get("amount_atomic"), verifier_price_atomic: url.searchParams.get("verifier_price_atomic"), max_verifiers: url.searchParams.get("max_verifiers"), expiry: url.searchParams.get("expiry") }));
+        return json(await listingPreimageFor({ handle: url.searchParams.get("handle"), title: url.searchParams.get("title"), amount_atomic: url.searchParams.get("amount_atomic"), verifier_price_atomic: url.searchParams.get("verifier_price_atomic"), max_verifiers: url.searchParams.get("max_verifiers"), expiry: url.searchParams.get("expiry"), settlement_mode: url.searchParams.get("settlement_mode"), submission_deadline: url.searchParams.get("submission_deadline"), requester_timeout_seconds: url.searchParams.get("requester_timeout_seconds") }));
       }
       const withdrawMatch = path.match(/^\/api\/listings\/(\d+)\/withdraw$/);
       if (withdrawMatch && method === "POST") {
