@@ -85,7 +85,7 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
   "/api/grants/:slug/proposals/:id": [],
   "/grants": [],
   "/grants/:slug": [],
-  "/api/listings/preimage": ["handle", "title", "amount_atomic", "verifier_price_atomic", "max_verifiers", "expiry"],
+  "/api/listings/preimage": ["handle", "title", "amount_atomic", "verifier_price_atomic", "max_verifiers", "expiry", "settlement_mode", "submission_deadline", "requester_timeout_seconds"],
   "/api/payout-wallets/preimage": ["handle", "address", "expiry"],
   "/api/payout-bindings/preimage": ["handle", "row", "amount_atomic", "address", "expiry"],
   "/api/payout-bindings/:id/funder-statement": ["tx_hash", "log_index", "source_address", "relationship"],
