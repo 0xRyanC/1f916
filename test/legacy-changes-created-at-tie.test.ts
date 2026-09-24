@@ -7,16 +7,21 @@
 // the next page opened on c76005, so c76004 was never served by any page of the
 // walk. Reported in #463.
 //
-// This is NOT the out-of-order commit race the note already names (a higher-id
-// row stamped early). It is a tied-millisecond page-boundary loss: every
-// affected row carries the SAME created_at as the page's closing row, and the
-// loss reproduces identically on a frozen fixture. The legacy contract is
-// deliberately kept lossy, so the honest fix is disclosure — a sentence in
-// cursor_note naming this second, distinct loss mode and pointing to the
-// lossless ID mode that sidesteps it. That mirrors changes-snapshot-hidden-by-
-// since.test.ts, where the disclosure clause is itself the fix. These two
-// assertions pin the behaviour and its disclosure together: the first fails if
-// legacy mode is ever made lossless (update the note), the second fails if the
+// This IS the out-of-order commit race the note once named in one shape
+// (a higher-id row stamped early): since the write-time clamp
+// (prepareInsertUnderDailyCap, created_at written as MAX(now, the predecessor
+// row's stamp)) merged that inversion into a tie for posts and comments, the
+// only way a legacy walk can skip committed rows on those two streams is a
+// page boundary that lands inside a tied millisecond. Every affected row
+// carries the SAME created_at as the page's closing row, and the loss
+// reproduces identically on a frozen fixture. The nulls stream still carries
+// the un-clamped out-of-order case in its original form. The legacy contract
+// is deliberately kept lossy, so the honest fix is disclosure — a clause in
+// cursor_note naming both faces of the same race and pointing to the lossless
+// ID mode that sidesteps them. That mirrors changes-snapshot-hidden-by-since.
+// test.ts, where the disclosure clause is itself the fix. These assertions
+// pin the behaviour and its disclosure together: the first fails if legacy
+// mode is ever made lossless (update the note), the second fails if the
 // disclosure clause is dropped from cursor_note.
 
 import test from "node:test";
@@ -88,11 +93,12 @@ test("legacy mode drops a row that shares its millisecond with the last row of a
       `comment ${lostId} was not on page one either — no legacy page returns it`,
     );
 
-    // The disclosure is the fix. The legacy clause of cursor_note must now name
-    // this SECOND, static loss mode — a row sharing its millisecond with the
-    // last row of a page on a board with nothing being written — and point to
-    // the lossless ID mode, alongside the out-of-order commit race already
-    // named.
+    // The disclosure is the fix. The legacy clause of cursor_note must now
+    // name the static loss — a row sharing its millisecond with the last row of
+    // a page on a board with nothing being written — attribute it to the
+    // out-of-order race that the write-time clamp turned into a tie for posts
+    // and comments, keep the out-of-order case for the nulls stream, and point
+    // to the lossless ID mode.
     assert.match(
       page1.cursor_note,
       /shares its millisecond with the last row of a page/,
@@ -108,8 +114,10 @@ test("legacy mode drops a row that shares its millisecond with the last row of a
       /posts_since=init, comments_since=init/,
       "cursor_note must point to the lossless ID mode as the safe path",
     );
-    // The pre-existing out-of-order-race disclosure is untouched: both loss
-    // modes are named in the same note.
+    // The pre-existing at-least-once disclosure is untouched: the out-of-order
+    // clause it carries now attributes to the clamp that merged it into a tie
+    // for posts and comments, and the note still names that clause in the same
+    // place.
     assert.match(
       page1.cursor_note,
       /CANNOT promise at-least-once delivery/,
