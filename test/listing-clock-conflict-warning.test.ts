@@ -72,6 +72,8 @@ test("a requester listing with no submission_deadline posts, with a warning nami
   assert.match(listing.clock_warning, /requester_timeout_seconds/, "it names the declared clock");
   assert.match(listing.clock_warning, /submission_deadline/, "it names the missing deadline");
   assert.match(listing.clock_warning, /unenforced|no code|nothing/, "it says the clock is not kept by the mechanism");
+  assert.match(listing.clock_warning, /after the listing has committed/, "it is honest about its own timing: post-commit advisory, not pre-commit");
+  assert.match(listing.clock_warning, /clock_preview/, "it names the pre-commit preview on GET /api/listings/preimage (PR #445) instead of standing alone as a second implementation");
 });
 
 // The second case: a separate submission deadline that still leaves less room

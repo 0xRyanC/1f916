@@ -487,12 +487,14 @@ export interface ValidatedSettlement {
   escrowVerifierDeadline: number | null;
   escrowClaimDeadline: number | null;
   settlementVersion: 2 | 3;
-  // OBSERVE-MODE ONLY. A posting-preview string that names the submission/
-  // award clock conflict when the declared requester timeout has no room in
-  // the listing's own life, or null when the clocks agree. Served on the POST
-  // /api/listings response, never stored, never hashed, never enforced: the
-  // funder still decides (src/listings.ts:416 says the clock is unenforced),
-  // this only makes the arithmetic visible before the prose is committed.
+  // OBSERVE-MODE ONLY. A string that names the submission/award clock conflict
+  // when the declared requester timeout has no room in the listing's own life,
+  // or null when the clocks agree. Computed here, before the write, but served
+  // on the POST /api/listings response AFTER the listing commits: it is
+  // post-commit advisory information, never stored, never hashed, never
+  // enforced (src/listings.ts:416 says the clock is unenforced). The pre-commit
+  // half is the observe-only clock_preview on GET /api/listings/preimage, PR
+  // #445; this string names it so the two advisories do not drift apart.
   clockWarning: string | null;
 }
 
@@ -680,11 +682,13 @@ export function validateSettlement(body: SettlementInput, listingExpiry?: number
   // hashed but UNENFORCED: no code evaluates it, and the prose on the listing
   // thread reads as if the funder were held to it. When the window after the
   // submission deadline is shorter than that timeout, the prose describes a
-  // decision window the mechanism has no room for, and the funder commits to
-  // it before ever seeing the arithmetic. Name the conflict at posting time,
-  // in observe mode: the listing still posts, nothing is rejected, no new
-  // term is added, no liability is invented. The prose fix is a separate,
-  // deliberate money-rail change; this surfaces the numbers.
+  // decision window the mechanism has no room for. The pre-commit advisory for
+  // the same arithmetic lives on GET /api/listings/preimage as clock_preview
+  // (PR #445); this warning is the POST response's half, served after the
+  // listing commits, in observe mode: the listing still posts, nothing is
+  // rejected, no new term is added, no liability is invented, and the string
+  // names the preview so the two advisories cannot drift. The prose fix is a
+  // separate, deliberate money-rail change; this surfaces the numbers.
   let clockWarning: string | null = null;
   if (settlementMode === "requester" && requesterTimeoutSeconds !== null && listingExpiry !== undefined) {
     const roomLeft = submissionDeadline === null ? 0 : listingExpiry - submissionDeadline;
@@ -692,7 +696,7 @@ export function validateSettlement(body: SettlementInput, listingExpiry?: number
       const why = submissionDeadline === null
         ? "no submission_deadline was declared, so submissions run to the listing's own expiry and the declared decision window has no room after them"
         : `submission_deadline ${submissionDeadline} leaves ${roomLeft}s before expiry ${listingExpiry}, less than the declared decision window`;
-      clockWarning = `clock conflict: requester_timeout_seconds is ${requesterTimeoutSeconds}s but ${why}. That clock is declared and hashed into the listing but unenforced (no code evaluates it), so the prose describing a decision window that long is not kept by the mechanism. The listing still posts as declared; this warning is advisory and creates no obligation.`;
+      clockWarning = `clock conflict: requester_timeout_seconds is ${requesterTimeoutSeconds}s but ${why}. That clock is declared and hashed into the listing but unenforced (no code evaluates it), so the prose describing a decision window that long is not kept by the mechanism. This warning is served after the listing has committed: it is post-commit advisory information that creates no obligation. The same arithmetic was available pre-commit on GET /api/listings/preimage as clock_preview (observe mode); this response is the post-commit half, not a second preview.`;
     }
   }
   // ESCROW TERMS ARE FOR FUNDED LISTINGS AND NOTHING ELSE. A promise listing
