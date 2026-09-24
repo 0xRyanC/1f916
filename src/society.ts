@@ -3435,6 +3435,11 @@ export async function createListing(
     post_id: postId,
     thread: postId === null ? null : `/api/post/${postId}`,
     row: id === null ? null : listingRow(id),
+    // The observe-mode clock warning from validateSettlement, #441. Present on
+    // every POST /api/listings response as null or a string, so a client can
+    // pin the shape; it is never a term of the listing, never hashed, and
+    // never refused.
+    clock_warning: settlement.clockWarning,
     ...payload,
     payload_hash: payloadHash,
     payload_hash_recipe: { algorithm: "sha256", encoding: ENCODING_NOTE, fields: listingHashFields(settlement.settlementVersion) },

@@ -487,6 +487,13 @@ export interface ValidatedSettlement {
   escrowVerifierDeadline: number | null;
   escrowClaimDeadline: number | null;
   settlementVersion: 2 | 3;
+  // OBSERVE-MODE ONLY. A posting-preview string that names the submission/
+  // award clock conflict when the declared requester timeout has no room in
+  // the listing's own life, or null when the clocks agree. Served on the POST
+  // /api/listings response, never stored, never hashed, never enforced: the
+  // funder still decides (src/listings.ts:416 says the clock is unenforced),
+  // this only makes the arithmetic visible before the prose is committed.
+  clockWarning: string | null;
 }
 
 export const MAX_ESCROW_VERIFIERS = 8;
@@ -669,6 +676,25 @@ export function validateSettlement(body: SettlementInput, listingExpiry?: number
     if (listingExpiry !== undefined && submissionDeadline > listingExpiry)
       throw new SocietyError(400, `submission_deadline ${submissionDeadline} is after the listing's own expiry ${listingExpiry}; work cannot be handed in to a listing that has ended. Extend expiry, or bring the deadline in.`);
   }
+  // OBSERVE-MODE CLOCK WARNING (#441). The requester timeout is declared and
+  // hashed but UNENFORCED: no code evaluates it, and the prose on the listing
+  // thread reads as if the funder were held to it. When the window after the
+  // submission deadline is shorter than that timeout, the prose describes a
+  // decision window the mechanism has no room for, and the funder commits to
+  // it before ever seeing the arithmetic. Name the conflict at posting time,
+  // in observe mode: the listing still posts, nothing is rejected, no new
+  // term is added, no liability is invented. The prose fix is a separate,
+  // deliberate money-rail change; this surfaces the numbers.
+  let clockWarning: string | null = null;
+  if (settlementMode === "requester" && requesterTimeoutSeconds !== null && listingExpiry !== undefined) {
+    const roomLeft = submissionDeadline === null ? 0 : listingExpiry - submissionDeadline;
+    if (roomLeft < requesterTimeoutSeconds) {
+      const why = submissionDeadline === null
+        ? "no submission_deadline was declared, so submissions run to the listing's own expiry and the declared decision window has no room after them"
+        : `submission_deadline ${submissionDeadline} leaves ${roomLeft}s before expiry ${listingExpiry}, less than the declared decision window`;
+      clockWarning = `clock conflict: requester_timeout_seconds is ${requesterTimeoutSeconds}s but ${why}. That clock is declared and hashed into the listing but unenforced (no code evaluates it), so the prose describing a decision window that long is not kept by the mechanism. The listing still posts as declared; this warning is advisory and creates no obligation.`;
+    }
+  }
   // ESCROW TERMS ARE FOR FUNDED LISTINGS AND NOTHING ELSE. A promise listing
   // that carried an escrow address would be publishing a commitment it does
   // not have, which is the exact confusion this rail exists to remove.
@@ -684,7 +710,7 @@ export function validateSettlement(body: SettlementInput, listingExpiry?: number
   // retired that path silently and broken the FUND -> SUBMIT -> PAID example
   // this rail was specified around.
   if (suppliedEscrowFields.length === 0)
-    return { maxAwards, fundingMode: fundingMode as FundingMode, settlementMode: settlementMode as SettlementMode, automaticCheck, submissionDeadline, requesterTimeoutSeconds, awardOnTimeout, awardTtlSeconds, payableTtlSeconds, escrowChainId: null, escrowAddress: null, escrowToken: null, verifiers: null, escrowVerifierDeadline: null, escrowClaimDeadline: null, settlementVersion: 2 };
+    return { maxAwards, fundingMode: fundingMode as FundingMode, settlementMode: settlementMode as SettlementMode, automaticCheck, submissionDeadline, requesterTimeoutSeconds, awardOnTimeout, awardTtlSeconds, payableTtlSeconds, escrowChainId: null, escrowAddress: null, escrowToken: null, verifiers: null, escrowVerifierDeadline: null, escrowClaimDeadline: null, settlementVersion: 2, clockWarning };
 
   // A funded listing settles by verifier in v1 of the contract: automatic
   // release needs a condition the chain itself can evaluate, and requester
@@ -699,6 +725,7 @@ export function validateSettlement(body: SettlementInput, listingExpiry?: number
     escrowChainId: escrow.chainId, escrowAddress: escrow.address, escrowToken: escrow.token,
     verifiers: escrow.verifiers, escrowVerifierDeadline: escrow.verifierDeadline, escrowClaimDeadline: escrow.claimDeadline,
     settlementVersion: 3,
+    clockWarning,
   };
 }
 
