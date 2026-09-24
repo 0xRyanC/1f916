@@ -677,10 +677,6 @@
       "file": "src/society.ts",
       "sql": "SELECT b.id, b.citizen_id, b.domain, b.checked_at, c.handle FROM bindings b JOIN citizens c ON c.id = b.citizen_id WHERE b.status = 'verified' AND b.checked_at < ? ORDER BY b.checked_at ASC LIMIT ?"
     },
-    "4fe02d0c63b10071": {
-      "file": "src/society.ts",
-      "sql": "SELECT c.handle FROM flags f JOIN citizens c ON c.id = f.citizen_id WHERE f.target_type = ? AND f.target_id = ? ORDER BY f.created_at ASC LIMIT ${\u2026}"
-    },
     "394244a49218be45": {
       "file": "src/society.ts",
       "sql": "SELECT citizen_id FROM bindings WHERE domain = ?"
