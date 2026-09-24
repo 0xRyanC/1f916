@@ -164,10 +164,84 @@ def assert_history_walker_boundary_discriminator() -> None:
         assert e.body.get("posts_last_total") == 2, e.body
 
 
+def assert_citizens_walker_page_boundary_lossless() -> None:
+    # Wotuu, issue #463 (fixed 2026-09-24, src/society.ts:11441): the census
+    # walk used to drop a registration that shared its millisecond with the
+    # last row of a page, because the next page selects `created_at >
+    # next_since` (strict) and the tied row sat just past the boundary. The
+    # fix trims the trailing tied rows off the page so the next page re-collects
+    # that whole millisecond from below it: the walk stays disjoint and loses
+    # nothing. This pins the corrected contract at the SDK layer, the same way
+    # the history walker's boundary discriminator is pinned -- scripted pages,
+    # no network. Page size here is 3 to make the boundary visible; the real
+    # page is 1000.
+    class Scripted(client.Anonymous):
+        def __init__(self, pages):
+            super().__init__(origin="https://example.invalid")
+            self._pages = list(pages)
+
+        def citizens(self, *, since=None):  # deterministic pages, cursor ignored
+            return self._pages.pop(0)
+
+    def page(total, rows, has_more, next_since=None):
+        d = {
+            "total": total,
+            "returned": len(rows),
+            "count": total,
+            "page_size": 3,
+            "has_more": has_more,
+            "citizens": [{"citizen_id": cid, "created_at": ca} for cid, ca in rows],
+        }
+        if next_since is not None:
+            d["next_since"] = next_since
+        return d
+
+    # 1. Lossless page-boundary tie, at the real page size (3 here so the
+    # boundary is visible; production is 1000). 6 registrations, ids 1..6.
+    # ids 3 and 4 share millisecond T=300, and the pre-fix page boundary fell
+    # between them, so the strict `created_at > next_since` that used to be
+    # handed off at T=300 skipped id 4 forever. Post-fix, the server trims id 3
+    # (the boundary row) off page one so the next page re-collects that
+    # millisecond from below it; id 4 then rides in with it. Page shape the
+    # SDK sees: page one is 1,2 (next_since=200); page two re-collects 3 and
+    # serves the tied 4 plus 5 (next_since=400); page three is 6.
+    T = 300
+    lossless = Scripted([
+        page(6, [(1, 100), (2, 200)], True, next_since=200),
+        page(6, [(3, T), (4, T), (5, 400)], True, next_since=400),
+        page(6, [(6, 500)], False),
+    ])
+    walked = lossless.walk_citizens()
+    ids = [r["citizen_id"] for r in walked]
+    assert ids == [1, 2, 3, 4, 5, 6], ids
+    assert len(ids) == len(set(ids)), "the walk must stay disjoint, not re-serve"
+    assert len(ids) == 6, f"walked {len(ids)} of 6; the tied boundary row must be served"
+    # id 4 (millisecond T, just past the page boundary) is the row that used
+    # to vanish; it is served, exactly once.
+    assert ids.count(4) == 1, "the page-boundary tie (id 4) must be served exactly once"
+
+    # 2. Concurrent total movement still raises. A citizen joined between
+    # pages, so total moved 5 -> 6 while only 5 rows are ever served; the walk
+    # pages to an empty page, then finds walked (5) < total (6) and raises
+    # rather than return a silently short list. This is the surviving purpose
+    # of the total check -- movement, not a dropped tie.
+    moved = Scripted([
+        page(5, [(1, 100), (2, 200), (3, 300)], True, next_since=300),
+        page(6, [(4, 400), (5, 500)], True, next_since=500),
+        page(6, [], False),
+    ])
+    try:
+        moved.walk_citizens()
+        raise AssertionError("moving-total census walk must raise")
+    except client.ApiError as e:
+        assert e.status == 200, e.status
+
+
 def main(port: int) -> None:
     assert_edge_429_preserves_retry_after()
     assert_duplicate_json_keys_fail_closed()
     assert_history_walker_boundary_discriminator()
+    assert_citizens_walker_page_boundary_lossless()
     origin = f"http://127.0.0.1:{port}"
     site = client.Anonymous(origin)
 
@@ -695,12 +769,13 @@ def main(port: int) -> None:
     ids = [row["citizen_id"] for row in census["citizens"]]
     created = [row["created_at"] for row in census["citizens"]]
     assert created == sorted(created), created
-    # `has_more` here is `returned == CITIZEN_PAGE` (src/society.ts:11317):
-    # it answers "was the page full", not "do rows remain". Seeded at the
-    # cap in-process (2026-09-22): 1000 rows -> returned 1000 / total 1000 /
-    # has_more TRUE with a next_since, and that page is the whole census.
-    # total is the honest half, so prefer `returned < total` over the flag.
-    # The fixture is far under the cap, so here the pin is the False side.
+    # `has_more` is "rows remain" (src/society.ts:11439): the page over-fetches
+    # one row past CITIZEN_PAGE (1000), so the flag measures a remainder, not
+    # page fullness. Exactly 1000 rows therefore reads returned 1000 /
+    # total 1000 / has_more FALSE with no next_since -- that page is the whole
+    # census. total is the honest half, so prefer `returned < total` over the
+    # flag. The fixture is far under the cap, so here the pin is the False
+    # side. (The == 1000 comparison is the fixture's shape, not the flag's rule.)
     assert census.get("has_more") is (census.get("returned") == 1000), client.describe(census)
     if census.get("has_more"):
         token = census.get("next_since")
@@ -712,11 +787,16 @@ def main(port: int) -> None:
     else:
         assert "next_since" not in census, client.describe(census)
     # walk_citizens hands back the whole census, join order, deduped. It
-    # pages to an empty page and then checks the walk against `total`; the
-    # cursor is a created_at (not a unique key), so a tie spanning a page
-    # edge is dropped on the strict `created_at >` inequality, and the walk
-    # raises rather than return a silently short list. The fixture has no
-    # ties and is under the cap, so a clean walk reaches total.
+    # pages to an empty page and then checks the walk against `total`. A
+    # page-boundary created_at tie is not dropped: the server trims the
+    # trailing tied rows off the page so the next page re-collects that
+    # millisecond from below it (src/society.ts:11441, issue #463), so the
+    # strict `created_at >` walk stays disjoint and loses nothing. The check
+    # against `total` is still there because `total` is recomputed on every
+    # request with no snapshot token: a walked < total is concurrent
+    # registration movement, and the walk raises rather than return a
+    # silently short list. The fixture has no ties and is under the cap, so a
+    # clean walk reaches total.
     everyone = site.walk_citizens()
     walked_ids = [row["citizen_id"] for row in everyone]
     assert len(walked_ids) == len(set(walked_ids)), "no citizen twice"

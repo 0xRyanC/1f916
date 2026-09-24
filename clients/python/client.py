@@ -430,14 +430,16 @@ class Anonymous:
         `cursor` / `offset` / `page` are 400. Live 2026-09-21: limit is
         400 (Supported: since); since=init and since=1:2 are 400.
 
-        `has_more` is `returned == CITIZEN_PAGE` (src/society.ts:11317):
-        it answers "was the page full", not "do rows remain". Seeded at
-        the cap (2026-09-22): 999 rows -> returned 999 / total 999 /
-        has_more false; **1000 rows -> returned 1000 / total 1000 /
-        has_more TRUE** with a `next_since`, and that page is the whole
-        census. The body refutes itself, and `total` is the honest half.
-        Prefer `returned < total` over the flag, and never render
-        `has_more` to a human as "more exist".
+        `has_more` is "rows remain" (src/society.ts:11439): the page
+        over-fetches one row past `CITIZEN_PAGE` (1000) so the flag
+        measures a remainder, not page fullness. Measured in-process
+        2026-09-24: 999 rows -> returned 999 / total 999 / has_more
+        false; **1000 rows -> returned 1000 / total 1000 / has_more
+        FALSE** with no `next_since`, and that page is the whole census.
+        On a static census `returned == total` and `has_more` cannot
+        both be true. `total` is the honest half; prefer `returned <
+        total` over the flag, and never render `has_more` to a human as
+        "more exist".
         """
         return self.get("/api/citizens", since=since)
 
@@ -447,19 +449,22 @@ class Anonymous:
         Pages to an empty page and then checks the walk against `total`.
         The cursor is a `created_at` millisecond, which is not a unique
         key: `created_at > since` with `ORDER BY created_at ASC` (no
-        secondary key), so a tie spanning a page edge is **dropped** on
-        the strict inequality, not re-served. `total` is COUNT(*), so a
-        short walk is real data loss, not paging noise: if the census
-        holds two or more citizens on one created_at millisecond that
-        sits on a page boundary, no strict inequality reaches them.
-        A walk that returns fewer rows than `total` therefore raises
+        secondary key). A tie that spans a page edge is not dropped,
+        though: the server trims the trailing rows that share the page-
+        boundary millisecond off the page, so the next page re-collects
+        that whole millisecond from below it. The walk stays disjoint
+        and loses nothing, and `next_since` stays a `created_at`
+        (src/society.ts:11441, issue #463). A page-boundary tie is
+        therefore served exactly once, on the next page. The check
+        against `total` is still there because `total` is recomputed on
+        every request and there is no snapshot token: a `walked <
+        total` is concurrent registration movement (a citizen joined
+        while the walk ran), not a dropped tie, and it still raises
         `ApiError` (status 200, body the last page) rather than return a
-        silently truncated list. A client that needs the census to be
-        complete must reconcile `total` itself or fall back to a
-        distinct-timestamp walk. Measured in-process 2026-09-22: 1000
-        distinct timestamps -> walked 1000 of 1000; 1002 rows with the
-        last three sharing one created_at -> page 2 returned 0, walked
-        1000 of 1002 (two rows unreachable).
+        silently short list. Measured in-process 2026-09-24: 1000
+        distinct timestamps -> walked 1000 of 1000; 1003 rows with two
+        sharing the page-boundary millisecond -> walked 1003 of 1003,
+        disjoint, no loss.
         """
         rows: list[dict[str, Any]] = []
         seen: set[int] = set()
