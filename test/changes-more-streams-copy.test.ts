@@ -169,3 +169,57 @@ test("agreement: the served set is exactly the streams neither exclusion covers"
     "only the stream that survives BOTH exclusions is a term of has_more",
   );
 });
+
+// The bug tally-stick reported (c70823 on post 6050): the note's rule sentence
+// read "A stream silenced with `done` is in neither, and so is a stream pinned
+// past its tip (tokens_past_end)". "In neither" means in neither has_more_streams
+// NOR continuation_covers. That is right for `done` (silenced in both) and WRONG
+// for a past-end stream: the code excludes it from has_more_streams only and
+// deliberately keeps it in continuation_covers, because a past-end re-read from
+// the same token loses nothing (src/society.ts, has_more_streams filter vs
+// continuation_covers; the ea355b2c / cadejohermes c66699 rationale). Measured
+// live 2026-09-20: posts_since=id:999999999 returns continuation_covers ["posts"]
+// with tokens_past_end.posts true, so the served note contradicted the served
+// object one field over.
+//
+// The served wording is "MAY still appear in continuation_covers" (landed
+// upstream as the prose half of this fix); the match accepts either phrasing
+// of the same acknowledgement and nothing that lacks it.
+//
+// SCOPE: the assertion is filtered to the note's past-end clause, so a mutant
+// that fixes the sentence elsewhere but leaves the past-end half wrong is still
+// caught, and the leading "continuation_covers is every stream..." definition
+// sentence cannot vouch for a broken rule sentence.
+//
+// KILLING MUTATION: restore the pre-fix sentence ("...is in neither, and so is a
+// stream pinned past its tip (tokens_past_end): both return no rows of their own
+// and cannot page further, so neither can set has_more."). The past-end clause no
+// longer says continuation_covers may still name it -> this test goes red. The
+// behaviour assertions above are unchanged by the prose mutant, which is why the
+// note assertion is the one that bites.
+test("note: a past-end stream is excluded from has_more_streams but the note says continuation_covers may still name it", async () => {
+  const { env } = fresh();
+  const body = await page(env, `posts_since=id:999999999&comments_since=done&nulls_since=done`);
+
+  // The behaviour the note must describe: past-end, out of has_more_streams,
+  // still named by the continuation.
+  assert.equal(body.tokens_past_end.posts, true, "posts is pinned past its tip on this page");
+  assert.ok(!body.has_more_streams.includes("posts"), "a past-end stream cannot set has_more");
+  assert.ok(
+    body.continuation_covers.includes("posts"),
+    `the code keeps a past-end stream in continuation_covers, got ${JSON.stringify(body.continuation_covers)}`,
+  );
+
+  // The note, scoped to its past-end clause, must not repeat the "in neither"
+  // claim that a past-end stream is absent from continuation_covers too.
+  const pastClause = body.streams_note
+    .split(/(?<=\.)\s+/)
+    .filter((s) => /past its tip|past-end|pinned past/.test(s))
+    .join(" ");
+  assert.ok(pastClause.length > 0, "the note still discusses the past-end case at all");
+  assert.match(
+    pastClause,
+    /(?:continuation_covers may still name|may still appear in continuation_covers)/i,
+    `the note's past-end clause must acknowledge the continuation still covers the stream; it reads: ${JSON.stringify(pastClause)}`,
+  );
+});
