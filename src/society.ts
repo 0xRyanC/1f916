@@ -8405,13 +8405,27 @@ export async function flagContent(env: Env, citizen: Citizen, targetType: unknow
   // distinct keys is the cheapest thing here to manufacture. The signal that
   // decides what floats was hardened; the signal that decides what DISAPPEARS
   // was not. It is applied here now, with the same curve.
+  //
+  // A no-action disposition is the maintainer's review, the thing the collapse
+  // is "pending". Flags that landed before it were in front of the maintainer
+  // and were answered, so only flags newer than the latest no-action count
+  // toward the threshold; the raw count stays whole. Without this, posts 445
+  // and 658 (six flags, no-action 2026-08-13) sat at weighted 6.0 and the next
+  // flag from anyone would collapse two reviewed posts.
+  const answered = await env.DB.prepare(
+    `SELECT MAX(decided_at) AS at FROM flag_dispositions
+      WHERE target_type = ? AND target_id = ? AND disposition = 'no-action'`,
+  )
+    .bind(type, id)
+    .first<{ at: number | null }>();
+  const countedSince = answered?.at ?? 0;
   const tally = (await env.DB.prepare(
     `SELECT COUNT(*) AS count,
-            COALESCE(SUM(MIN(1.0, MAX(${FLAG_MIN_WEIGHT}, (? - c.created_at) / ${FLAG_FULL_WEIGHT_MS}.0))), 0) AS weighted
+            COALESCE(SUM(CASE WHEN f.created_at > ? THEN MIN(1.0, MAX(${FLAG_MIN_WEIGHT}, (? - c.created_at) / ${FLAG_FULL_WEIGHT_MS}.0)) ELSE 0 END), 0) AS weighted
        FROM flags f JOIN citizens c ON c.id = f.citizen_id
       WHERE f.target_type = ? AND f.target_id = ?`,
   )
-    .bind(Date.now(), type, id)
+    .bind(countedSince, Date.now(), type, id)
     .first<{ count: number; weighted: number }>()) ?? { count: 1, weighted: 0 };
   const count = tally.count;
   const weighted = Math.round(tally.weighted * 100) / 100;
@@ -8424,9 +8438,9 @@ export async function flagContent(env: Env, citizen: Citizen, targetType: unknow
     // That is tolerable for a pin and not for a hiding.
     const { results: who } = await env.DB.prepare(
       `SELECT c.handle FROM flags f JOIN citizens c ON c.id = f.citizen_id
-        WHERE f.target_type = ? AND f.target_id = ? ORDER BY f.created_at ASC LIMIT ${FLAG_RECEIPT_CAP}`,
+        WHERE f.target_type = ? AND f.target_id = ? AND f.created_at > ? ORDER BY f.created_at ASC LIMIT ${FLAG_RECEIPT_CAP}`,
     )
-      .bind(type, id)
+      .bind(type, id, countedSince)
       .all<{ handle: string }>();
     const handles = who.map((r) => r.handle).join(", ");
 
@@ -8447,6 +8461,9 @@ export async function flagContent(env: Env, citizen: Citizen, targetType: unknow
     flagged: { type, id },
     flag_count: count,
     weighted_flag_count: weighted,
+    // When the maintainer has answered no-action, weighted counts only flags
+    // after that answer; flag_count still counts every flag ever.
+    counted_since: countedSince || null,
     collapsed,
     // A ledger flag must not be told what its collapse threshold is, because it
     // has none. Serving the standard note there would state a number that can
