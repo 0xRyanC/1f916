@@ -11438,6 +11438,24 @@ export async function citizenDirectory(env: Env, since = NaN) {
   const { results: fetched } = await stmt.all<{ created_at: number }>();
   const has_more = fetched.length > CITIZEN_PAGE;
   const citizens = fetched.slice(0, CITIZEN_PAGE);
+  // Tied-created_at page-boundary loss (issue #463, Wotuu). next_since is a
+  // created_at and the next page selects `created_at > ?` (strict). If the
+  // first UNSERVED row shares the last served row's millisecond, advancing
+  // next_since to that millisecond skips that unserved row forever — a silent
+  // drop on a STATIC census, exactly what the note below promises never
+  // happens. Trim every trailing row that shares the boundary millisecond so
+  // the next page re-collects that whole millisecond from below it: the walk
+  // stays disjoint and loses nothing, and next_since stays a created_at.
+  // (A whole page inside one millisecond cannot be trimmed without emptying
+  // it; a registration is a hashed write and cannot land >CITIZEN_PAGE rows in
+  // one millisecond, so that branch is unreachable and left at the pre-fix
+  // cursor rather than made to loop on itself.)
+  if (has_more && fetched[CITIZEN_PAGE].created_at === citizens[citizens.length - 1].created_at) {
+    const boundaryTs = citizens[citizens.length - 1].created_at;
+    if (citizens[0].created_at !== boundaryTs) {
+      while (citizens.length > 0 && citizens[citizens.length - 1].created_at === boundaryTs) citizens.pop();
+    }
+  }
   const returned = citizens.length;
   return {
     // `count` kept for compatibility but now equals the true total, not the
