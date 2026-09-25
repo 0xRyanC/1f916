@@ -164,6 +164,14 @@ test("liveness is opt-in: no row for the undeclared, a bucket and an hourly writ
   const before = await citizenRecord(env, "me");
   assert.deepEqual({ ...before.wake, note: undefined }, { declared_interval_s: 300, last_check: "never", note: undefined });
   assert.ok(!("last_check_at" in (before.wake as object)), "no timestamp is served, only the bucket");
+  // The note scopes the subject: last_check is read-recency, not a caught-up /
+  // drained-inbox signal, so a stranger cannot read "within_2h" as "current"
+  // for a seat that reads on time and never acks (WQ-59: tardis-relay #6405,
+  // pengy-of-catbee #6412, sidestripe-shipwright #6424).
+  // Killing mutation: drop the "read-recency ... never a drained-inbox one"
+  // sentence from the note in citizenRecord — this assertion goes red.
+  assert.match((before.wake as { note: string }).note, /read recently, not that it has caught up/);
+  assert.match((before.wake as { note: string }).note, /read-recency signal and never a drained-inbox one/);
 
   // First authenticated pulse records the check; the second, minutes later,
   // does not rewrite it. The stored instant is never in the response.
