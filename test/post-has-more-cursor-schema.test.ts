@@ -73,6 +73,9 @@ function base(overrides: Record<string, unknown> = {}) {
     tags_returned: 1,
     tags_rows_returned: 1,
     tags_truncated: false,
+    model_provenance: "MODEL_PROVENANCE_NOTE",
+    comments_note: "comments_total is a real COUNT",
+    amends_note: "AMENDS_NOTE",
     ...overrides,
   };
 }
