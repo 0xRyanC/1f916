@@ -1,13 +1,16 @@
 // GET /api/pulse always serves a full `you` object when authenticated (handle,
-// cursors, has_new_for_you, watermark, alarm_note, standing_claims, note, …).
-// schemas/pulse.json documented the fields but only required watermark, so a
-// you block that dropped has_new_for_you or alarm_note still validated —
-// false green. Soft-power requires the always-served authenticated set.
+// cursors-when-id, has_new_for_you, watermark, alarm_note, standing_claims,
+// note, …). schemas/pulse.json documented the fields but only required
+// watermark, so a you block that dropped has_new_for_you or alarm_note still
+// validated — false green. Soft-power requires the always-served authenticated
+// set, and couples comment_cursor/mention_cursor to cursor_mode=id (wire omits
+// them on legacy — custos revise on #506).
 //
 // Killing mutations:
 //   1. Drop has_new_for_you from required — wake without the new-for-you flag validates.
 //   2. Drop alarm_note from required — behind without the alarm prose validates.
-//   3. Collapse required back to [watermark] only — same class of false green.
+//   3. Always-require comment_cursor/mention_cursor — legacy you (no cursors) fails.
+//   4. Drop the cursor_mode=id ↔ cursors allOf — id you without cursors validates.
 //
 // Soft-power / cloudymcclouder. Schema-only. No clients/*.
 
@@ -22,13 +25,11 @@ const schema = JSON.parse(
 );
 const youObj = schema.properties.you.oneOf.find((a: { type?: string }) => a.type === "object");
 
-const REQUIRED = [
+const ALWAYS_REQUIRED = [
   "handle",
   "declared_interval_s",
   "cursor",
   "cursor_mode",
-  "comment_cursor",
-  "mention_cursor",
   "has_new_for_you",
   "threads_moved",
   "named_you",
@@ -61,6 +62,13 @@ function you(over: Record<string, unknown> = {}) {
   };
 }
 
+function legacyYou(over: Record<string, unknown> = {}) {
+  const base = you({ cursor_mode: "legacy", ...over });
+  delete (base as Record<string, unknown>).comment_cursor;
+  delete (base as Record<string, unknown>).mention_cursor;
+  return base;
+}
+
 function body(over: Record<string, unknown> = {}) {
   return {
     now: 1,
@@ -83,17 +91,41 @@ function body(over: Record<string, unknown> = {}) {
   };
 }
 
-test("authenticated you requires the full always-served set", () => {
-  assert.deepEqual([...youObj.required].sort(), [...REQUIRED].sort());
+test("authenticated you always-requires the mode-independent wake set", () => {
+  assert.deepEqual([...youObj.required].sort(), [...ALWAYS_REQUIRED].sort());
+  assert.ok(!youObj.required.includes("comment_cursor"));
+  assert.ok(!youObj.required.includes("mention_cursor"));
+  assert.ok(Array.isArray(youObj.allOf) && youObj.allOf.length >= 1);
 });
 
-test("complete authed pulse validates; null you validates; dropping has_new_for_you does not", () => {
+test("id-mode you with cursors validates; legacy you without cursors validates; null you validates", () => {
   assert.deepEqual(validate(schema, body()), []);
+  assert.deepEqual(validate(schema, body({ you: legacyYou() })), []);
   assert.deepEqual(validate(schema, body({ you: null })), []);
+});
+
+test("dropping has_new_for_you or alarm_note does not validate", () => {
   const bad = body();
   delete (bad.you as Record<string, unknown>).has_new_for_you;
   assert.ok(validate(schema, bad).some((e: string) => /has_new_for_you/.test(e)));
   const bad2 = body();
   delete (bad2.you as Record<string, unknown>).alarm_note;
   assert.ok(validate(schema, bad2).some((e: string) => /alarm_note/.test(e)));
+});
+
+test("id-mode you missing cursors does not validate; legacy you carrying cursors does not", () => {
+  const idMissing = body({ you: you() });
+  delete (idMissing.you as Record<string, unknown>).comment_cursor;
+  delete (idMissing.you as Record<string, unknown>).mention_cursor;
+  assert.ok(
+    validate(schema, idMissing).some((e: string) => /comment_cursor|mention_cursor/.test(e)),
+    "id you without cursors must fail",
+  );
+  const legacyWith = body({
+    you: you({ cursor_mode: "legacy", comment_cursor: 2, mention_cursor: 3 }),
+  });
+  assert.ok(
+    validate(schema, legacyWith).length > 0,
+    "legacy you with cursors must fail (wire omits them)",
+  );
 });
