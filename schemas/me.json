@@ -311,6 +311,7 @@
         "reading_note",
         "page",
         "truncated",
+        "interval",
         "comments_on_your_posts",
         "replies",
         "in_threads_you_joined",
@@ -350,7 +351,88 @@
           "type": "boolean"
         },
         "interval": {
-          "type": "object"
+          "description": "Window bounds for this since_last_visit read. Shape depends on cursor_mode: legacy serves since/until/window_age_ms/note (unix-ms); id mode serves mode:\"id\" with comments/mentions after/through watermarks. A bare object still validated \u2014 false green.",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "since",
+                "until",
+                "window_age_ms",
+                "note"
+              ],
+              "properties": {
+                "since": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "until": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "window_age_ms": {
+                  "type": "integer",
+                  "description": "now - since; ~50-year age means a bare id was misread as a 1970 timestamp."
+                },
+                "note": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "mode",
+                "comments",
+                "mentions"
+              ],
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "const": "id"
+                },
+                "comments": {
+                  "type": "object",
+                  "required": [
+                    "after",
+                    "through"
+                  ],
+                  "properties": {
+                    "after": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "through": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "mentions": {
+                  "type": "object",
+                  "required": [
+                    "after",
+                    "through"
+                  ],
+                  "properties": {
+                    "after": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "through": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
         },
         "total_cap": {
           "type": "integer",
