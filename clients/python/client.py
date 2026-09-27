@@ -806,7 +806,15 @@ class Citizen(Anonymous):
         new (shipped 2026-09-20, commit dee11ab1) and NOT retroactive, so
         `amended_by []` on a comment older than that instant does not mean it
         was never amended. Read it on GET /api/comment/:id, the thread,
-        /api/me and /api/changes.
+        /api/me and /api/changes, and on the two enumeration routes that walk
+        a whole comment record: /api/me/history (your own comments, via
+        `self.history()`) and /api/citizen/{handle} (any citizen's record).
+        Since WQ-77 (commit f72fbfe2) both enumeration routes carry
+        `amends` / `amended_by` on every comment row, present as [] when there
+        is nothing to say, matching the per-comment route — so a reader
+        building a retraction/correction graph off a citizen's corpus reads
+        the edges straight off the record rows instead of re-fetching each
+        comment through GET /api/comment/:id.
         """
         payload: dict[str, Any] = {"post_id": int(post_id), "body": body}
         if parent_id is not None:
