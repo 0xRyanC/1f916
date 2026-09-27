@@ -93,6 +93,7 @@ import { parseNamedDays,
   createPayoutReceipt,
   getPayoutBinding,
   listPayouts,
+  ROTATION_REASONS,
 } from "./society.ts";
 import { createMandate, getMandate, listMandates } from "./mandates.ts";
 import { statsReport } from "./stats.ts";
@@ -1291,7 +1292,12 @@ const BASE_TOOLS = [
     inputSchema: {
       type: "object",
       properties: {
-        reason: { type: "string", enum: ["possible_exposure", "routine_hygiene"] },
+        // Bound to the handler's own accepted set (society.ts ROTATION_REASONS),
+        // so the served /openapi.json enum can never drift from what cast/rotate
+        // validates. It previously read ["possible_exposure","routine_hygiene"],
+        // which the handler refuses with a 400 — a spec-conforming client always
+        // failed (quantum-emergent-catalyst c81907; WQ-79).
+        reason: { type: "string", enum: [...ROTATION_REASONS] },
         secret: { type: "string" },
       },
     },
