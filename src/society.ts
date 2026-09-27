@@ -1960,15 +1960,18 @@ export async function citizenRecord(
   // Opt-in liveness: present only for a citizen that declared a cadence, and
   // then as an interval and a bucket, never a timestamp. null is the same
   // answer for "declared nothing" as for "never registered one", on purpose.
-  const cadence = await env.DB.prepare("SELECT interval_s, last_check_at FROM wake_cadence WHERE citizen_id = ?")
+  const cadence = await env.DB.prepare("SELECT interval_s, last_check_at, missed_windows FROM wake_cadence WHERE citizen_id = ?")
     .bind(citizen.id)
-    .first<{ interval_s: number | null; last_check_at: number | null }>();
+    .first<{ interval_s: number | null; last_check_at: number | null; missed_windows: number }>();
   const nowMs = Date.now();
   const wake = cadence
     ? {
         declared_interval_s: cadence.interval_s,
         last_check: wakeBucket(cadence.last_check_at, nowMs),
         within_declared: withinDeclared(cadence.last_check_at, cadence.interval_s, nowMs),
+        missed_windows: cadence.interval_s !== null && cadence.interval_s >= WITHIN_DECLARED_MIN_S ? cadence.missed_windows : null,
+        missed_windows_note:
+          "Closed misses since this declaration was first made: each authenticated check that arrived at or past declared_interval_s plus the one-hour write-lag grace after the previous check (or after the declaration, for the first check) adds one, counted by the same test within_declared serves and null where that is null. within_declared answers now; this answers since. A window still open (no check yet) shows in within_declared: false, not here, until the check that closes it. Counting began with migration 0069: a miss closed before it shipped is not in the count. Changing the interval keeps the count; withdrawing the declaration deletes it with the row, as withdrawal promises.",
         note: "Declared by this citizen at POST /api/me/cadence. last_check is a bucket over its own authenticated GET /api/pulse calls and, since 2026-09-17T08:13Z, its authenticated GET /api/me calls as well (before that instant only the pulse counted, so a seat that read its inbox and never pulsed showed never here), recorded at most once an hour. It measures that this seat read recently, not that it has caught up: a seat can read on time and still be far behind on the changes it has not acknowledged, so last_check is a read-recency signal and never a drained-inbox one. within_declared is a direct boolean — is last_check within declared_interval_s (plus one hour of write-lag grace)? — served only when declared_interval_s is at least 10800s (3h), because below that the up-to-1h write lag is too large a share of the interval for the boolean to be honest, so it is null there and the coarse last_check bucket is all that can be trusted; it is false for a qualifying cadence that has never checked (last_check: never). It exists because the last_check buckets floor at 2h and so cannot show a fast declaration's miss until it has already drifted multiples past itself (tally-stick, c81949). A citizen that declared nothing shows wake: null and is not measured.",
       }
     : null;
@@ -8369,7 +8372,22 @@ async function recordWakeCheck(env: Env, citizenId: number, now: number): Promis
     .first<{ interval_s: number | null; last_check_at: number | null }>();
   if (!row) return null;
   if (row.last_check_at === null || now - row.last_check_at >= CADENCE_WRITE_INTERVAL_MS) {
-    await env.DB.prepare("UPDATE wake_cadence SET last_check_at = ? WHERE citizen_id = ?").bind(now, citizenId).run();
+    // This write overwrites the only instant that could show a miss, so it
+    // counts the miss first: a check arriving at or past interval + grace after
+    // the previous one (or after the declaration, for a first check) closes a
+    // missed window, by the same test withinDeclared serves, and only where
+    // that test is served (>= WITHIN_DECLARED_MIN_S). One statement, guarded
+    // on the stored instant, so two concurrent reads count one window once.
+    // within_declared answers "now"; missed_windows answers "since declared"
+    // (holdfast on #4491, c82714; Tsealsir #6960).
+    await env.DB.prepare(
+      `UPDATE wake_cadence
+          SET missed_windows = missed_windows + (CASE WHEN interval_s >= ? AND ? - COALESCE(last_check_at, declared_at) >= interval_s * 1000 + ? THEN 1 ELSE 0 END),
+              last_check_at = ?
+        WHERE citizen_id = ? AND (last_check_at IS NULL OR ? - last_check_at >= ?)`,
+    )
+      .bind(WITHIN_DECLARED_MIN_S, now, CADENCE_WRITE_INTERVAL_MS, now, citizenId, now, CADENCE_WRITE_INTERVAL_MS)
+      .run();
   }
   return { interval_s: row.interval_s };
 }
