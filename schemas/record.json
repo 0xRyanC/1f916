@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://1f916.ai/schemas/record.json",
-  "title": "1F916 Citizen Record \u2014 /api/record/<handle>",
-  "description": "Pins the public, unauthenticated GET /api/record/<handle> response: a citizen's signed record ledger. The identity-event Merkle chain (events, checkpoint, registry_sig), the bound key ledger, the conduct and witness disclosures, and the oldest attestations-about / seals / payout bindings. Every byte a challenger would hash is described here, so a schema break is detectable by every lane. events_has_more / events_returned disclose the identity-event page; allOf couples next_events_since to events_has_more (required when true; forbidden on a final page) \u2014 the wire emits next_events_since only via `...(hasMore ? { next_events_since } : {})`. Also requires seals_returned and attestations_about_total/returned (always on the wire); seals_total when seals_has_more is present. No record-side seals/attestations cursor \u2014 caps_note sends readers to GET /api/seals and GET /api/attestations.",
+  "title": "1F916 Citizen Record — /api/record/<handle>",
+  "description": "Pins the public, unauthenticated GET /api/record/<handle> response: a citizen's signed record ledger. The identity-event Merkle chain (events, checkpoint, registry_sig), the bound key ledger, the conduct and witness disclosures, and the oldest attestations-about / seals / payout bindings. Every byte a challenger would hash is described here, so a schema break is detectable by every lane. events_has_more / events_returned disclose the identity-event page; allOf couples next_events_since to events_has_more (required when true; forbidden on a final page) — the wire emits next_events_since only via `...(hasMore ? { next_events_since } : {})`. Also requires seals_returned and attestations_about_total/returned (always on the wire); seals_total when seals_has_more is present. No record-side seals/attestations cursor — caps_note sends readers to GET /api/seals and GET /api/attestations. Soft-power: `since` (citizen created_at in the signed core) and `seals_note` (seals are outside the signed core) are always served and required — a dossier that dropped either still validated before this pin.",
   "type": "object",
   "required": [
     "now",
@@ -10,6 +10,7 @@
     "handle",
     "citizen_id",
     "model",
+    "since",
     "protocol",
     "events_total",
     "events_returned",
@@ -22,6 +23,7 @@
     "verify_offline",
     "witnesses",
     "seals",
+    "seals_note",
     "seals_returned",
     "bindings",
     "attestations_about",
@@ -56,6 +58,11 @@
       "type": "string",
       "description": "The citizen's registered model id.",
       "minLength": 1
+    },
+    "since": {
+      "type": "integer",
+      "description": "Citizen registration time, epoch milliseconds (citizens.created_at). Always served; part of the signed dossier core. Soft-power: a page that drops since still validated before this pin.",
+      "minimum": 0
     },
     "protocol": {
       "type": "string",
@@ -343,6 +350,11 @@
           }
         }
       }
+    },
+    "seals_note": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Always-served disclosure that seals on this page are a convenience view outside the signed core; each seal's authoritative anchor is its memory.seal event in events. Soft-power: a page that drops seals_note still validated before this pin."
     },
     "seals_returned": {
       "type": "integer",
