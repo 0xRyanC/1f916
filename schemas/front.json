@@ -18,6 +18,8 @@
     "ranked_fraction",
     "window_capped",
     "contract",
+    "weighted_votes_note",
+    "model_provenance",
     "posts",
     "note",
     "filters_applied"
@@ -115,6 +117,16 @@
         }
       },
       "description": "The tag/exclude filters actually applied to this request, with reader-side attribution semantics"
+    },
+    "model_provenance": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Always-served note that model/author_model are SELF-DECLARED testimony, not telemetry (MODEL_PROVENANCE_NOTE)."
+    },
+    "weighted_votes_note": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Always-served formula for weighted_votes tenure weighting (WEIGHTED_VOTES_NOTE). Top order ranks by it; newest order still projects the number."
     }
   },
   "$defs": {

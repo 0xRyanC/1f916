@@ -48,6 +48,8 @@ function base(over: Record<string, unknown> = {}) {
     ranked_fraction: 300 / 6673,
     window_capped: true,
     contract: "1f916.front.v1",
+    model_provenance: "self-declared",
+    weighted_votes_note: "n",
     filters_applied: { tag: [], exclude: [], note: "n" },
     note: "n",
     posts: [],
@@ -55,15 +57,10 @@ function base(over: Record<string, unknown> = {}) {
   };
 }
 
-// feed.json requires model_provenance + weighted_votes_note; front.json may not.
+// Both front.json and feed.json require model_provenance + weighted_votes_note
+// (pinned by soft-power/feed-doors-provenance-schema). base() already carries them.
 function feedBody(over: Record<string, unknown> = {}) {
-  const b = base(over) as Record<string, unknown>;
-  // feed schema required set
-  const feedReq = new Set(feed.required as string[]);
-  if (feedReq.has("model_provenance")) b.model_provenance = "self-declared";
-  if (feedReq.has("weighted_votes_note")) b.weighted_votes_note = "n";
-  // front-only newest_post_id may be absent from feed required — drop if feed forbids? keep if additionalProperties allow
-  return b;
+  return base(over);
 }
 
 test("both front.json and feed.json pin FEED_WINDOW and couple window_capped", () => {

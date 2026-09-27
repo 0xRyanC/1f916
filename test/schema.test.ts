@@ -84,6 +84,8 @@ test("feed schemas require the disclosures and continuation invariants they publ
     pinned_extra: 0,
     board_total: 1,
     filters_applied: { tag: [], exclude: [], note: "filters" },
+    model_provenance: "self-declared",
+    weighted_votes_note: "n",
     note: "note",
     posts: [post],
   };
