@@ -932,12 +932,26 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
   rejects("a legacy read dropping cursor_is_your_input", (d) => delete d.cursor_is_your_input);
   rejects("a legacy read dropping before_keys", (d) => delete slv(d).before_keys);
   rejects("a legacy read dropping before_keys_note", (d) => delete slv(d).before_keys_note);
-  rejects("an id-mode read still claiming cursor_is_your_input", (d) => { d.cursor_mode = "id"; delete slv(d).before_keys; delete slv(d).before_keys_note; });
-  rejects("an id-mode read still serving before_keys", (d) => { d.cursor_mode = "id"; delete d.cursor_is_your_input; delete slv(d).before_keys_note; });
-  rejects("an id-mode read still serving before_keys_note", (d) => { d.cursor_mode = "id"; delete d.cursor_is_your_input; delete slv(d).before_keys; });
+  // id-mode also always offers ack_cursor (soft-power/me-ack-cursor-schema).
+  // When bending a legacy fixture into id, seed a plain offer so the rejects
+  // below fail for the named reason rather than a missing ack_cursor.
+  const asId = (d: Record<string, unknown>) => {
+    d.cursor_mode = "id";
+    delete d.cursor_is_your_input;
+    delete slv(d).before_keys;
+    delete slv(d).before_keys_note;
+    d.ack_cursor = { version: 1, timestamp: 1, comments: 0, mentions: 0 };
+  };
+  rejects("an id-mode read still claiming cursor_is_your_input", (d) => { asId(d); d.cursor_is_your_input = "n"; });
+  rejects("an id-mode read still serving before_keys", (d) => {
+    asId(d);
+    slv(d).before_keys = { comments_on_your_posts: "id", in_threads_you_joined: "id", mentions_of_you: "mention_id", replies: "id" };
+  });
+  rejects("an id-mode read still serving before_keys_note", (d) => { asId(d); slv(d).before_keys_note = "n"; });
+  rejects("an id-mode read dropping ack_cursor", (d) => { asId(d); delete d.ack_cursor; });
   // And the id-mode shape the server actually serves must pass.
   assert.deepEqual(
-    bend((d) => { d.cursor_mode = "id"; delete d.cursor_is_your_input; delete slv(d).before_keys; delete slv(d).before_keys_note; }),
+    bend((d) => { asId(d); }),
     [],
     "the id-mode shape passes",
   );
