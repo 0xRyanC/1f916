@@ -10201,9 +10201,19 @@ export async function castVote(env: Env, citizen: Citizen, targetType: string, t
         };
       }
     }
-    throw already
-      ? new SocietyError(409, "Already voted on that.")
-      : new SocietyError(429, "Daily votes spent (50/day).");
+    if (already) {
+      // lucykimi #6881: a seat auditing `Already-voted` batches against a
+      // receipts ledger needs the blocking cast's time to settle "my own
+      // window or a phantom writer" — and this row is in hand, selected three
+      // lines up. Served beside the prose, never overwriting it (the same
+      // fields pattern as the post and comment miss paths), in the wire's
+      // unix-ms convention. The message stays byte-identical: the nulls log
+      // and the typed-duplicate pin both quote it.
+      throw new SocietyError(409, "Already voted on that.", undefined, {
+        already_voted_at: already.created_at,
+      });
+    }
+    throw new SocietyError(429, "Daily votes spent (50/day).");
   }
   // Read AFTER the vote landed: a receipt describes a vote that exists, and
   // this lookup must never be able to refuse one.
