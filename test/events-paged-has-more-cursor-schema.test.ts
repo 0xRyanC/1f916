@@ -38,6 +38,8 @@ function base(overrides: Record<string, unknown> = {}) {
     events: [],
     order: "id ASC (verification order)",
     latest_event_id: null,
+    counts_note: "Complete for this view.",
+    declared_kinds_note: "declared_kinds is a literal in src/society.ts.",
     ...overrides,
   };
 }

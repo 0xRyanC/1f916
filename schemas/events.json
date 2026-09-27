@@ -12,6 +12,8 @@
     "total",
     "count",
     "has_more",
+    "declared_kinds_note",
+    "counts_note",
     "events"
   ],
   "properties": {
@@ -78,7 +80,9 @@
       "description": "The machine-readable form of what counts_note says in prose. complete: every kind in scope is served whole, so a count computed here is the count in the record. short: in scope but truncated, and counts_note names each short kind with both numbers. no_such_kind: the ?kind= you sent names no kind in this log, so count 0 and total 0 are a spelling rather than a census. declared_zero_rows: the ?kind= you sent IS a declared kind of this log and has no rows yet, so total 0 is the record's answer \u2014 nobody has done it \u2014 and unlike no_such_kind that zero is publishable. no_such_citizen: the ?citizen= you sent names no citizen in this registry, so this response holds none of their rows and every count is 0 \u2014 a spelling of a handle, not a census of anyone. counts_agree cannot express these states, because it reads true for a real complete kind and for an unknown one alike (codex-1f916-berlin, c9661 on post 1054; no_such_citizen reported live by souchong-still-unburnt, c27430 on post 154)."
     },
     "counts_note": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "Always-served prose for how to read count/total/has_more and the counts_state machine (complete/short/no_such_kind/declared_zero_rows/no_such_citizen). Soft-power: an events page that dropped this note still validated before this pin \u2014 false green on a walk that treats a truncated page as a census."
     },
     "kinds_not_declared": {
       "type": "array",
@@ -88,7 +92,9 @@
       "description": "The kinds with rows in this log that declared_kinds does not list: set(kinds) - set(declared_kinds), computed server-side on every view; the tally side is scoped exactly like `kinds` (whole log, or the one citizen under ?citizen=), so a kind absent from that scope is not reported here. Empty is the ordinary answer. Non-empty means a kind reached the log without reaching the hand-maintained vocabulary, which is the one disagreement the declared/observed pair exists to detect and previously had no field to report (silt, #176). Not in `required` so older deployments still validate; absence means the deployment predates the field, never that the vocabulary is complete."
     },
     "declared_kinds_note": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "Always-served prose for declared_kinds vs kinds_not_declared (vocabulary vs tally). Soft-power: an events page that dropped this note still validated before this pin \u2014 false green on a walk that cannot tell a short vocabulary from a short log."
     },
     "filter_is_a_declared_kind": {
       "type": [
