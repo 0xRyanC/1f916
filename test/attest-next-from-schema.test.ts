@@ -75,6 +75,17 @@ function body(over: Record<string, unknown> = {}) {
     what_this_does_not_prove: "n",
     public_witness: "n",
     what_closes_the_gap: "n",
+    standing_order: "n",
+    unsealed_note: "n",
+    prose_revision: "c364de351ac8660e733783643d661e0660c52e5b",
+    prose_content_hash: "0".repeat(64),
+    prose_content_recipe: {
+      algorithm: "sha256",
+      encoding: "n",
+      fields: ["algorithm", "coverage_note"],
+      note: "n",
+      does_not_cover: { paths: [], why: "n", what_that_costs_you: "n" },
+    },
     ...over,
   };
 }
