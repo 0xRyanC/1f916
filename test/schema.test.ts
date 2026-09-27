@@ -456,6 +456,7 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
     has_more: false,
     window_age_ms: 5614622,
     page_saturated: { posts: false, comments: false, nulls: false },
+    tokens_past_end: { posts: false, comments: false, nulls: false },
     rows_returned: { posts: 2, comments: 1, nulls: 0 },
     window_note: "...",
     next_posts_since: "id:1374",
@@ -520,6 +521,7 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
   // caller that can see whether the nulls page saturated but not how many rows
   // it holds is the asymmetry rows_returned exists to remove.
   rejects("page_saturated losing the nulls stream", (d) => delete d.page_saturated.nulls);
+  rejects("changes page losing tokens_past_end", (d) => { delete d.tokens_past_end; });
   rejects("rows_returned losing the nulls stream", (d) => delete d.rows_returned.nulls);
   rejects("window_age_ms served as a string", (d) => { d.window_age_ms = "5614622"; });
   // Top-level fields whose ABSENCE is the break, not their value: a legacy-mode
