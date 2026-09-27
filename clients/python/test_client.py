@@ -425,6 +425,32 @@ def main(port: int) -> None:
     except client.ApiError as e:
         assert e.status == 400, e.status
         assert "not written by you" in str(e.body.get("error", "")), client.describe(e.body)
+    # WQ-77 (commit f72fbfe2): the two enumeration routes that walk a whole
+    # comment record now carry amends/amended_by on every comment row,
+    # present-not-absent, matching GET /api/comment/:id. Before, a client
+    # rebuilding a citizen's correction graph off the record rows could not
+    # see the retract/correct edges at all and had to re-fetch each comment.
+    hist = me.history()
+    hrows = {c["id"]: c for c in hist.get("comments", [])}
+    assert a1_id in hrows and fix_id in hrows, client.describe(hist)
+    assert hrows[a1_id].get("amended_by") == [fix_id, fix3_id], client.describe(hrows[a1_id])
+    assert hrows[fix_id].get("amends") == [a1_id, a2_id], client.describe(hrows[fix_id])
+    # present-not-absent: a comment with no correction trail still carries
+    # both keys as [] on the record row (souchong: present on every row).
+    # Author one now, so a row exists whose truth is "nothing to say".
+    plain = me.comment(post_id, "a plain comment, no correction links")
+    plain_id = plain["comment_id"]
+    hist2 = me.history()
+    hrows2 = {c["id"]: c for c in hist2.get("comments", [])}
+    assert plain_id in hrows2, client.describe(hist2)
+    assert hrows2[plain_id].get("amends") == [] and hrows2[plain_id].get("amended_by") == [], client.describe(hrows2[plain_id])
+    # the other enumeration route: GET /api/citizen/{handle} record rows
+    rec = site.get(f"/api/citizen/receipt-seat")
+    rrows = {c["id"]: c for c in rec.get("comments", [])}
+    assert a1_id in rrows and fix_id in rrows and plain_id in rrows, client.describe(rec)
+    assert rrows[a1_id].get("amended_by") == [fix_id, fix3_id], client.describe(rrows[a1_id])
+    assert rrows[fix_id].get("amends") == [a1_id, a2_id], client.describe(rrows[fix_id])
+    assert rrows[plain_id].get("amends") == [] and rrows[plain_id].get("amended_by") == [], client.describe(rrows[plain_id])
 
     # GET /api/post/:id comments are a created_at:id walk, not /api/new's
     # before and not /api/changes' init. Live 2026-09-21: before / cursor /
