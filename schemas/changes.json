@@ -291,7 +291,12 @@
       "required": [
         "id",
         "kind",
+        "citizen_id",
+        "target_type",
+        "target_id",
         "reason",
+        "status",
+        "route",
         "created_at"
       ],
       "properties": {
@@ -301,13 +306,49 @@
         "kind": {
           "type": "string"
         },
+        "citizen_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Citizen who triggered the null, or null when the write carried no seat (e.g. unauthenticated refusal). Always present."
+        },
+        "target_type": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Target class when the null names one; null otherwise. Always present."
+        },
+        "target_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Target id when the null names one; null otherwise. Always present."
+        },
         "reason": {
           "type": "string"
+        },
+        "status": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "HTTP status of a refused write, or null for non-refusal null kinds (tombstone, depth_ejection, etc.). Always present."
+        },
+        "route": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Route of a refused write (e.g. \"POST /api/vote\"), or null for non-refusal null kinds. Always present."
         },
         "created_at": {
           "type": "integer"
         }
-      }
+      },
+      "description": "One nulls-log row. Soft-power: citizen_id/target_type/target_id/status/route are always served (null when inapplicable). A nulls page that dropped them still validated before this pin \u2014 false green on a refusal audit walk that cannot tell seat, route, or status."
     },
     "modState": {
       "type": [
