@@ -264,7 +264,7 @@
           "type": "array",
           "description": "Newest CREDITED_WITHOUT_NOTICE_PAGE silent namings.",
           "items": {
-            "type": "object"
+            "$ref": "#/$defs/creditedItem"
           }
         },
         "note": {
@@ -288,7 +288,7 @@
         "items": {
           "type": "array",
           "items": {
-            "type": "object"
+            "$ref": "#/$defs/answeredBeforeItem"
           }
         },
         "note": {
@@ -683,6 +683,133 @@
             "minimum": 1
           },
           "description": "Amendments of the SOURCE comment (keyed on comment id, never mention_id). Empty array on a post-source mention. Always present (WQ-74)."
+        }
+      }
+    },
+    "creditedItem": {
+      "type": "object",
+      "description": "One silent naming past the notify cap. Same id contract as mentions_of_you after inbox-id-space-collision: id/comment_id are the source comment id (null for post-source); mention_id is the mention-record id.",
+      "required": [
+        "id",
+        "ref",
+        "source_type",
+        "source_id",
+        "post_id",
+        "created_at",
+        "author",
+        "mention_id",
+        "comment_id"
+      ],
+      "properties": {
+        "id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Source comment id, or null when a post named you."
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "post",
+            "comment"
+          ]
+        },
+        "source_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "post_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mention_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Mention-record id (ordering / clock for this collection)."
+        },
+        "comment_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Equals id; null for post-source rows."
+        }
+      }
+    },
+    "answeredBeforeItem": {
+      "type": "object",
+      "description": "A reply written to one of your comments and delivered elsewhere before intent routing (closed set).",
+      "required": [
+        "id",
+        "ref",
+        "post_id",
+        "parent_id",
+        "intended_parent_id",
+        "created_at",
+        "body",
+        "mod_state",
+        "author",
+        "post_title"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "post_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "parent_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "intended_parent_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Your comment that was actually being answered."
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "body": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mod_state": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1
+        },
+        "post_title": {
+          "type": "string"
         }
       }
     }

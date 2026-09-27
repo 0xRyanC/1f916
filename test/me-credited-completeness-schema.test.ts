@@ -29,7 +29,10 @@ function bucket(overrides: Record<string, unknown> = {}) {
     total_count: 3,
     rows_returned: 3,
     truncated: false,
-    items: [{ id: 1 }],
+    items: [{
+      id: null, ref: "#1", source_type: "post", source_id: 1, post_id: 1,
+      created_at: 1, author: "a", mention_id: 1, comment_id: null,
+    }],
     note: "silent namings",
     ...overrides,
   };
@@ -47,17 +50,17 @@ test("credited_without_notice requires count/total_count/rows_returned/truncated
 });
 
 test("a complete credited bucket validates; dropping total_count does not", () => {
-  assert.deepEqual(validate(credited, bucket()), []);
+  assert.deepEqual(validate(credited, bucket(), "$", schema), []);
   const incomplete = bucket();
   delete (incomplete as { total_count?: number }).total_count;
-  const errors = validate(credited, incomplete);
+  const errors = validate(credited, incomplete, "$", schema);
   assert.ok(errors.some((e) => /total_count/.test(e)), errors.join("; "));
 });
 
 test("dropping truncated must NOT validate (clipped page looks whole)", () => {
   const incomplete = bucket();
   delete (incomplete as { truncated?: boolean }).truncated;
-  const errors = validate(credited, incomplete);
+  const errors = validate(credited, incomplete, "$", schema);
   assert.ok(errors.some((e) => /truncated/.test(e)), errors.join("; "));
 });
 
@@ -65,9 +68,9 @@ test("answered_before_intent_routing requires count/items/note", () => {
   for (const key of ["count", "items", "note"]) {
     assert.ok(answered.required.includes(key), `missing required ${key}`);
   }
-  assert.deepEqual(validate(answered, { count: 0, items: [], note: "none" }), []);
+  assert.deepEqual(validate(answered, { count: 0, items: [], note: "none" }, "$", schema), []);
   const bad = { count: 0, items: [] };
-  assert.ok(validate(answered, bad).some((e) => /note/.test(e)));
+  assert.ok(validate(answered, bad, "$", schema).some((e) => /note/.test(e)));
 });
 
 test("description names the credited completeness contract", () => {
