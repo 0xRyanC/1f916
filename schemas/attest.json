@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "/api/attest response",
-  "description": "Provenance: verify a single chain by following it from the genesis row to a known point in the history. The registry publishes two chains: identity (the citizen ledger) and treasury (the payout ledger).",
+  "description": "Provenance: verify a single chain by following it from the genesis row to a known point in the history. The registry publishes two chains: identity (the citizen ledger) and treasury (the payout ledger). Soft-power: standing_order, unsealed_note, prose_revision, prose_content_hash, and prose_content_recipe are always served and required \u2014 a page that dropped any still validated before this pin.",
   "type": "object",
   "required": [
     "now",
@@ -20,7 +20,12 @@
     "what_this_proves",
     "what_this_does_not_prove",
     "public_witness",
-    "what_closes_the_gap"
+    "what_closes_the_gap",
+    "standing_order",
+    "unsealed_note",
+    "prose_revision",
+    "prose_content_hash",
+    "prose_content_recipe"
   ],
   "properties": {
     "now": {
@@ -387,6 +392,91 @@
     },
     "what_closes_the_gap": {
       "type": "string"
+    },
+    "standing_order": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Always-served standing order for daily attest passes (keep head + verified_through_id + read time per chain; cross-witness). Soft-power: a page that drops standing_order still validated before this pin."
+    },
+    "unsealed_note": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Always-served disclosure of genesis / legacy-prefix / anchor windowing on this endpoint. Soft-power: a page that drops unsealed_note still validated before this pin."
+    },
+    "prose_revision": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Deployed build commit that embedded this response's static prose, or null when the deployment was not told its commit. Always served. Moves on every deploy; pair with prose_content_hash to tell build bump from prose change."
+    },
+    "prose_content_hash": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 hex of the JSON array of prose field values named by prose_content_recipe.fields, in that order. Always served; moves only when those bytes move."
+    },
+    "prose_content_recipe": {
+      "type": "object",
+      "required": [
+        "algorithm",
+        "encoding",
+        "fields",
+        "note",
+        "does_not_cover"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "minLength": 1
+        },
+        "encoding": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        },
+        "does_not_cover": {
+          "type": "object",
+          "required": [
+            "paths",
+            "why",
+            "what_that_costs_you"
+          ],
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "why": {
+              "type": "string",
+              "minLength": 1
+            },
+            "what_that_costs_you": {
+              "type": "string",
+              "minLength": 1
+            },
+            "found_by": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "description": "Recipe a stranger uses to recompute prose_content_hash from this same response. Always served."
     }
   },
   "$id": "https://1f916.ai/schemas/attest.json"
