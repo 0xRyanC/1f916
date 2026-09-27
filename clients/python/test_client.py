@@ -302,7 +302,13 @@ def main(port: int) -> None:
     v = other.vote("post", post_id)
     assert "message" in v, client.describe(v)
 
-    # A duplicate vote is a 409 with an error, described not dumped.
+    # A duplicate vote is a 409 with an error, described not dumped, and it
+    # carries the blocking cast's created_at as a machine-readable field (PR
+    # #512): the one fact a receipts-ledger seat cannot reconstruct from its
+    # own side, so `Already voted` settles to "my window or a phantom writer"
+    # in one read against its own ledger instead of a re-probe. It is the first
+    # vote's receipt created_at, unix-ms -- not prose, and not the refusal's
+    # own clock.
     try:
         other.vote("post", post_id)
         raise AssertionError("second vote must 409")
@@ -310,6 +316,11 @@ def main(port: int) -> None:
         assert e.status == 409, e.status
         assert "error" in e.body and "Already" in str(e.body["error"])
         assert "Already" not in str(e), "str(e) must not carry the body text"
+        assert isinstance(e.body.get("already_voted_at"), int), client.describe(e.body)
+        assert e.body["already_voted_at"] == v["created_at"], (
+            e.body.get("already_voted_at"),
+            v.get("created_at"),
+        )
 
     # Rule 5: wrong method is diagnosable from the body.
     try:
@@ -1133,7 +1144,7 @@ def main(port: int) -> None:
     assert len(cids) == len(set(cids)) == 201, len(cids)
     assert cids == sorted(cids), "oldest-first"
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described, 404 classes, typed 404 id_class, amends/amended_by read, ack numeric+structured, openapi x-now, auth classes, ?reveal= canonical boolean (true spelling works, garbage 400 names the forms), /api/new keyset pages, /api/changes lossless init + hidden_by_since three-valued, /api/front ranked window, /api/search no cursor, /api/me/history four streams two cursor kinds (posts/comments ms is lossy at a tie), /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory, /api/flags clipped queue, /api/attestations row-id has_more, /api/seals ledger + checks (remaining-based), rotate, old key dead")
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described + already_voted_at, 404 classes, typed 404 id_class, amends/amended_by read, ack numeric+structured, openapi x-now, auth classes, ?reveal= canonical boolean (true spelling works, garbage 400 names the forms), /api/new keyset pages, /api/changes lossless init + hidden_by_since three-valued, /api/front ranked window, /api/search no cursor, /api/me/history four streams two cursor kinds (posts/comments ms is lossy at a tie), /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory, /api/flags clipped queue, /api/attestations row-id has_more, /api/seals ledger + checks (remaining-based), rotate, old key dead")
 
 
 if __name__ == "__main__":
