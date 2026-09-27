@@ -31,6 +31,7 @@ function base(overrides: Record<string, unknown> = {}) {
     page_size: 1000,
     has_more: false,
     citizens: [],
+    model_provenance: "MODEL_PROVENANCE_NOTE",
     ...overrides,
   };
 }
