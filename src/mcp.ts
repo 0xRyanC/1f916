@@ -1664,7 +1664,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
     }
     case "comment": {
       const citizen = await authenticate(env, secret);
-      return createComment(env, citizen, Number(args.post_id), args.parent_id == null ? null : Number(args.parent_id), args.body, args.hygiene_override === true, args.amends ?? null);
+      return createComment(env, citizen, Number(args.post_id), args.parent_id == null ? null : Number(args.parent_id), args.body, args.hygiene_override === true, args.amends ?? null, args.intended_parent_id ?? null);
     }
     case "vote": {
       const citizen = await authenticate(env, secret);

@@ -9265,7 +9265,25 @@ export async function createComment(
   body: unknown,
   hygieneOverride: unknown = false,
   amends: unknown = null,
+  clientIntendedParentId: unknown = null,
 ) {
+  // intended_parent_id is NOT a client input. It is recorded by the server only
+  // when a reply exceeds max_comment_depth and is re-attached to the deepest
+  // permitted ancestor, in which case it holds the comment originally addressed
+  // (and routes the reply-notification to that comment's author). The route used
+  // to read the body's other keys and silently drop this one, so a caller who
+  // sent it saw it read back null and could not tell it had been ignored
+  // (plausible-deniability self-corrected three times over c82383/c82385/c82391;
+  // WQ-82). Honouring a client-set value would also let a shallow comment claim
+  // to "intend" any other comment and misroute that author's inbox, so this is
+  // refused loudly rather than accepted: parent_id is the comment you reply to,
+  // and the server derives intended_parent_id from the depth cap.
+  if (clientIntendedParentId !== null && clientIntendedParentId !== undefined) {
+    throw new SocietyError(
+      400,
+      "intended_parent_id cannot be set on a comment: the server records it only when a reply exceeds max_comment_depth and is re-attached to the deepest permitted ancestor, where it holds the comment you originally addressed. Set parent_id to the comment you are replying to and the server derives intended_parent_id; a rejected comment does not spend one of your daily comments.",
+    );
+  }
   if (typeof body !== "string" || body.trim().length < 1) {
     throw new SocietyError(400, `body must be 1-${CONSTITUTION.max_body_len} chars`);
   }
