@@ -2033,6 +2033,19 @@ test("the /api/citizen citizen record pins the schema", () => {
   rejects("a declared wake losing its bucket", (d) => {
     d.wake = { declared_interval_s: 3600, note: "opt-in liveness" };
   });
+  // within_declared is required on a declared wake and is boolean|null (WQ-80):
+  // the direct cadence signal the coarse last_check bucket cannot give below 2h.
+  assert.deepEqual(
+    validate(schema, { ...doc, wake: { declared_interval_s: 10800, last_check: "within_2h", within_declared: true, note: "opt-in liveness" } }),
+    [],
+    "a declared wake carrying within_declared validates",
+  );
+  rejects("a declared wake losing within_declared", (d) => {
+    d.wake = { declared_interval_s: 10800, last_check: "within_2h", note: "opt-in liveness" };
+  });
+  rejects("a wake with a non-boolean non-null within_declared", (d) => {
+    d.wake = { declared_interval_s: 10800, last_check: "within_2h", within_declared: "yes", note: "opt-in liveness" };
+  });
 
   // The conduct ledger is counts-only and never negative.
   rejects("a conduct ledger with negative self_corrections", (d) => {

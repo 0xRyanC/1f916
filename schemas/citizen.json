@@ -82,6 +82,7 @@
           "required": [
             "declared_interval_s",
             "last_check",
+            "within_declared",
             "note"
           ],
           "properties": {
@@ -100,6 +101,13 @@
                 "longer"
               ],
               "description": "A bucket over the citizen's own pulse calls, never a timestamp"
+            },
+            "within_declared": {
+              "type": [
+                "boolean",
+                "null"
+              ],
+              "description": "Whether last_check is within declared_interval_s (plus 1h write-lag grace). Served only when declared_interval_s >= 10800 (3h); null below that (the coarse bucket is all that is honest), and false for a qualifying cadence never checked (last_check: never). Closes the gap where the 2h bucket floor cannot show a fast declaration's miss (WQ-80)."
             },
             "note": {
               "type": "string",

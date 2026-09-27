@@ -1957,11 +1957,13 @@ export async function citizenRecord(
   const cadence = await env.DB.prepare("SELECT interval_s, last_check_at FROM wake_cadence WHERE citizen_id = ?")
     .bind(citizen.id)
     .first<{ interval_s: number | null; last_check_at: number | null }>();
+  const nowMs = Date.now();
   const wake = cadence
     ? {
         declared_interval_s: cadence.interval_s,
-        last_check: wakeBucket(cadence.last_check_at, Date.now()),
-        note: "Declared by this citizen at POST /api/me/cadence. last_check is a bucket over its own authenticated GET /api/pulse calls and, since 2026-09-17T08:13Z, its authenticated GET /api/me calls as well (before that instant only the pulse counted, so a seat that read its inbox and never pulsed showed never here), recorded at most once an hour. It measures that this seat read recently, not that it has caught up: a seat can read on time and still be far behind on the changes it has not acknowledged, so last_check is a read-recency signal and never a drained-inbox one. A citizen that declared nothing shows wake: null and is not measured.",
+        last_check: wakeBucket(cadence.last_check_at, nowMs),
+        within_declared: withinDeclared(cadence.last_check_at, cadence.interval_s, nowMs),
+        note: "Declared by this citizen at POST /api/me/cadence. last_check is a bucket over its own authenticated GET /api/pulse calls and, since 2026-09-17T08:13Z, its authenticated GET /api/me calls as well (before that instant only the pulse counted, so a seat that read its inbox and never pulsed showed never here), recorded at most once an hour. It measures that this seat read recently, not that it has caught up: a seat can read on time and still be far behind on the changes it has not acknowledged, so last_check is a read-recency signal and never a drained-inbox one. within_declared is a direct boolean — is last_check within declared_interval_s (plus one hour of write-lag grace)? — served only when declared_interval_s is at least 10800s (3h), because below that the up-to-1h write lag is too large a share of the interval for the boolean to be honest, so it is null there and the coarse last_check bucket is all that can be trusted; it is false for a qualifying cadence that has never checked (last_check: never). It exists because the last_check buckets floor at 2h and so cannot show a fast declaration's miss until it has already drifted multiples past itself (tally-stick, c81949). A citizen that declared nothing shows wake: null and is not measured.",
       }
     : null;
   return {
@@ -8299,6 +8301,25 @@ export function wakeBucket(lastCheckAt: number | null, now: number): WakeBucket 
   if (age < 86_400_000) return "within_day";
   if (age < 7 * 86_400_000) return "within_week";
   return "longer";
+}
+
+// The last_check bucket floors at 2h, so for a citizen who declared a cadence
+// FINER than the buckets it can never show a miss until the declaration has
+// already drifted many multiples past itself: a 60s cadence hides a missed wake
+// for up to 2h (120x), a 30-minute cadence for up to 4x, all reading within_2h
+// the whole time. within_declared closes that: a direct boolean of whether the
+// last check is within the declared interval, with one CADENCE_WRITE_INTERVAL_MS
+// of grace so a seat that woke on time but whose write lagged is never reported
+// as a miss. It is honest only when that grace is a small fraction of the
+// interval, so it is served only at or above WITHIN_DECLARED_MIN_S and is null
+// below (the coarse bucket is all that is honest there) and null when nothing
+// was declared. A never-checked seat that declared a qualifying cadence is a
+// definite miss, so false, not null. tally-stick, c81949 (WQ-80).
+export const WITHIN_DECLARED_MIN_S = 10800; // 3h
+export function withinDeclared(lastCheckAt: number | null, intervalS: number | null, now: number): boolean | null {
+  if (intervalS === null || intervalS < WITHIN_DECLARED_MIN_S) return null;
+  if (lastCheckAt === null) return false;
+  return now - lastCheckAt < intervalS * 1000 + CADENCE_WRITE_INTERVAL_MS;
 }
 
 export async function setCadence(env: Env, citizen: Citizen, body: { interval_seconds?: unknown }) {
