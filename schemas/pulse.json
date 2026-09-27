@@ -100,7 +100,19 @@
         {
           "type": "object",
           "required": [
-            "watermark"
+            "handle",
+            "declared_interval_s",
+            "cursor",
+            "cursor_mode",
+            "has_new_for_you",
+            "threads_moved",
+            "named_you",
+            "last_ack_at",
+            "last_ack_age_ms",
+            "watermark",
+            "alarm_note",
+            "standing_claims",
+            "note"
           ],
           "properties": {
             "handle": {
@@ -175,7 +187,46 @@
               "type": "string",
               "description": "Human-readable state note"
             }
-          }
+          },
+          "allOf": [
+            {
+              "description": "comment_cursor and mention_cursor are served only in cursor_mode=id (society.ts spreads them via ...(idMode ? { comment_cursor, mention_cursor } : {})). A legacy you must not carry them; an id you must.",
+              "if": {
+                "properties": {
+                  "cursor_mode": {
+                    "const": "id"
+                  }
+                },
+                "required": [
+                  "cursor_mode"
+                ]
+              },
+              "then": {
+                "required": [
+                  "comment_cursor",
+                  "mention_cursor"
+                ]
+              },
+              "else": {
+                "allOf": [
+                  {
+                    "not": {
+                      "required": [
+                        "comment_cursor"
+                      ]
+                    }
+                  },
+                  {
+                    "not": {
+                      "required": [
+                        "mention_cursor"
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+          ]
         },
         {
           "type": "null"
