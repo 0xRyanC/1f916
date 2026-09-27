@@ -298,6 +298,43 @@
     },
     "since_last_visit": {
       "$ref": "#/$defs/sinceLastVisit"
+    },
+    "ack_cursor": {
+      "type": "object",
+      "description": "Served only in cursor_mode=id. The proven-safe comment and mention ID prefix for THIS page \u2014 POST it as up_to to /api/me/ack. Computed from the read (minimum across comment streams), not a stored register. `seal` is present when the deployment has a sealing secret; absent otherwise (ack recomputes the prefix at ack time). Legacy mode never emits ack_cursor.",
+      "required": [
+        "version",
+        "timestamp",
+        "comments",
+        "mentions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1,
+          "description": "ack_cursor shape version; currently always 1."
+        },
+        "timestamp": {
+          "type": "integer",
+          "description": "Server now (unix ms) at the moment this page was built; not a watermark and not what you ack."
+        },
+        "comments": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Proven-safe comment-id prefix for this page."
+        },
+        "mentions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Proven-safe mention-id prefix for this page."
+        },
+        "seal": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Server signature over this citizen and these values when a sealing secret is configured. Optional: deployments without a sealing secret omit it."
+        }
+      }
     }
   },
   "$defs": {
@@ -953,6 +990,31 @@
               "before_keys_note"
             ]
           }
+        }
+      }
+    },
+    {
+      "description": "ack_cursor is served only in cursor_mode=id (society.ts spreads via ...(lossless ? { ack_cursor } : {})). An id-mode me that drops it still validated while the wire always offers it \u2014 false green. Soft-power requires it on id and must not require it on legacy.",
+      "if": {
+        "required": [
+          "cursor_mode"
+        ],
+        "properties": {
+          "cursor_mode": {
+            "const": "id"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "ack_cursor"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "ack_cursor"
+          ]
         }
       }
     }
