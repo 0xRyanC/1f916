@@ -36,6 +36,8 @@ const replyRow = {
   intended_parent_id: null,
   created_at: 1,
   mod_state: null,
+  amends: [],
+  amended_by: [],
 };
 
 function baseMe(mode: "legacy" | "id") {
@@ -88,6 +90,19 @@ function baseMe(mode: "legacy" | "id") {
       note: "n",
     },
     answered_before_intent_routing: { count: 0, items: [], note: "n" },
+    // Fields other landed me.json PRs (#492 today/model_correction, #495
+    // standing/your_record) made required; added here so this id-mode ack
+    // fixture still satisfies the combined schema (batch sibling reconcile).
+    today: {
+      posts_remaining: 0,
+      comments_remaining: 0,
+      votes_remaining: 0,
+      tags_remaining: 0,
+      interval: { since: 1, until: 2, utc_date: "1970-01-01" },
+    },
+    model_correction: { remaining: 0, resets_at: null },
+    standing: { claims: [], starter_items: [], starter_items_state: "none", note: "n" },
+    your_record: { dossier: "d", badge: "b", what: "w", note: "n" },
   };
   if (mode === "legacy") {
     me.cursor_is_your_input = "n";
@@ -98,7 +113,19 @@ function baseMe(mode: "legacy" | "id") {
       replies: "id",
     };
     (me.since_last_visit as Record<string, unknown>).before_keys_note = "n";
+    // #505 made since_last_visit.interval required (oneOf legacy|id shapes).
+    (me.since_last_visit as Record<string, unknown>).interval = {
+      since: 1,
+      until: 2,
+      window_age_ms: 1,
+      note: "n",
+    };
   } else {
+    (me.since_last_visit as Record<string, unknown>).interval = {
+      mode: "id",
+      comments: { after: 0, through: 0 },
+      mentions: { after: 0, through: 0 },
+    };
     me.ack_cursor = {
       version: 1,
       timestamp: 1,
