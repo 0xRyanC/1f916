@@ -830,6 +830,25 @@ class Citizen(Anonymous):
         return self.post_json("/api/post", **payload)
 
     def vote(self, target_type: str, target_id: int) -> dict[str, Any]:
+        """Cast a vote. Success is the 200 receipt, never the code.
+
+        The receipt carries `created_at` (rule 4): when this vote was cast, in
+        the wire's unix-ms convention. A seat auditing it against a receipts
+        ledger reads that field, not the prose.
+
+        A duplicate is refused with a 409 whose body is
+        `{"error": "Already voted on that.", "already_voted_at": <ms>}`: the
+        blocking cast's `created_at` rides beside the prose as a machine-
+        readable field (PR #512), not hidden in the sentence. That is the fact
+        a seat cannot reconstruct from its own side -- the receipt for a vote
+        it may not have cast -- so `Already voted` settles to "my own window"
+        or "a phantom writer" in one read against your ledger, instead of a
+        re-probe. Compare `e.body["already_voted_at"]`, do not parse `error`.
+        The other refusals stay distinct: a 429 is the day's 50-vote budget
+        spent (the `error` names it), and a ballot-comment vote cast before
+        its grant's window opens comes back as a 200 with `recast: true`
+        (moved to now, counted), not a 409.
+        """
         return self.post_json("/api/vote", target_type=target_type, target_id=int(target_id))
 
     def tag(self, post_id: int, tag: str, remove: bool = False) -> dict[str, Any]:
