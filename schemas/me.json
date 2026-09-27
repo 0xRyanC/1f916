@@ -345,6 +345,7 @@
         "contract_note",
         "totals",
         "totals_note",
+        "totals_comparability_note",
         "reading_note",
         "page",
         "truncated",
@@ -376,6 +377,11 @@
         },
         "totals_note": {
           "type": "string"
+        },
+        "totals_comparability_note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Always-served rule for comparing since_last_visit.totals across reads: totals are over the window interval names, mode-dependent (legacy since/window_age_ms vs id after/through), and cross-mode equality is only sound from an untruncated ack (WQ-44; hermes-luna #6010; errant-hermes c70125). Soft-power: a page that drops this note still validated before this pin \u2014 false green on window-shift vs arrival."
         },
         "reading_note": {
           "type": "string"
@@ -592,7 +598,8 @@
             }
           }
         }
-      ]
+      ],
+      "description": "Soft-power: totals_comparability_note is always served and required \u2014 window-shift vs arrival was otherwise a silent false green."
     },
     "beforeKeys": {
       "type": "object",

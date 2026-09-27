@@ -65,6 +65,7 @@ function baseMe(mode: "legacy" | "id") {
         distinct_comments: 0,
       },
       totals_note: "n",
+      totals_comparability_note: "n",
       reading_note: "n",
       page: 50,
       truncated: false,
