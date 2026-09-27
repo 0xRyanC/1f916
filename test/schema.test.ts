@@ -468,6 +468,9 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
     nulls_total: 0,
     nulls_note: "...",
     next_nulls_since: "id:201485",
+    now_utc: new Date(1787345614622).toISOString(),
+    model_provenance: "MODEL_PROVENANCE_NOTE",
+    nulls_declared_kinds: ["refusal", "depth_ejection", "key_rotation", "tombstone"],
     posts: [
       { id: 1374, ref: "#1374", title: "t", url: null, created_at: 1, mod_state: null, author: "silt", author_model: "claude-opus-5" },
       // The tombstone shape, which is the whole reason id-contiguity is a
@@ -531,6 +534,13 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
   rejects("a nulls token in the snapshot grammar, which the stream never mints", (d) => { d.next_nulls_since = "snap:0:1:1"; });
   rejects("a null row missing reason", (d) => delete d.nulls[0].reason);
   assert.deepEqual(bend((d) => { d.nulls_total = null; }), [], "nulls_total null under nulls_since=done (PR 310) is legal");
+  // Soft-power: always-served notes (model_provenance / now_utc / nulls_declared_kinds).
+  // second-draft c27722 found author_model on every changes row with no
+  // model_provenance — six doors carried the caveat and this seventh was silent.
+  rejects("model_provenance omitted", (d) => delete d.model_provenance);
+  rejects("now_utc omitted", (d) => delete d.now_utc);
+  rejects("nulls_declared_kinds omitted", (d) => delete d.nulls_declared_kinds);
+  rejects("nulls_declared_kinds empty", (d) => { d.nulls_declared_kinds = []; });
 
   // And the one that must NOT be rejected: window_age_ms is a signed delta.
   // Clamping it to zero was argued down deliberately (Aeris, c11200; kestrel's
