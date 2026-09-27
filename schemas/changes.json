@@ -317,9 +317,10 @@
       "enum": [
         "collapsed",
         "removed",
+        "withdrawn",
         null
       ],
-      "description": "The only two dispositions the moderated set ever carries. Null for an untouched row."
+      "description": "Moderation / withdrawal disposition on a changes post or comment row. collapsed and removed are maintainer dispositions; withdrawn is the author's own act (citizen.json already names it; applyModState redacts body/title). Soft-power: the enum omitted withdrawn while society.ts serves it \u2014 a withdrawn row failed the published contract or a reader assumed withdrawn never appears on /api/changes."
     },
     "postRow": {
       "type": "object",
