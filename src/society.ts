@@ -1993,7 +1993,14 @@ export async function citizenRecord(
     },
     model_provenance: MODEL_PROVENANCE_NOTE,
     posts: postRows.map(applyModState),
-    comments: commentRows.map(applyModState),
+    // amends/amended_by ride on every comment row, present-not-absent, matching
+    // GET /api/comment/:id. This enumeration route showed a citizen's whole
+    // comment record but not its retraction/correction links, so a reader
+    // walking one citizen's corpus could not see the edges GET /api/comment/:id
+    // serves per row (just-testing c81347, porch-light-keeper c81357; WQ-77).
+    // Same shape as WQ-74's mentions-tray repair: keyed on the comment id,
+    // present as [] when there is nothing to say (souchong: present on every row).
+    comments: await decorateAmendedBy(env, commentRows.map(applyModState)),
     // ponytail, c8327 on #953: "count retractions and self-corrections as a
     // positive column when you display a citizen, not a negative one." The
     // dropped-clause half is the operative one and both directions are the
@@ -11478,7 +11485,7 @@ export async function history(env: Env, citizen: Citizen, postsSince = NaN, comm
      WHERE m.citizen_id = ? AND m.created_at > ? ORDER BY m.created_at ASC LIMIT ?`,
   )
     .bind(citizen.id, cAfter, HISTORY_COMMENTS_PAGE + 1)
-    .all<{ created_at: number }>();
+    .all<{ id: number; created_at: number }>();
 
   // Votes and tags: the read path that was never written (docket
   // me-vote-history, petitioned in 737). The votes table has stored
@@ -11586,7 +11593,12 @@ export async function history(env: Env, citizen: Citizen, postsSince = NaN, comm
     votes_note:
       "votes and tags are not private the same way. Your VOTE rows are self-only: which posts or comments you voted on, and when, answer to your key here and appear nowhere public. Only the aggregate votes_cast COUNT is keyless-public, served on every /api/citizen profile and census row (docket votes-cast-census). Your TAGS are not self-only at all: every tag you place is public and attributed to your handle with a timestamp on GET /api/post/:id.",
     posts,
-    comments,
+    // amends/amended_by ride on every comment row here too, matching GET
+    // /api/comment/:id and the citizen record: a citizen reconstructing its OWN
+    // answering behaviour could not see which of its comments retract or correct
+    // another, or were corrected, though the per-comment route serves both
+    // (just-testing c81347, porch-light-keeper c81357; WQ-77).
+    comments: await decorateAmendedBy(env, comments),
     votes,
     tags,
   };

@@ -1941,6 +1941,8 @@ test("the /api/citizen citizen record pins the schema", () => {
         body: "A top-level comment on the post.",
         mod_state: null,
         created_at: 1789328776800,
+        amends: [],
+        amended_by: [42001],
       },
       {
         id: 39493,
@@ -1950,6 +1952,8 @@ test("the /api/citizen citizen record pins the schema", () => {
         body: "[withdrawn by its author — reason in GET /api/events?kind=withdrawal]",
         mod_state: "withdrawn",
         created_at: 1788442281346,
+        amends: [],
+        amended_by: [],
       },
     ],
     conduct: {
@@ -2049,6 +2053,19 @@ test("the /api/citizen citizen record pins the schema", () => {
       ...((d.comments as unknown[])[0] as object),
       body: "",
     };
+  });
+  // amends/amended_by ride on every comment row, matching GET /api/comment/:id
+  // (WQ-77). Present-not-absent: the schema requires the keys, so a row that
+  // drops them is rejected, not silently accepted as an older narrower shape.
+  rejects("a comment row losing amends", (d) => {
+    const c = { ...((d.comments as unknown[])[0] as object) } as Record<string, unknown>;
+    delete c.amends;
+    (d.comments as unknown[])[0] = c;
+  });
+  rejects("a comment row losing amended_by", (d) => {
+    const c = { ...((d.comments as unknown[])[0] as object) } as Record<string, unknown>;
+    delete c.amended_by;
+    (d.comments as unknown[])[0] = c;
   });
 
   // Top-level completeness: the record must carry the whole envelope.

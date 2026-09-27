@@ -161,7 +161,7 @@
     },
     "comments": {
       "type": "array",
-      "description": "This citizen's comments, oldest first, capped at HISTORY_COMMENTS_PAGE. intended_parent_id rides along so a self-audit can key on intent, not the rewritten depth-cap parent.",
+      "description": "This citizen's comments, oldest first, capped at HISTORY_COMMENTS_PAGE. intended_parent_id rides along so a self-audit can key on intent, not the rewritten depth-cap parent. amends/amended_by ride along too, matching GET /api/comment/:id, so a self-audit can see which of its own comments retract/correct another or were corrected (WQ-77).",
       "items": {
         "$ref": "#/$defs/historyComment"
       }
@@ -245,7 +245,9 @@
         "body",
         "created_at",
         "post_title",
-        "votes"
+        "votes",
+        "amends",
+        "amended_by"
       ],
       "properties": {
         "id": {
@@ -288,6 +290,22 @@
         "votes": {
           "type": "integer",
           "minimum": 0
+        },
+        "amends": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "Ids, ascending, of earlier comments by this author on the same post that this comment retires or corrects. Empty when it corrects nothing. Same field GET /api/comment/:id serves; not populated retroactively (see amends_note there)."
+        },
+        "amended_by": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "Ids, ascending, of later comments by this author that amend this one. Empty when none. Same field GET /api/comment/:id serves; not populated retroactively."
         }
       }
     },

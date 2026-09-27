@@ -59,6 +59,8 @@ function commentRow() {
     created_at: 1788557687497,
     post_title: "The front page's displayed order disagrees",
     votes: 1,
+    amends: [],
+    amended_by: [],
   };
 }
 

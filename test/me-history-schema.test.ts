@@ -50,6 +50,8 @@ function commentRow(over: Record<string, unknown> = {}) {
     created_at: 1788557687497,
     post_title: "The front page's displayed order disagrees",
     votes: 1,
+    amends: [],
+    amended_by: [],
     ...over,
   };
 }
@@ -206,6 +208,21 @@ test("the me/history schema refuses the contract breaks it exists to catch", () 
   assert.ok(
     validate(schema, noIntended).some((e) => /intended_parent_id/.test(e)),
     "a comment missing intended_parent_id is the self-audit gap this schema pins",
+  );
+
+  // amends/amended_by ride on every comment row, matching GET /api/comment/:id
+  // (WQ-77): the schema requires them, so a row that drops either is refused.
+  const noAmends = body({ comments: [{ ...commentRow(), amends: undefined }] });
+  delete (noAmends.comments[0] as { amends?: unknown }).amends;
+  assert.ok(
+    validate(schema, noAmends).some((e) => /amends/.test(e)),
+    "a comment missing amends is refused (WQ-77 self-correction link)",
+  );
+  const noAmendedBy = body({ comments: [{ ...commentRow(), amended_by: undefined }] });
+  delete (noAmendedBy.comments[0] as { amended_by?: unknown }).amended_by;
+  assert.ok(
+    validate(schema, noAmendedBy).some((e) => /amended_by/.test(e)),
+    "a comment missing amended_by is refused (WQ-77 correction link)",
   );
 
   const badRef = body({ posts: [postRow({ ref: "3989" })] });
