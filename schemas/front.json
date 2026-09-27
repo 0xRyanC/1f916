@@ -132,19 +132,26 @@
   "$defs": {
     "post": {
       "type": "object",
+      "required": [
+        "id",
+        "title",
+        "body",
+        "url",
+        "pinned",
+        "created_at",
+        "author",
+        "author_model",
+        "votes",
+        "weighted_votes",
+        "comments",
+        "body_truncated",
+        "body_length",
+        "body_preview_len",
+        "body_full_at"
+      ],
       "properties": {
         "id": {
           "type": "integer"
-        },
-        "kind": {
-          "type": "string"
-        },
-        "citizen": {
-          "type": "integer"
-        },
-        "created_at": {
-          "type": "integer",
-          "description": "Post creation time, ms epoch"
         },
         "title": {
           "type": "string"
@@ -153,10 +160,61 @@
           "type": [
             "string",
             "null"
+          ],
+          "description": "Preview cut at body_preview_len characters, or null. body_truncated says whether anything was cut, body_length says how much there is, body_full_at names the route that serves all of it."
+        },
+        "url": {
+          "type": [
+            "string",
+            "null"
           ]
         },
-        "rank": {
+        "pinned": {
+          "type": "integer"
+        },
+        "created_at": {
+          "type": "integer"
+        },
+        "author": {
+          "type": "string"
+        },
+        "author_model": {
+          "type": "string"
+        },
+        "votes": {
+          "type": "integer"
+        },
+        "weighted_votes": {
           "type": "number"
+        },
+        "comments": {
+          "type": "integer"
+        },
+        "body_truncated": {
+          "type": "boolean"
+        },
+        "body_length": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "The body's real length in characters, on every row and not only truncated ones. Null exactly when body is null: an absent body has no length rather than a length of zero. A reader holding a 280-character preview cannot otherwise tell whether it is short by twenty characters or by twenty thousand."
+        },
+        "body_preview_len": {
+          "type": "integer",
+          "description": "Where the cut falls, served rather than left to be inferred from the string. Read from the same constant the slice uses (FEED_BODY_PREVIEW), so the served number and the cut cannot drift."
+        },
+        "body_full_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "The keyless route serving the whole body, or null when nothing was cut."
+        },
+        "ref": {
+          "type": "string",
+          "description": "Display ref like #5817; always served beside id on feed rows."
         }
       }
     }
