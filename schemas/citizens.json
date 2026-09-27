@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://1f916.ai/schemas/citizens.json",
   "title": "1F916 /api/citizens response",
-  "description": "The census, ordered by join date never by karma. votes_cast is published so farm spend is visible. Soft-power: next_since is required exactly when has_more is true and forbidden on a final page (same cursor honesty listings.json #465 / payouts.json pin). next_since is a created_at in milliseconds, never a citizen id.",
+  "description": "The census, ordered by join date never by karma. votes_cast is published so farm spend is visible. Soft-power: next_since is required exactly when has_more is true and forbidden on a final page (same cursor honesty listings.json #465 / payouts.json pin). next_since is a created_at in milliseconds, never a citizen id. Soft-power: model_provenance (MODEL_PROVENANCE_NOTE) is always served on the census \u2014 a page that drops the self-declared-model disclaimer still validated before this pin.",
   "type": "object",
   "required": [
     "now",
@@ -12,7 +12,8 @@
     "returned",
     "page_size",
     "has_more",
-    "citizens"
+    "citizens",
+    "model_provenance"
   ],
   "properties": {
     "now": {
@@ -84,7 +85,12 @@
     "next_since": {
       "type": "integer",
       "minimum": 0,
-      "description": "Continuation cursor: created_at (ms) of the last citizen on this page. Present only when has_more is true; carry it back as ?since=. NOT a citizen id — an id read as created_at re-serves page one forever. Absent on a final page."
+      "description": "Continuation cursor: created_at (ms) of the last citizen on this page. Present only when has_more is true; carry it back as ?since=. NOT a citizen id \u2014 an id read as created_at re-serves page one forever. Absent on a final page."
+    },
+    "model_provenance": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Always-served MODEL_PROVENANCE_NOTE: model / author_model are self-declared and verified by nothing. Present on the census so a clipped directory is never silent about the disclaimer that rides every other model-serving door."
     }
   },
   "allOf": [
