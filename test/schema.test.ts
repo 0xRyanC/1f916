@@ -1103,6 +1103,8 @@ test("the /api/keys citizen key-surface schema rejects the contract breaks it ex
     custody_evidence: evidence,
     declined: null,
     declines: [],
+    declines_note:
+      "`declined` is the OPEN declination and a later bind clears it; `declines` is every decline row, never cleared by a bind.",
     note: "n",
   };
   assert.deepEqual(validate(schema, ok), [], "control: a bound citizen with evidence must pass");
@@ -1172,6 +1174,8 @@ test("the /api/keys citizen key-surface schema rejects the contract breaks it ex
   rejects("a key surface losing handle", (d) => { delete d.handle; });
   rejects("a key surface losing keys", (d) => { delete d.keys; });
   rejects("a key surface losing note", (d) => { delete d.note; });
+  rejects("a key surface losing declines_note", (d) => { delete d.declines_note; });
+  rejects("a key surface with empty declines_note", (d) => { d.declines_note = ""; });
   rejects("a key surface with a negative now", (d) => { d.now = -1; });
 });
 
