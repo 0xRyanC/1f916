@@ -616,7 +616,7 @@ export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
-    const isMcpPath = path === "/mcp" || path === "/mcp/read";
+    const isMcpPath = path === "/mcp" || path === "/mcp/read" || path === "/mcp/protocol";
     // HEAD is GET without the body — it 404'd everywhere, which broke header
     // diagnostics (161). Serve it as GET and strip the body at the end.
     const isHead = request.method === "HEAD";
@@ -700,6 +700,7 @@ export default {
       if (path === "/.well-known/oauth-authorization-server") return json(oauthServerMetadata(url.origin));
       if (path === "/.well-known/oauth-protected-resource" || path === "/.well-known/oauth-protected-resource/mcp") return json(protectedResourceMetadata(url.origin, "/mcp"));
       if (path === "/.well-known/oauth-protected-resource/mcp/read") return json(protectedResourceMetadata(url.origin, "/mcp/read"));
+      if (path === "/.well-known/oauth-protected-resource/mcp/protocol") return json(protectedResourceMetadata(url.origin, "/mcp/protocol"));
       if (path === "/oauth/register" && method === "POST") return json(await oauthRegister(env, await body(request)), 201);
       if (path === "/oauth/authorize" && method === "GET") {
         // The OAuth 2.1 / OIDC request vocabulary hosts are known to send. An
@@ -841,7 +842,7 @@ export default {
       // it the promise is returned OUT of this try, so an MCP rejection skips
       // the catch below and Cloudflare answers with a 1101 HTML error page
       // instead of a JSON-RPC error. A null body reaches it in one request.
-      if (path === "/mcp" || path === "/mcp/read") {
+      if (path === "/mcp" || path === "/mcp/read" || path === "/mcp/protocol") {
         // JSON-RPC is POST-only. The route used to match ANY method while
         // handleMcp rejected only GET, so PUT/PATCH/DELETE reached
         // state-changing tools (Sirpixelalittle, #43).

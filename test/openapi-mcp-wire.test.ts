@@ -1,7 +1,7 @@
 // The two MCP doors declare the wire contract a JSON-RPC client must
 // distinguish, not only the 200.
 //
-// POST /mcp and POST /mcp/read are JSON-RPC over POST. A generated client
+// POST /mcp, POST /mcp/read and POST /mcp/protocol are JSON-RPC over POST. A generated client
 // reading /openapi.json today sees exactly one response on each door -- the
 // 200 -- so every other status the live router serves is typed `never`:
 //
@@ -32,7 +32,7 @@
 // (test/openapi-402-patron.test.ts) already fixed, on the JSON-RPC door.
 //
 // KILLING MUTATIONS:
-//  - drop 202/400/401 from the document projection for /mcp or /mcp/read;
+//  - drop 202/400/401 from the document projection for /mcp, /mcp/read or /mcp/protocol;
 //  - src/mcp.ts handleMcp: delete the `if (!msg.hasId) return new Response(null, { status: 202 })`
 //    branch (notifications fall through to -32601);
 //  - src/mcp.ts handleMcp: delete the parse-error or batch rejection
@@ -55,7 +55,7 @@ import worker from "../src/index.ts";
 
 const schema = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
 const ORIGIN = "https://1f916.ai";
-const MCP_DOORS = ["/mcp", "/mcp/read"];
+const MCP_DOORS = ["/mcp", "/mcp/read", "/mcp/protocol"];
 
 type Resp = { description?: string; content?: Record<string, unknown> };
 type Op = { responses: Record<string, Resp> };
@@ -81,7 +81,7 @@ async function postJsonRpc(path: string, body: unknown, init?: RequestInit): Pro
   return r;
 }
 
-test("the two MCP doors declare the JSON-RPC transport statuses; 202 is theirs alone", async () => {
+test("the three MCP doors declare the JSON-RPC transport statuses; 202 is theirs alone", async () => {
   const { doc } = await openApiDoc();
   let mcpOps = 0;
   let twoHundredTwos = 0;
@@ -107,8 +107,8 @@ test("the two MCP doors declare the JSON-RPC transport statuses; 202 is theirs a
       }
     }
   }
-  assert.equal(mcpOps, 2, "POST /mcp and POST /mcp/read are both in the document");
-  assert.equal(twoHundredTwos, 2, "202 is declared exactly twice, once per MCP door");
+  assert.equal(mcpOps, 3, "POST /mcp, POST /mcp/read and POST /mcp/protocol are all in the document");
+  assert.equal(twoHundredTwos, 3, "202 is declared exactly three times, once per MCP door");
 });
 
 test("the declared 202 has no body: a notification is acknowledged, not answered", async () => {

@@ -115,7 +115,7 @@ test("MCP search and fetch serve the ChatGPT connector shapes on both doors", as
 test("discovery documents are generated from the served surface", async () => {
   const env = await makeEnv();
   const manifest = (await (await worker.fetch(req("/.well-known/mcp.json"), env)).json()) as { servers: { url: string }[]; tools: { name: string }[] };
-  assert.deepEqual(manifest.servers.map((s) => s.url), [`${ORIGIN}/mcp`, `${ORIGIN}/mcp/read`]);
+  assert.deepEqual(manifest.servers.map((s) => s.url), [`${ORIGIN}/mcp`, `${ORIGIN}/mcp/read`, `${ORIGIN}/mcp/protocol`]);
   assert.ok(manifest.tools.some((t) => t.name === "search") && manifest.tools.some((t) => t.name === "fetch"));
   const llms = await (await worker.fetch(req("/llms.txt"), env)).text();
   assert.match(llms, /^# 1F916/);
