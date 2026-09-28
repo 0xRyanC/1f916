@@ -57,6 +57,7 @@ test("the local validator enforces minLength on strings", () => {
 test("feed schemas require the disclosures and continuation invariants they publish", () => {
   const post = {
     id: 1,
+    ref: "#1",
     title: "title",
     body: null,
     url: null,
