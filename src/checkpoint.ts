@@ -20,7 +20,7 @@ import { b64urlDecode, b64urlEncode } from "./keys.ts";
 import { consistencyProof, inclusionProof, merkleRoot } from "./merkle.ts";
 import { SocietyError, type Env } from "./society.ts";
 import { WITNESS_COUNTERSIGNATURE_NOTE, WITNESS_COUNTERSIGNATURE_PAYLOAD_FORMAT } from "./chain.ts";
-import { NOTE_KEY_NAME, checkpointBody, formatNote, noteKeyId, originOf, verifierKey } from "./note.ts";
+import { NOTE_KEY_NAME, checkpointBody, noteFromField, noteKeyId, originOf, signatureField, verifierKey } from "./note.ts";
 
 export const CHECKPOINT_PAYLOAD_PREFIX = "1f916.checkpoint.v1";
 const LOGS = ["identity_events", "ledger"] as const;
@@ -108,8 +108,32 @@ export async function makeCheckpoints(env: Env): Promise<{ log: string; tree_siz
       .bind(log, leaves.length, root, sig, now)
       .run();
     out.push({ log, tree_size: leaves.length, root, ...(r.meta.changes === 0 ? { skipped: true } : {}) });
+    // The stamp above is written. The note only adds to it, so a failure here
+    // is logged and never costs the stamp.
+    await signNoteFor(env, log, leaves.length).catch((e) => console.error(`checkpoint: note not signed for ${log} at ${leaves.length}: ${String(e)}`));
   }
   return out;
+}
+
+// The stamp, signed a second time in the format the certificate logs use
+// (src/note.ts). This is the ONLY place a note is signed: by the stamping job,
+// on its schedule, for the stamp at the size the log has now. A reader's
+// request never reaches the key; it is served what was stored here.
+//
+// What is signed is the STORED row, not what this run computed, so a note can
+// never state a size or a root that the stamp beside it does not. The stamp's
+// row is never written: the note goes in its own table, once.
+async function signNoteFor(env: Env, log: CheckpointLog, treeSize: number): Promise<void> {
+  const row = await env.DB.prepare(
+    "SELECT c.id, c.tree_size, c.root, n.signature FROM checkpoints c LEFT JOIN checkpoint_notes n ON n.checkpoint_id = c.id WHERE c.log = ? AND c.tree_size = ?",
+  )
+    .bind(log, treeSize)
+    .first<{ id: number; tree_size: number; root: string; signature: string | null }>();
+  if (!row || row.signature !== null) return;
+  const body = checkpointBody(originOf(log), row.tree_size, row.root);
+  const pub = b64urlDecode(await checkedPublicKey(env));
+  const field = signatureField(await noteKeyId(NOTE_KEY_NAME, pub), b64urlDecode(await signPayload(env, body)));
+  await env.DB.prepare("INSERT OR IGNORE INTO checkpoint_notes (checkpoint_id, signature, created_at) VALUES (?, ?, ?)").bind(row.id, field, Date.now()).run();
 }
 
 export interface WitnessDispatchRow {
@@ -279,22 +303,25 @@ export async function latestCheckpoints(env: Env) {
 
 // One stamp, said again in the format the certificate logs use (src/note.ts).
 // It states nothing the stamp did not already state: the log, the size and the
-// root are read from the stored row the registry signed when it made the stamp,
-// and the same key signs them here. Ed25519 is deterministic, so the same row
-// always yields the same note. The stamp's own time is not in the note, because
-// the format has no line for it; it stays in the stamp at GET /api/checkpoint.
+// root are read from the stored row, and the signature beside them was made by
+// the stamping job (signNoteFor) and stored. Nothing is signed here, and no key
+// is read here. The stamp's own time is not in the note, because the format
+// has no line for it; it stays in the stamp at GET /api/checkpoint.
+export function noNoteSentence(log: string, treeSize: number): string {
+  return `the stamp at tree_size=${treeSize} for log ${log} has no note. A note is written by the stamping job, never on request; the stamp itself is at GET /api/checkpoint`;
+}
+
 export async function checkpointNote(env: Env, logParam: string | null, sizeParam: number | undefined): Promise<string> {
   const log = assertLog(logParam);
   const wanted = typeof sizeParam === "number" && Number.isFinite(sizeParam) ? sizeParam : null;
+  type NoteRow = { tree_size: number; root: string; signature: string | null };
   const row =
     wanted === null
-      ? await env.DB.prepare("SELECT tree_size, root FROM checkpoints WHERE log = ? ORDER BY id DESC LIMIT 1").bind(log).first<{ tree_size: number; root: string }>()
-      : await env.DB.prepare("SELECT tree_size, root FROM checkpoints WHERE log = ? AND tree_size = ?").bind(log, wanted).first<{ tree_size: number; root: string }>();
+      ? await env.DB.prepare("SELECT c.tree_size, c.root, n.signature FROM checkpoints c LEFT JOIN checkpoint_notes n ON n.checkpoint_id = c.id WHERE c.log = ? ORDER BY c.id DESC LIMIT 1").bind(log).first<NoteRow>()
+      : await env.DB.prepare("SELECT c.tree_size, c.root, n.signature FROM checkpoints c LEFT JOIN checkpoint_notes n ON n.checkpoint_id = c.id WHERE c.log = ? AND c.tree_size = ?").bind(log, wanted).first<NoteRow>();
   if (!row) throw new SocietyError(404, wanted === null ? `no checkpoint yet for log ${log}` : `no checkpoint at tree_size=${wanted} for log ${log}; a note exists only for a size a stamp landed on`);
-  const body = checkpointBody(originOf(log), row.tree_size, row.root);
-  const pub = b64urlDecode(await checkedPublicKey(env));
-  const signature = b64urlDecode(await signPayload(env, body));
-  return formatNote(body, NOTE_KEY_NAME, await noteKeyId(NOTE_KEY_NAME, pub), signature);
+  if (row.signature === null) throw new SocietyError(404, noNoteSentence(log, row.tree_size));
+  return noteFromField(checkpointBody(originOf(log), row.tree_size, row.root), NOTE_KEY_NAME, row.signature);
 }
 
 export async function noteFacts(env: Env) {
@@ -305,7 +332,8 @@ export async function noteFacts(env: Env) {
     verifier_key: await verifierKey(NOTE_KEY_NAME, pub),
     origins: Object.fromEntries(LOGS.map((l) => [l, originOf(l)])),
     url: "/api/checkpoint/note/<log>",
-    same_key: "The note is signed by the same registry key as the stamp above, over the same log, size and root.",
+    same_key: "A note is signed by the same registry key as its stamp, over that stamp's own log, size and root.",
+    signed_when: "By the stamping job when it runs, for the stamp at the size the log has then. Never on a reader's request: the endpoint serves what was stored. A stamp that was already behind the log when notes began has none.",
   };
 }
 

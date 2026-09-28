@@ -551,6 +551,16 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 );
 CREATE INDEX IF NOT EXISTS idx_checkpoints_log ON checkpoints(log, id DESC);
 
+-- migrations/0073: a stamp, signed a second time in the format the certificate
+-- logs publish (src/note.ts). Written once by the stamping job, in its own
+-- table, so a stamp's row is never written after it is made. A stamp with no
+-- row here has no note.
+CREATE TABLE IF NOT EXISTS checkpoint_notes (
+  checkpoint_id INTEGER PRIMARY KEY REFERENCES checkpoints(id),
+  signature TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 -- migrations/0015: protocol P3 — attestations, anchored in the identity
 -- chain by payload sha-256; disputes and retractions append beside targets.
 CREATE TABLE IF NOT EXISTS attestations (

@@ -89,11 +89,24 @@ export function checkpointBody(origin: string, treeSize: number, rootHex: string
   return `${origin}\n${treeSize}\n${b64(root)}\n`;
 }
 
-export function formatNote(body: string, keyName: string, keyId: Uint8Array, signature: Uint8Array): string {
+// What follows the key name on a signature line: base64 of the key id and the
+// signature together. It is everything a note needs beyond its text and the
+// key's name, so a note can be written once, stored, and served again with no
+// key in reach.
+export function signatureField(keyId: Uint8Array, signature: Uint8Array): string {
+  if (keyId.length !== 4 || signature.length !== 64) throw new Error("note: a key id is 4 bytes and an Ed25519 signature 64");
+  return b64(concat(keyId, signature));
+}
+
+export function noteFromField(body: string, keyName: string, field: string): string {
   assertKeyName(keyName);
   if (!body.endsWith("\n")) throw new Error("note: the text ends with a newline");
-  if (keyId.length !== 4 || signature.length !== 64) throw new Error("note: a key id is 4 bytes and an Ed25519 signature 64");
-  return `${body}\n— ${keyName} ${b64(concat(keyId, signature))}\n`;
+  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(field) || unb64(field).length !== 68) throw new Error("note: a stored signature is base64 of a 4-byte key id and a 64-byte signature");
+  return `${body}\n— ${keyName} ${field}\n`;
+}
+
+export function formatNote(body: string, keyName: string, keyId: Uint8Array, signature: Uint8Array): string {
+  return noteFromField(body, keyName, signatureField(keyId, signature));
 }
 
 export interface ParsedNote {

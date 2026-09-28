@@ -13,8 +13,14 @@
 //   N3  put the root in the note as hex                      -> "the text is three lines, each ended, with the root in base64"
 //   N4  use a hyphen for the signature line's dash           -> "reads a checkpoint signed by sum.golang.org"
 //   N5  accept a signature by any key of the right name      -> "a changed note, or another key, does not verify"
-//   N6  sign a different size than the stored row's          -> "the note says what the stamp says: the same log, size and root"
+//   N6  serve a different size than the stored row's         -> "the note says what the stamp says: the same log, size and root"
 //   N7  serve the newest stamp when another size was asked   -> "an earlier stamp is served by its size, and a size no stamp landed on is refused"
+//   N8  sign in the endpoint, on the reader's request         -> "serving a note reads no key and signs nothing"
+//   N9  sign a note for a stamp that has none, when asked     -> "a stamp with no stored note is refused, and asking does not make one"
+//   N10 let a failure to sign the note throw                  -> "a note that cannot be signed never costs the stamp"
+//   N11 sign the root this run computed                       -> "the note is signed over the stored stamp, not over what the run computed"
+//   N12 write to the stamp's own row when signing its note    -> "the stamp's row is never written after it is made"
+//   N13 sign again for a stamp that has its note              -> "a stamp is given its note once"
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -22,8 +28,8 @@ import { fileURLToPath } from "node:url";
 import { generateKeyPairSync, createPublicKey } from "node:crypto";
 import worker from "../src/index.ts";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
-import { checkpointBody, formatNote, noteKeyId, originOf, parseCheckpoint, parseNote, verifierKey, verifyNote, NOTE_KEY_NAME } from "../src/note.ts";
-import { checkpointNote, latestCheckpoints, makeCheckpoints } from "../src/checkpoint.ts";
+import { checkpointBody, formatNote, noteFromField, noteKeyId, originOf, parseCheckpoint, parseNote, signatureField, verifierKey, verifyNote, NOTE_KEY_NAME } from "../src/note.ts";
+import { checkpointNote, latestCheckpoints, makeCheckpoints, noNoteSentence } from "../src/checkpoint.ts";
 import { sealMemory, type Env, type Citizen } from "../src/society.ts";
 
 const SCHEMA = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
@@ -181,4 +187,127 @@ test("over HTTP: the note is served as plain text, byte for byte, and its parame
   assert.equal((await get("/api/checkpoint/note/posts")).status, 400, "a log that is not one of the two");
   assert.equal((await get("/api/checkpoint/note/identity_events?size=2")).status, 400, "an unknown parameter is refused");
   assert.equal((await get("/api/checkpoint/note/identity_events?tree_size=two")).status, 400);
+});
+
+// ---- signed by the stamping job, served from what was stored ----
+
+const withoutKey = (env: Env) => ({ ...env, REGISTRY_SEED: undefined }) as unknown as Env;
+const noteRows = (db: { prepare: (q: string) => { all: () => unknown[] } }) => db.prepare("SELECT checkpoint_id, signature FROM checkpoint_notes ORDER BY checkpoint_id").all() as { checkpoint_id: number; signature: string }[];
+const stampRows = (db: { prepare: (q: string) => { all: () => unknown[] } }) => db.prepare("SELECT id, log, tree_size, root, sig, created_at FROM checkpoints ORDER BY id").all();
+
+test("serving a note reads no key and signs nothing", async () => {
+  const { env, db, grow } = await fixture();
+  await grow(4, "f");
+  await makeCheckpoints(env);
+  const facts = (await latestCheckpoints(env)).note;
+  const withKey = await checkpointNote(env, "identity_events", undefined);
+  const before = noteRows(db);
+  // The same request against a Worker that holds no signing key at all.
+  const served = await checkpointNote(withoutKey(env), "identity_events", undefined);
+  assert.equal(served, withKey);
+  assert.equal(await verifyNote(served, facts.verifier_key), true);
+  assert.equal(await checkpointNote(withoutKey(env), "identity_events", 4), withKey);
+  const res = await worker.fetch(new Request("https://1f916.ai/api/checkpoint/note/ledger"), withoutKey(env));
+  assert.equal(res.status, 200);
+  assert.deepEqual(noteRows(db), before, "a read writes nothing");
+  assert.match(facts.signed_when, /Never on a reader's request/);
+});
+
+test("a stamp with no stored note is refused, and asking does not make one", async () => {
+  const { env, db, grow } = await fixture();
+  await grow(3, "g");
+  // A stamp from before notes: a row in checkpoints and nothing beside it.
+  db.prepare("INSERT INTO checkpoints (log, tree_size, root, sig, created_at) VALUES ('identity_events', 2, ?, 'sig-from-before', 1)").run("ab".repeat(32));
+  await assert.rejects(checkpointNote(env, "identity_events", 2), (e: unknown) => {
+    assert.equal((e as { status: number }).status, 404);
+    assert.equal((e as Error).message, noNoteSentence("identity_events", 2));
+    return true;
+  });
+  // It was the newest, so asking for the newest is the same answer, with the size named.
+  await assert.rejects(checkpointNote(env, "identity_events", undefined), (e: unknown) => (e as Error).message === noNoteSentence("identity_events", 2));
+  assert.equal(noNoteSentence("ledger", 0), "the stamp at tree_size=0 for log ledger has no note. A note is written by the stamping job, never on request; the stamp itself is at GET /api/checkpoint");
+  assert.deepEqual(noteRows(db), [], "asking signed nothing");
+  // The stamping job runs: the log is at 3, so the stamp at 3 is made and given its note. The one at 2 stays as it was.
+  await makeCheckpoints(env);
+  assert.equal(parseCheckpoint(parseNote(await checkpointNote(env, "identity_events", undefined)).body).treeSize, 3);
+  await assert.rejects(checkpointNote(env, "identity_events", 2), /has no note/);
+  const res = await worker.fetch(new Request("https://1f916.ai/api/checkpoint/note/identity_events?tree_size=2"), env);
+  assert.equal(res.status, 404);
+});
+
+test("a note that cannot be signed never costs the stamp", async () => {
+  const { env, db, grow } = await fixture();
+  await grow(3, "h");
+  db.exec("DROP TABLE checkpoint_notes");
+  const errors: string[] = [];
+  const real = console.error;
+  console.error = (...a: unknown[]) => void errors.push(a.join(" "));
+  let made;
+  try {
+    made = await makeCheckpoints(env);
+  } finally {
+    console.error = real;
+  }
+  assert.deepEqual(made.map((m) => [m.log, m.tree_size, m.skipped ?? false]), [["identity_events", 3, false], ["ledger", 0, false]]);
+  assert.equal(stampRows(db).length, 2, "both stamps were written");
+  assert.equal(errors.length, 2, "and the failure was said, once for each log");
+  assert.match(errors[0], /^checkpoint: note not signed for identity_events at 3: /);
+});
+
+test("the note is signed over the stored stamp, not over what the run computed", async () => {
+  const { env, db, grow } = await fixture();
+  await grow(3, "i");
+  // A stamp already stands at the log's size, with a root this run will not compute.
+  const stored = "cd".repeat(32);
+  db.prepare("INSERT INTO checkpoints (log, tree_size, root, sig, created_at) VALUES ('identity_events', 3, ?, 'sig-already-there', 1)").run(stored);
+  const made = await makeCheckpoints(env);
+  const run = made.find((m) => m.log === "identity_events")!;
+  assert.equal(run.skipped, true);
+  assert.notEqual(run.root, stored);
+  const note = await checkpointNote(env, "identity_events", 3);
+  assert.equal(parseCheckpoint(parseNote(note).body).rootHex, stored, "the note states the stamp's root");
+  assert.equal(await verifyNote(note, (await latestCheckpoints(env)).note.verifier_key), true);
+});
+
+test("the stamp's row is never written after it is made", async () => {
+  const { env, db, grow } = await fixture();
+  await grow(2, "j");
+  db.prepare("INSERT INTO checkpoints (log, tree_size, root, sig, created_at) VALUES ('identity_events', 2, ?, 'sig-already-there', 1)").run("ef".repeat(32));
+  const before = stampRows(db);
+  await makeCheckpoints(env);
+  const after = stampRows(db);
+  assert.deepEqual(after.slice(0, before.length), before, "the row that was there is byte for byte what it was");
+  assert.deepEqual(Object.keys(after[0] as object).sort(), ["created_at", "id", "log", "root", "sig", "tree_size"], "and a stamp has no column for a note");
+  assert.equal(noteRows(db).length, 2, "the notes are beside the stamps, one each");
+});
+
+test("a stamp is given its note once", async () => {
+  const { env, db, grow } = await fixture();
+  await grow(2, "k");
+  await makeCheckpoints(env);
+  const first = noteRows(db);
+  assert.equal(first.length, 2);
+  // A second run in a quiet hour makes no stamp and signs no note. Every
+  // signature the run makes is counted; a note's text is the one with line
+  // breaks in it.
+  const signed: string[] = [];
+  const realSign = crypto.subtle.sign.bind(crypto.subtle);
+  crypto.subtle.sign = ((alg: AlgorithmIdentifier, key: CryptoKey, data: BufferSource) => {
+    signed.push(new TextDecoder().decode(data as ArrayBuffer));
+    return realSign(alg, key, data);
+  }) as typeof crypto.subtle.sign;
+  let again;
+  try {
+    again = await makeCheckpoints(env);
+  } finally {
+    crypto.subtle.sign = realSign;
+  }
+  assert.deepEqual(again.map((m) => m.skipped), [true, true]);
+  assert.deepEqual(noteRows(db), first);
+  assert.ok(signed.length > 0, "the counter saw the run's signatures");
+  assert.deepEqual(signed.filter((t) => t.includes("\n")), [], "and none of them was a note");
+  // A stored signature is the key id and the signature, and nothing else.
+  for (const r of first) assert.equal(Buffer.from(r.signature, "base64").length, 68);
+  assert.throws(() => noteFromField("text\n", "k", Buffer.alloc(67).toString("base64")), /4-byte key id and a 64-byte signature/);
+  assert.equal(formatNote("text\n", "k", new Uint8Array(4), new Uint8Array(64)), noteFromField("text\n", "k", signatureField(new Uint8Array(4), new Uint8Array(64))));
 });
