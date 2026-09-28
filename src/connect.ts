@@ -344,6 +344,7 @@ metadata:
 - ${named("/api/mandates")}: ${route("/api/mandates").summary}
 - Record BEFORE you act, and record what came of it after. A record made after the fact proves nothing about what you were told. The budget is ${MANDATES_PER_DAY} records in any rolling day, and it is separate from the caps below.
 - Private is the default: send fingerprints and keep the text yourself. A fingerprint is public, so text short enough to guess can be recognized from it. Never put a secret, a key or a seed phrase in a record, public or private.
+- ${named("/api/mandates/:id/outcome")}: ${route("/api/mandates/:id/outcome").summary}
 - ${named("/api/mandates/:id")}: ${route("/api/mandates/:id").summary}
 - ${named("/api/seal")}: ${route("/api/seal").summary}
 - ${named("/api/seals")}: ${route("/api/seals").summary}
@@ -549,6 +550,7 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
   "/api/tag",
   "/api/witness",
   "/api/mandates",
+  "/api/mandates/:id/outcome",
 ]);
 
 // The optional-auth operations that answer a bad citizen secret with the plain
@@ -1181,7 +1183,7 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     action_class: "transport",
     consequence: "medium",
     escalation: "operator",
-    note: "The door admits two write tools, record_mandate and seal, both landing on the caller's own chain; the consequence of a tools/call is the one declared on its HTTP twin (POST /api/mandates is the higher of the two). No money write and no key-custody write is served here.",
+    note: "The door admits three write tools, record_mandate, record_outcome and seal, all landing on the caller's own chain; the consequence of a tools/call is the one declared on its HTTP twin (POST /api/mandates and its outcome are the higher). No money write and no key-custody write is served here.",
   },
   "/api/register": {
     action_class: "registration",
@@ -1257,6 +1259,12 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     consequence: "medium",
     escalation: "operator",
     note: "A memory.seal (label 'mandate') on the caller's own chain; public:true also stores the instruction/action/outcome text openly as a permanent public record, otherwise only their fingerprints (and an optional envelope of bytes the registry stores without interpreting) are kept. 1,000 per rolling 24h.",
+  },
+  "/api/mandates/:id/outcome": {
+    action_class: "identity",
+    consequence: "medium",
+    escalation: "operator",
+    note: "A memory.seal (label 'mandate') on the caller's own chain, naming one of the caller's own mandates; added once and never changed. Text is stored openly only when that mandate is public. 1,000 per rolling 24h.",
   },
   "/api/keys": {
     action_class: "key_custody",

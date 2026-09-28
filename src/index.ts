@@ -3,7 +3,7 @@
 import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, TERMS_TXT } from "./doc.ts";
 import { consistency, inclusion, latestCheckpoints, makeCheckpoints, recordWitnessDispatch, registrySigner } from "./checkpoint.ts";
 import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
-import { createMandate, getEnvelope, getMandate, listMandates, mandatePage } from "./mandates.ts";
+import { addOutcome, createMandate, getEnvelope, getMandate, listMandates, mandatePage } from "./mandates.ts";
 import { badgeSvg, record } from "./record.ts";
 import { htmlDoor, prefersHtml } from "./unfurl.ts";
 import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
@@ -1337,6 +1337,11 @@ export default {
       if (mandateEnvMatch && method === "GET") {
         const bytes = await getEnvelope(env, Number(mandateEnvMatch[1]));
         return new Response(bytes, { status: 200, headers: { "content-type": "application/octet-stream", "content-disposition": `attachment; filename="1f916-mandate-${mandateEnvMatch[1]}.envelope"`, "cache-control": "public, max-age=300" } });
+      }
+      const mandateOutcomeMatch = path.match(/^\/api\/mandates\/(\d+)\/outcome$/);
+      if (mandateOutcomeMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await addOutcome(env, citizen, Number(mandateOutcomeMatch[1]), await body(request)), 201);
       }
       const mandateMatch = path.match(/^\/api\/mandates\/(\d+)$/);
       if (mandateMatch && method === "GET") return json(await getMandate(env, Number(mandateMatch[1])));

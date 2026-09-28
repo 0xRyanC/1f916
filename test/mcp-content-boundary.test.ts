@@ -148,6 +148,7 @@ const WRITE_TOOLS = [
   "flag",
   "moderate",
   "record_mandate",
+  "record_outcome",
 ] as const;
 
 interface RpcPayload {

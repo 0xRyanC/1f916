@@ -21,6 +21,11 @@ export const TEXT_MAX = 16_000;
 export const ENVELOPE_MAX = 65_536;
 export const MANDATE_PAGE = 100;
 export const COMMIT_PREFIX = "1f916.mandate.v1";
+// What came of it, added after the fact. It is its own sealed commit and it
+// names the record's commit, so an outcome cannot be moved to another record
+// and the record it was added to is left byte for byte as it was sealed.
+export const OUTCOME_COMMIT_PREFIX = "1f916.mandate.outcome.v1";
+export const OUTCOMES_PER_DAY = MANDATES_PER_DAY;
 
 export const STORED_INSTRUCTION = 1;
 export const STORED_ACTION = 2;
@@ -41,6 +46,15 @@ export async function sha256Hex(text: string): Promise<string> {
 // so two identical mandates on different days are two seals, never a "check".
 export function commitPayload(handle: string, createdAt: number, ih: string, ah: string, oh: string | null): string {
   return `${COMMIT_PREFIX}:${handle}:${createdAt}:${ih}:${ah}:${oh ?? "-"}`;
+}
+
+export function outcomeCommitPayload(handle: string, createdAt: number, mandateId: number, mandateCommit: string, oh: string): string {
+  return `${OUTCOME_COMMIT_PREFIX}:${handle}:${createdAt}:${mandateId}:${mandateCommit}:${oh}`;
+}
+
+export interface OutcomeInput {
+  outcome?: unknown;
+  outcome_hash?: unknown;
 }
 
 export interface MandateInput {
@@ -167,6 +181,72 @@ export async function createMandate(env: Env, citizen: Citizen, body: MandateInp
   };
 }
 
+// Add what came of it to a record that was made without one. Once, by the
+// citizen who made the record, and never changed afterwards: the table's
+// primary key is the mandate, so a second outcome is not a rule the code has
+// to remember, it is a row the database cannot hold.
+//
+// The order is check, seal, insert, because the row needs the seal's id. Two
+// requests racing past the check both seal; the second insert then fails on
+// the primary key and answers 409. Its seal stays in that citizen's own chain,
+// naming an outcome this record does not carry. That is a true statement about
+// what the citizen sent, and it is the citizen's own chain it sits in.
+export async function addOutcome(env: Env, citizen: Citizen, id: number, body: OutcomeInput, now = Date.now()) {
+  if (!Number.isSafeInteger(id)) throw new SocietyError(400, "id is required: the id of the mandate this outcome belongs to");
+  const m = await env.DB.prepare("SELECT id, citizen_id, commit_hash, outcome_hash, public FROM mandates WHERE id = ?")
+    .bind(id)
+    .first<{ id: number; citizen_id: number; commit_hash: string; outcome_hash: string | null; public: number }>();
+  if (!m) throw new SocietyError(404, `no mandate ${id}`);
+  if (m.citizen_id !== citizen.id) throw new SocietyError(403, `only the citizen who recorded mandate ${id} can add what came of it`);
+  if (m.outcome_hash !== null) throw new SocietyError(409, `mandate ${id} was recorded with its outcome; a record is never edited`);
+  const already = await env.DB.prepare("SELECT mandate_id FROM mandate_outcomes WHERE mandate_id = ?").bind(id).first<{ mandate_id: number }>();
+  if (already) throw new SocietyError(409, `mandate ${id} already has an outcome; it is added once and never changed`);
+  const spent = await env.DB.prepare("SELECT COUNT(*) AS n FROM mandate_outcomes WHERE citizen_id = ? AND created_at >= ?")
+    .bind(citizen.id, now - 86_400_000)
+    .first<{ n: number }>();
+  if ((spent?.n ?? 0) >= OUTCOMES_PER_DAY) throw new SocietyError(429, `outcome budget spent (${OUTCOMES_PER_DAY}/rolling 24h)`);
+  const outcome = (await readField("outcome", body.outcome, body.outcome_hash, true))!;
+
+  const payload = outcomeCommitPayload(citizen.handle, now, id, m.commit_hash, outcome.hash);
+  const commit = await sha256Hex(payload);
+  const seal = await sealMemory(env, citizen, { hash: commit, label: "mandate" }, { budgetExempt: true });
+  if (!seal.sealed || seal.id === null) throw new SocietyError(500, "the outcome's seal was not recorded; nothing was stored");
+
+  try {
+    await env.DB.prepare("INSERT INTO mandate_outcomes (mandate_id, citizen_id, seal_id, commit_hash, chained, outcome_hash, stored, created_at) VALUES (?, ?, ?, ?, ?, ?, 0, ?)")
+      .bind(id, citizen.id, seal.id, commit, seal.chained, outcome.hash, now)
+      .run();
+  } catch (e) {
+    if (/UNIQUE|PRIMARY KEY|constraint/i.test(String((e as Error)?.message ?? e))) throw new SocietyError(409, `mandate ${id} already has an outcome; it is added once and never changed`);
+    throw e;
+  }
+
+  // Text is kept only where the record itself is public, the same rule the
+  // record was made under. A private record's outcome stays a fingerprint.
+  let stored = false;
+  if (m.public === 1 && outcome.text !== null) {
+    await store(env).put(textKey(outcome.hash), outcome.text);
+    await env.DB.prepare("UPDATE mandate_outcomes SET stored = 1 WHERE mandate_id = ?").bind(id).run();
+    stored = true;
+  }
+
+  return {
+    mandate: id,
+    url: `/api/mandates/${id}`,
+    page: `/mandates/${id}`,
+    outcome_hash: outcome.hash,
+    commit,
+    commit_payload: payload,
+    mandate_commit: m.commit_hash,
+    public: m.public === 1,
+    stored,
+    seal: { id: seal.id, label: "mandate", chained: seal.chained, sealed_at: "sealed_at" in seal ? seal.sealed_at : now },
+    created_at: now,
+    how_to_verify:
+      "sha-256 of commit_payload equals commit, sealed as its own memory.seal event in this citizen's chain after the record it belongs to. commit_payload names the record's id and the record's own commit (mandate_commit), so this outcome cannot be attached to any other record, and the record's own commit is unchanged by it. GET /api/mandates/<id> shows both seals side by side.",
+  };
+}
+
 interface MandateRow {
   id: number;
   citizen_id: number;
@@ -182,6 +262,13 @@ interface MandateRow {
   envelope_bytes: number | null;
   label: string;
   created_at: number;
+  // What came of it, when it was added after the record was made (LEFT JOIN).
+  o_seal_id: number | null;
+  o_commit_hash: string | null;
+  o_chained: string | null;
+  o_outcome_hash: string | null;
+  o_stored: number | null;
+  o_created_at: number | null;
 }
 
 // Three full statements rather than one prefix: the scan guard explains the
@@ -210,10 +297,32 @@ async function view(env: Env, r: MandateRow, withContent: boolean) {
     page: `/mandates/${r.id}`,
     record: `/api/record/${encodeURIComponent(r.handle)}`,
   };
+  // outcome_hash above is the outcome the record was MADE with, and it is part
+  // of the record's own commit, so it never changes. An outcome added later is
+  // carried here instead, with the seal that committed it.
+  const added =
+    r.o_outcome_hash !== null && r.o_commit_hash !== null && r.o_created_at !== null
+      ? {
+          outcome_hash: r.o_outcome_hash,
+          commit: r.o_commit_hash,
+          commit_payload: outcomeCommitPayload(r.handle, r.o_created_at, r.id, r.commit_hash, r.o_outcome_hash),
+          seal: { id: r.o_seal_id, label: "mandate", chained: r.o_chained },
+          stored: r.o_stored === 1,
+          created_at: r.o_created_at,
+        }
+      : null;
+  out.has_outcome = r.outcome_hash !== null || added !== null;
+  out.outcome_added = added;
   if (withContent) {
     const eventId = await eventIdFor(env, r.chained);
     out.event_id = eventId;
     out.proof = eventId === null ? null : `/api/proof?log=identity_events&event=${eventId}`;
+    if (added && r.o_chained !== null) {
+      const addedEvent = await eventIdFor(env, r.o_chained);
+      (added as Record<string, unknown>).event_id = addedEvent;
+      (added as Record<string, unknown>).proof = addedEvent === null ? null : `/api/proof?log=identity_events&event=${addedEvent}`;
+      (added as Record<string, unknown>).outcome = added.stored ? await store(env).get(textKey(added.outcome_hash), "text") : null;
+    }
     if (r.stored & (STORED_INSTRUCTION | STORED_ACTION | STORED_OUTCOME)) {
       const kv = store(env);
       out.instruction = r.stored & STORED_INSTRUCTION ? await kv.get(textKey(r.instruction_hash), "text") : null;
@@ -228,7 +337,7 @@ async function view(env: Env, r: MandateRow, withContent: boolean) {
 }
 
 export async function getMandate(env: Env, id: number) {
-  const r = await env.DB.prepare("SELECT m.id, m.citizen_id, c.handle, m.seal_id, m.commit_hash, m.chained, m.instruction_hash, m.action_hash, m.outcome_hash, m.public, m.stored, m.envelope_bytes, m.label, m.created_at FROM mandates m JOIN citizens c ON c.id = m.citizen_id WHERE m.id = ?").bind(id).first<MandateRow>();
+  const r = await env.DB.prepare("SELECT m.id, m.citizen_id, c.handle, m.seal_id, m.commit_hash, m.chained, m.instruction_hash, m.action_hash, m.outcome_hash, m.public, m.stored, m.envelope_bytes, m.label, m.created_at, o.seal_id AS o_seal_id, o.commit_hash AS o_commit_hash, o.chained AS o_chained, o.outcome_hash AS o_outcome_hash, o.stored AS o_stored, o.created_at AS o_created_at FROM mandates m JOIN citizens c ON c.id = m.citizen_id LEFT JOIN mandate_outcomes o ON o.mandate_id = m.id WHERE m.id = ?").bind(id).first<MandateRow>();
   if (!r) throw new SocietyError(404, `no mandate ${id}`);
   return view(env, r, true);
 }
@@ -247,9 +356,9 @@ export async function listMandates(env: Env, citizenHandle: string | null, since
   if (citizenHandle) {
     const c = await env.DB.prepare("SELECT id FROM citizens WHERE handle = ?").bind(citizenHandle).first<{ id: number }>();
     if (!c) throw new SocietyError(404, `no citizen '${citizenHandle}'`);
-    rows = (await env.DB.prepare("SELECT m.id, m.citizen_id, c.handle, m.seal_id, m.commit_hash, m.chained, m.instruction_hash, m.action_hash, m.outcome_hash, m.public, m.stored, m.envelope_bytes, m.label, m.created_at FROM mandates m JOIN citizens c ON c.id = m.citizen_id WHERE m.citizen_id = ? AND m.id > ? ORDER BY m.id ASC LIMIT ?").bind(c.id, since, MANDATE_PAGE + 1).all<MandateRow>()).results;
+    rows = (await env.DB.prepare("SELECT m.id, m.citizen_id, c.handle, m.seal_id, m.commit_hash, m.chained, m.instruction_hash, m.action_hash, m.outcome_hash, m.public, m.stored, m.envelope_bytes, m.label, m.created_at, o.seal_id AS o_seal_id, o.commit_hash AS o_commit_hash, o.chained AS o_chained, o.outcome_hash AS o_outcome_hash, o.stored AS o_stored, o.created_at AS o_created_at FROM mandates m JOIN citizens c ON c.id = m.citizen_id LEFT JOIN mandate_outcomes o ON o.mandate_id = m.id WHERE m.citizen_id = ? AND m.id > ? ORDER BY m.id ASC LIMIT ?").bind(c.id, since, MANDATE_PAGE + 1).all<MandateRow>()).results;
   } else {
-    rows = (await env.DB.prepare("SELECT m.id, m.citizen_id, c.handle, m.seal_id, m.commit_hash, m.chained, m.instruction_hash, m.action_hash, m.outcome_hash, m.public, m.stored, m.envelope_bytes, m.label, m.created_at FROM mandates m JOIN citizens c ON c.id = m.citizen_id WHERE m.id > ? ORDER BY m.id ASC LIMIT ?").bind(since, MANDATE_PAGE + 1).all<MandateRow>()).results;
+    rows = (await env.DB.prepare("SELECT m.id, m.citizen_id, c.handle, m.seal_id, m.commit_hash, m.chained, m.instruction_hash, m.action_hash, m.outcome_hash, m.public, m.stored, m.envelope_bytes, m.label, m.created_at, o.seal_id AS o_seal_id, o.commit_hash AS o_commit_hash, o.chained AS o_chained, o.outcome_hash AS o_outcome_hash, o.stored AS o_stored, o.created_at AS o_created_at FROM mandates m JOIN citizens c ON c.id = m.citizen_id LEFT JOIN mandate_outcomes o ON o.mandate_id = m.id WHERE m.id > ? ORDER BY m.id ASC LIMIT ?").bind(since, MANDATE_PAGE + 1).all<MandateRow>()).results;
   }
   const hasMore = rows.length > MANDATE_PAGE;
   const page = hasMore ? rows.slice(0, MANDATE_PAGE) : rows;
@@ -275,6 +384,7 @@ function esc(t: unknown): string {
 // the JSON at /api/mandates/<id>.
 export async function mandatePage(env: Env, id: number): Promise<string> {
   const m = (await getMandate(env, id)) as Record<string, unknown>;
+  const added = (m.outcome_added ?? null) as Record<string, unknown> | null;
   const when = new Date(m.created_at as number).toISOString().replace("T", " ").slice(0, 19) + " UTC";
   const block = (title: string, text: unknown, hash: string | null, stored: boolean) =>
     `<h2>${esc(title)}</h2>` +
@@ -292,10 +402,19 @@ export async function mandatePage(env: Env, id: number): Promise<string> {
     block("What the agent was told", m.instruction, m.instruction_hash as string, Boolean((m.stored as Record<string, boolean>).instruction)) +
     block("What the agent did", m.action, m.action_hash as string, Boolean((m.stored as Record<string, boolean>).action)) +
     (m.outcome_hash ? block("What came of it", m.outcome, m.outcome_hash as string, Boolean((m.stored as Record<string, boolean>).outcome)) : "") +
+    (added
+      ? block("What came of it", added.outcome, added.outcome_hash as string, Boolean(added.stored)) +
+        `<p class="fp">Added on ${esc(new Date(added.created_at as number).toISOString().replace("T", " ").slice(0, 19) + " UTC")}, after the instruction and the action above were sealed.</p>`
+      : "") +
     (m.envelope ? `<h2>Sealed envelope</h2><p class="dim">${esc(m.envelope_bytes)} bytes stored here exactly as the owner sent them; the registry does not interpret them, so they stay private only if the owner encrypted them. <a href="${esc(m.envelope as string)}">Download</a>.</p>` : "") +
     `<h2>Why this cannot have been changed</h2><ol class="chain">` +
-    `<li>The ${m.outcome_hash ? "three" : "two"} fingerprints above were combined into one: sha-256 of <code>${esc(m.commit_payload)}</code> = <code>${esc(m.commit)}</code>.</li>` +
+    `<li>The ${m.outcome_hash ? "three" : added ? "first two" : "two"} fingerprints above were combined into one: sha-256 of <code>${esc(m.commit_payload)}</code> = <code>${esc(m.commit)}</code>.</li>` +
     `<li>That fingerprint was sealed into the agent's chain as seal ${esc((m.seal as Record<string, unknown>).id)}` + (m.event_id ? `, chain event ${esc(m.event_id)}` : "") + `, at the time above. The chain only grows; each entry carries the fingerprint of the one before it.</li>` +
+    (added
+      ? `<li>What came of it was added afterwards and sealed on its own: sha-256 of <code>${esc(added.commit_payload)}</code> = <code>${esc(added.commit)}</code>, seal ${esc((added.seal as Record<string, unknown>).id)}` +
+        (added.event_id ? `, chain event ${esc(added.event_id)}` : "") +
+        `. It names this record's own fingerprint, so it cannot be moved to another record, and the record above is unchanged by it.</li>`
+      : "") +
     `<li>The registry stamps the whole chain on an attempted five-minute cadence with an hourly backstop (the stamps\' own timestamps are the achieved figure), independent witnesses countersign the stamps they see, and stamps are copied into Bitcoin, Base and the Internet Archive (<a href="https://1f916.ai/api/anchors">the anchors</a> list which, with each copy's status). ${m.proof ? `<a href="https://1f916.ai${esc(m.proof as string)}">The inclusion proof</a>` : "The inclusion proof in the agent's record"} places this event under a stamp once one has landed after it, and every later stamp covers that one (<a href="https://1f916.ai/api/checkpoint/consistency?log=identity_events">the consistency proof</a>).</li>` +
     `<li>To check it yourself, offline: <code>curl -s https://1f916.ai/api/record/${esc(encodeURIComponent(m.citizen as string))} &gt; record.json</code> and run the checker, verify.mjs, from the protocol repository at <a href="https://github.com/1f916-ai/protocol">github.com/1f916-ai/protocol</a>.</li></ol>` +
     `<p class="sub">This page proves the record existed at that time and has not changed since. It does not prove that what was recorded was true.</p>` +

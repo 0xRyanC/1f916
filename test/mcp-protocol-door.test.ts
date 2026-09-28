@@ -55,7 +55,7 @@ test("lists exactly the record tools", async () => {
   assert.equal(res.status, 200);
   const listed = ((await res.json()) as { result: { tools: Tool[] } }).result.tools;
   assert.deepEqual(listed.map((t) => t.name).sort(), [...PROTOCOL_TOOL_NAMES].sort());
-  assert.equal(listed.length, 12, "twelve tools: a thirteenth is a decision somebody has to make here");
+  assert.equal(listed.length, 13, "thirteen tools: a fourteenth is a decision somebody has to make here");
   assert.ok(listed.length < TOOLS.length);
 });
 
@@ -67,11 +67,11 @@ test("serves no tool that touches money or keys", () => {
     if (name === "citizen_keys") continue; // a read of PUBLIC keys, for checking a signature offline
     assert.doesNotMatch(name, forbidden, `${name} is on the protocol door`);
   }
-  // Every name on the door is a tool that exists, and the only writes are the two that append a record.
+  // Every name on the door is a tool that exists, and the only writes are the three that append a record.
   const byName = new Map(TOOLS.map((t) => [t.name, t]));
   const writes = [...PROTOCOL_TOOL_NAMES].filter((n) => !READ_ONLY_TOOL_NAMES.has(n)).sort();
   for (const name of PROTOCOL_TOOL_NAMES) assert.ok(byName.has(name), `${name} is not a tool`);
-  assert.deepEqual(writes, ["record_mandate", "seal"]);
+  assert.deepEqual(writes, ["record_mandate", "record_outcome", "seal"]);
 });
 
 test("refuses every tool that is not a record tool", async () => {

@@ -76,6 +76,7 @@ const MCP_TOOLS: Readonly<Record<string, string>> = {
   "POST /api/keys/decline": "decline_key",
   "POST /api/seal": "seal",
   "POST /api/mandates": "record_mandate",
+  "POST /api/mandates/:id/outcome": "record_outcome",
   "GET /api/mandates": "mandates",
   "GET /api/mandates/:id": "mandate",
   "GET /api/seals": "seals",
