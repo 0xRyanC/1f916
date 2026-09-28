@@ -196,7 +196,7 @@
         "screen_notices: SCAN s"
       ]
     },
-    "fbbd63ab1ffb4ea9": {
+    "637fbd3116206229": {
       "status": "debt",
       "sql": "SELECT COUNT(*) AS n FROM screen_notices s WHERE s.book = 'reader-safety' OR s.status != 'open' OR (s.target_type = 'post' AND EXISTS (SELECT N FROM posts p WHERE p.id = s.target_id AND p.mod_state = 'removed')) OR (s.target_type = 'comment' AND EXISTS (SELECT N FROM comments m WHERE m.id = s.target",
       "plan": [
@@ -605,6 +605,41 @@
         "posts: SEARCH p USING INTEGER PRIMARY KEY (rowid<?)"
       ]
     },
+    "8927ed6c328c4c79": {
+      "status": "debt",
+      "sql": "SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinned, p.created_at, c.handle AS author, COALESCE(p.author_model, c.model) AS author_model, (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'post' AND v.target_id = p.id) AS votes, (SELECT COALESCE(SUM(MIN(N.N, MAX(N.N, (? - vc.created_",
+      "plan": [
+        "posts: SCAN p USING INDEX idx_posts_created_id"
+      ]
+    },
+    "4a7fc9731238527c": {
+      "status": "debt",
+      "sql": "SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinned, p.created_at, c.handle AS author, COALESCE(p.author_model, c.model) AS author_model, (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'post' AND v.target_id = p.id) AS votes, (SELECT COALESCE(SUM(MIN(N.N, MAX(N.N, (? - vc.created_",
+      "plan": [
+        "posts: SCAN p USING INDEX idx_posts_created_id"
+      ]
+    },
+    "90790d66843c808e": {
+      "status": "debt",
+      "sql": "SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinned, p.created_at, c.handle AS author, COALESCE(p.author_model, c.model) AS author_model, (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'post' AND v.target_id = p.id) AS votes, (SELECT COALESCE(SUM(MIN(N.N, MAX(N.N, (? - vc.created_",
+      "plan": [
+        "posts: SCAN p USING INDEX idx_posts_created_id"
+      ]
+    },
+    "9f3dc92d07fdbabd": {
+      "status": "debt",
+      "sql": "SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinned, p.created_at, c.handle AS author, COALESCE(p.author_model, c.model) AS author_model, (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'post' AND v.target_id = p.id) AS votes, (SELECT COALESCE(SUM(MIN(N.N, MAX(N.N, (? - vc.created_",
+      "plan": [
+        "posts: SCAN p USING INDEX idx_posts_created_id"
+      ]
+    },
+    "6647614f97a84bf9": {
+      "status": "debt",
+      "sql": "SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinned, p.created_at, c.handle AS author, COALESCE(p.author_model, c.model) AS author_model, (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'post' AND v.target_id = p.id) AS votes, (SELECT COALESCE(SUM(MIN(N.N, MAX(N.N, (? - vc.created_",
+      "plan": [
+        "posts: SCAN p USING INDEX idx_posts_created_id"
+      ]
+    },
     "47c8e89daaa6e6d5": {
       "status": "debt",
       "sql": "SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinned, p.created_at, c.handle AS author, COALESCE(p.author_model, c.model) AS author_model, (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'post' AND v.target_id = p.id) AS votes, (SELECT COALESCE(SUM(MIN(N.N, MAX(N.N, (? - vc.created_",
@@ -709,10 +744,6 @@
       "file": "src/society.ts",
       "sql": "SELECT COUNT(*) AS n FROM seal_checks WHERE citizen_id = ? AND checked_at >= ?"
     },
-    "7e2d27a7e003af31": {
-      "file": "src/society.ts",
-      "sql": "SELECT COUNT(*) AS n FROM seals WHERE citizen_id = ? AND sealed_at >= ?"
-    },
     "129e0e7988a59c06": {
       "file": "src/society.ts",
       "sql": "SELECT COUNT(*) AS n FROM witnesses WHERE citizen_id = ?"
@@ -728,10 +759,6 @@
     "bbc0a3b6f4333eb2": {
       "file": "src/society.ts",
       "sql": "SELECT id, citizen_id, public_key, epoch FROM witnesses WHERE url = ?"
-    },
-    "edb9a215dfaa500f": {
-      "file": "src/society.ts",
-      "sql": "SELECT id, hash FROM seals WHERE citizen_id = ? AND label = ? ORDER BY id DESC LIMIT 1"
     },
     "c5caa8373a03e566": {
       "file": "src/society.ts",

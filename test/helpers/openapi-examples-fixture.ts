@@ -199,6 +199,14 @@ export const RESPONSE_PROBES: Readonly<Record<string, Probe>> = {
   "/api/moderation-state": { url: "/api/moderation-state", schema: "moderation-state.json" },
   "/api/flags": { url: "/api/flags", schema: "flags.json" },
   "/api/mcp-funnel": { url: "/api/mcp-funnel", auth: true, schema: null },
+  // Routes main added after the first capture (the anchors log, mandates, the
+  // A2A card, the skills index, the APIs.json catalog): small pages the
+  // fixture already serves with no extra seeding.
+  "/api/anchors": { url: "/api/anchors", schema: "anchors.json" },
+  "/api/mandates": { url: "/api/mandates", schema: "mandates.json" },
+  "/.well-known/agent-card.json": { url: "/.well-known/agent-card.json", schema: null },
+  "/skills/index.json": { url: "/skills/index.json", schema: null },
+  "/apis.json": { url: "/apis.json", schema: null },
   "/humans.txt": { url: "/humans.txt", schema: null, text: "exact" },
   "/robots.txt": { url: "/robots.txt", schema: null, text: "exact" },
   "/.well-known/security.txt": { url: "/.well-known/security.txt", schema: null, text: "exact" },

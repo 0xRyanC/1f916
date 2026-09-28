@@ -89,7 +89,9 @@ const EXPECTED_SCANS: string[] = [
   "ledger :: SELECT id, entry_date, description, amount_cents, tx, source, cr … M ledger ORDER BY entry_date DESC, id DESC LIMIT 200",
   "n :: SELECT n.id, n.target_type, n.target_id, n.payload, n.created_at … zen_id ORDER BY n.created_at DESC, n.id DESC LIMIT ?",
   "s :: SELECT s.id, s.target_type, s.target_id, s.book, s.rule, s.scree … ate = 'removed')) ORDER BY s.created_at DESC LIMIT ?",
-  "p :: SELECT c.handle FROM porch_presence p JOIN citizens c ON c.id =  … HERE p.read_at > ? ORDER BY p.read_at DESC LIMIT 100",
+  // Porch presence side-list: PORCH_PRESENCE_PAGE+1 (101) so truncation is a
+  // fact. Fingerprint ellipsis lands on "HERE" (from WHERE) at this length.
+  "p :: SELECT c.handle FROM porch_presence p JOIN citizens c ON c.id =  … HERE p.read_at > ? ORDER BY p.read_at DESC LIMIT 101",
   "w :: SELECT w.id, w.name, w.url, w.public_key, w.epoch, w.key_set_at, … c ON c.id = w.citizen_id ORDER BY w.id ASC LIMIT 100",
   // /api/citizens. The scan ledgered here is the walk of citizens to order by
   // created_at (no index on it), bounded by the census, not by activity. The
@@ -113,7 +115,9 @@ const EXPECTED_SCANS: string[] = [
   "n :: SELECT COUNT(*) AS c FROM payload_notices n JOIN citizens c ON c.id = n.citizen_id",
   "c :: SELECT COUNT(DISTINCT c.id) AS n FROM citizens c WHERE NOT EXIST …  WHERE citizen_id = c.id AND kind = 'key-bind'), 0))",
   "s :: SELECT COUNT(*) AS n FROM screen_notices s WHERE NOT (s.book = ' … RE l.id = s.target_id AND l.mod_state = 'removed')))",
-  "s :: SELECT COUNT(*) AS n FROM screen_notices s WHERE s.book = 'reade … ERE m.id = s.target_id AND m.mod_state = 'removed'))",
+  // /api/screen-notices visible total: re-keyed 2026-09-23 when SCREEN_NOTICE_VISIBLE_SQL
+  // gained the listing arm; fingerprint tail moved from comment (m.id) to listing (l.id).
+  "s :: SELECT COUNT(*) AS n FROM screen_notices s WHERE s.book = 'reade … ERE l.id = s.target_id AND l.mod_state = 'removed'))",
   "screen_notices :: SELECT rule, COUNT(*) AS notices FROM screen_notices WHERE book = 'hygiene' GROUP BY rule",
   "screen_refusals :: SELECT rule, COUNT(*) AS refusals FROM screen_refusals GROUP BY rule",
 

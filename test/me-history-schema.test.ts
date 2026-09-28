@@ -1,5 +1,6 @@
 // /api/me/history had no schema. Auth-gated self-history (posts, comments,
-// self-only votes + tags with immutable seq cursors) is a live 200 and the
+// self-only votes + tags: posts/comments on created_at timestamp cursors,
+// votes/tags on immutable insertion-seq cursors) is a live 200 and the
 // verifier that rebuilds a citizen from their own record has nothing to pin
 // the contract against. A dropped has_more, a number where a vote seq is
 // promised as an integer, a comment missing intended_parent_id, or a
@@ -50,6 +51,8 @@ function commentRow(over: Record<string, unknown> = {}) {
     created_at: 1788557687497,
     post_title: "The front page's displayed order disagrees",
     votes: 1,
+    amends: [],
+    amended_by: [],
     ...over,
   };
 }
@@ -208,6 +211,21 @@ test("the me/history schema refuses the contract breaks it exists to catch", () 
     "a comment missing intended_parent_id is the self-audit gap this schema pins",
   );
 
+  // amends/amended_by ride on every comment row, matching GET /api/comment/:id
+  // (WQ-77): the schema requires them, so a row that drops either is refused.
+  const noAmends = body({ comments: [{ ...commentRow(), amends: undefined }] });
+  delete (noAmends.comments[0] as { amends?: unknown }).amends;
+  assert.ok(
+    validate(schema, noAmends).some((e) => /amends/.test(e)),
+    "a comment missing amends is refused (WQ-77 self-correction link)",
+  );
+  const noAmendedBy = body({ comments: [{ ...commentRow(), amended_by: undefined }] });
+  delete (noAmendedBy.comments[0] as { amended_by?: unknown }).amended_by;
+  assert.ok(
+    validate(schema, noAmendedBy).some((e) => /amended_by/.test(e)),
+    "a comment missing amended_by is refused (WQ-77 correction link)",
+  );
+
   const badRef = body({ posts: [postRow({ ref: "3989" })] });
   assert.ok(
     validate(schema, badRef).some((e) => /ref/.test(e)),
@@ -254,6 +272,32 @@ test("the me/history schema description pins the auth-gated / self-only framing"
   );
   const voteDesc = schema.$defs?.historyVote?.description ?? "";
   assert.match(voteDesc, /self-only/i, "vote rows are documented as self-only");
+});
+
+test("the me/history schema description names BOTH cursor kinds, not a uniform seq", () => {
+  // The old wording — "votes plus tags with immutable seq cursors" — read as
+  // all four streams paging on an insertion sequence. The wire says
+  // next_posts_since / next_comments_since are created_at timestamps
+  // ("A timestamp, never a post id") while only votes/tags are seqs. A
+  // generated client that trusts the description formats the timestamp
+  // cursors as seq tokens (400) or treats them as monotone integers and
+  // skips rows on ties. Pins the two-kinds phrasing THIS schema carries,
+  // byte-identical to the served summary (src/surface.ts, the /api/me/history
+  // entry) so the two surfaces stay one contract.
+  assert.ok(
+    !/with immutable seq cursors/i.test(schema.description),
+    "the false uniform-seq phrasing is gone from the schema description",
+  );
+  assert.match(
+    schema.description,
+    /created_at timestamp|timestamp/i,
+    "posts/comments are named as created_at timestamp cursors",
+  );
+  assert.match(
+    schema.description,
+    /insertion seq|insertion sequence/i,
+    "votes/tags are named as insertion-sequence cursors",
+  );
 });
 
 test("the me/history schema matches what /api/me/history actually serves", async () => {

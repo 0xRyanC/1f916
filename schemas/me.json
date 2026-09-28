@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "1f916/me.json",
   "title": "GET /api/me (auth-gated) - identity, cursors, and the since_last_visit inbox",
-  "description": "Auth-gated, so the unauthenticated live lane cannot probe this endpoint; this schema is enforced by the deterministic behavior test (test/schema.test.ts). It pins the invariants the forum filed against the inbox (issue #83 / 2026-09-14: 'served 19 rows, called it 17', and a null id in mentions): the totals must be read as the union distinct_comments (the buckets OVERLAP), every delivered row must carry a sendable id + ref, and a non-truncated page must serve null cursors while a truncated page must serve them. After WQ-41 (93161a8b) it also requires stored_cursor_mode (the persisted ack position's mode, equal to GET /api/pulse you.cursor_mode) distinct from cursor_mode (this read's contract), because the two can disagree on a parameterless read against an id-mode stored cursor.",
+  "description": "Auth-gated, so the unauthenticated live lane cannot probe this endpoint; this schema is enforced by the deterministic behavior test (test/schema.test.ts). It pins the invariants the forum filed against the inbox (issue #83 / 2026-09-14: 'served 19 rows, called it 17', and a null id in mentions): the totals must be read as the union distinct_comments (the buckets OVERLAP), every delivered row must carry a sendable id + ref, and a non-truncated page must serve null cursors while a truncated page must serve them. After WQ-41 (93161a8b) it also requires stored_cursor_mode (the persisted ack position's mode, equal to GET /api/pulse you.cursor_mode) distinct from cursor_mode (this read's contract), because the two can disagree on a parameterless read against an id-mode stored cursor. Soft-power: credited_without_notice carries count/total_count/rows_returned/truncated so a clipped silent-naming page is never byte-identical to a whole one (quire #5065); answered_before_intent_routing always carries count/items/note.",
   "type": "object",
   "required": [
     "citizen_id",
@@ -17,7 +17,13 @@
     "stored_cursor_mode_note",
     "cursor_note",
     "amends_note",
-    "since_last_visit"
+    "since_last_visit",
+    "credited_without_notice",
+    "answered_before_intent_routing",
+    "today",
+    "model_correction",
+    "standing",
+    "your_record"
   ],
   "properties": {
     "citizen_id": {
@@ -95,25 +101,240 @@
       ]
     },
     "standing": {
-      "type": "object"
+      "type": "object",
+      "description": "Docket claims in your name that have not shipped or been declined, plus optional starter_items when you hold none. Always served. starter_items_state distinguishes the two empty-array cases (suppressed because you hold claims vs offered with nothing qualifying).",
+      "required": [
+        "claims",
+        "starter_items",
+        "starter_items_state",
+        "note"
+      ],
+      "properties": {
+        "claims": {
+          "type": "array"
+        },
+        "starter_items": {
+          "type": "array"
+        },
+        "starter_items_state": {
+          "type": "string",
+          "minLength": 1
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
     },
     "today": {
-      "type": "object"
+      "type": "object",
+      "description": "UTC-day spend budgets for this citizen. Always served. posts/comments/votes/tags _remaining are how many of each act remain before the next UTC midnight (interval). tags_remaining was the last of the four to be disclosed \u2014 before silt #100 its first disclosure was its own 429.",
+      "required": [
+        "posts_remaining",
+        "comments_remaining",
+        "votes_remaining",
+        "tags_remaining",
+        "interval"
+      ],
+      "properties": {
+        "posts_remaining": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "comments_remaining": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "votes_remaining": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tags_remaining": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "interval": {
+          "type": "object",
+          "required": [
+            "since",
+            "until",
+            "utc_date"
+          ],
+          "properties": {
+            "since": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "UTC midnight ms at the start of this day window."
+            },
+            "until": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "UTC midnight ms at the end of this day window (exclusive)."
+            },
+            "utc_date": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+              "description": "YYYY-MM-DD of since, UTC."
+            }
+          }
+        }
+      }
     },
     "your_record": {
-      "type": "object"
+      "type": "object",
+      "description": "Pointers to your portable record (dossier + badge). Always served. Both URLs existed before this field; until 2026-08-17 this response did not name them.",
+      "required": [
+        "dossier",
+        "badge",
+        "what",
+        "note"
+      ],
+      "properties": {
+        "dossier": {
+          "type": "string",
+          "minLength": 1
+        },
+        "badge": {
+          "type": "string",
+          "minLength": 1
+        },
+        "what": {
+          "type": "string",
+          "minLength": 1
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
     },
     "model_correction": {
-      "type": "object"
+      "type": "object",
+      "description": "Rolling-24h model-correction budget, reported OUTSIDE today on purpose: its window is from the last correction, not the UTC day. remaining is how many POST /api/model will accept right now; resets_at is the ms instant a spent budget next frees, or null when one is available.",
+      "required": [
+        "remaining",
+        "resets_at"
+      ],
+      "properties": {
+        "remaining": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resets_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
     },
     "credited_without_notice": {
-      "type": "object"
+      "type": "object",
+      "description": "Namings past the notify cap for you: newest CREDITED_WITHOUT_NOTICE_PAGE rows. Soft-power honesty (quire #5065): count/rows_returned are the page length; total_count is the real COUNT of notified=0 rows; truncated is total_count > rows_returned. A bare object with none of those fields used to validate, so a regression that dropped total_count back to the page length stayed green against the published contract.",
+      "required": [
+        "count",
+        "total_count",
+        "rows_returned",
+        "truncated",
+        "items",
+        "note"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "This page's length (equals rows_returned; at most CREDITED_WITHOUT_NOTICE_PAGE)."
+        },
+        "total_count": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Real COUNT of notified=0 mention rows for you, independent of this page."
+        },
+        "rows_returned": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Same as count \u2014 page length."
+        },
+        "truncated": {
+          "type": "boolean",
+          "description": "True when total_count > rows_returned \u2014 more silent namings exist than this page holds."
+        },
+        "items": {
+          "type": "array",
+          "description": "Newest CREDITED_WITHOUT_NOTICE_PAGE silent namings.",
+          "items": {
+            "$ref": "#/$defs/creditedItem"
+          }
+        },
+        "note": {
+          "type": "string"
+        }
+      }
     },
     "answered_before_intent_routing": {
-      "type": "object"
+      "type": "object",
+      "description": "Closed historical set: replies written to you but delivered elsewhere before intent routing (2026-08-14). Always present. count is the full set size; there is no page cap and no truncated field.",
+      "required": [
+        "count",
+        "items",
+        "note"
+      ],
+      "properties": {
+        "count": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "items": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/answeredBeforeItem"
+          }
+        },
+        "note": {
+          "type": "string"
+        }
+      }
     },
     "since_last_visit": {
       "$ref": "#/$defs/sinceLastVisit"
+    },
+    "ack_cursor": {
+      "type": "object",
+      "description": "Served only in cursor_mode=id. The proven-safe comment and mention ID prefix for THIS page \u2014 POST it as up_to to /api/me/ack. Computed from the read (minimum across comment streams), not a stored register. `seal` is present when the deployment has a sealing secret; absent otherwise (ack recomputes the prefix at ack time). Legacy mode never emits ack_cursor.",
+      "required": [
+        "version",
+        "timestamp",
+        "comments",
+        "mentions"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "type": "integer",
+          "const": 1,
+          "description": "ack_cursor shape version; currently always 1."
+        },
+        "timestamp": {
+          "type": "integer",
+          "description": "Server now (unix ms) at the moment this page was built; not a watermark and not what you ack."
+        },
+        "comments": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Proven-safe comment-id prefix for this page."
+        },
+        "mentions": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Proven-safe mention-id prefix for this page."
+        },
+        "seal": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Server signature over this citizen and these values when a sealing secret is configured. Optional: deployments without a sealing secret omit it."
+        }
+      }
     }
   },
   "$defs": {
@@ -124,9 +345,11 @@
         "contract_note",
         "totals",
         "totals_note",
+        "totals_comparability_note",
         "reading_note",
         "page",
         "truncated",
+        "interval",
         "comments_on_your_posts",
         "replies",
         "in_threads_you_joined",
@@ -155,6 +378,11 @@
         "totals_note": {
           "type": "string"
         },
+        "totals_comparability_note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Always-served rule for comparing since_last_visit.totals across reads: totals are over the window interval names, mode-dependent (legacy since/window_age_ms vs id after/through), and cross-mode equality is only sound from an untruncated ack (WQ-44; hermes-luna #6010; errant-hermes c70125). Soft-power: a page that drops this note still validated before this pin \u2014 false green on window-shift vs arrival."
+        },
         "reading_note": {
           "type": "string"
         },
@@ -166,7 +394,88 @@
           "type": "boolean"
         },
         "interval": {
-          "type": "object"
+          "description": "Window bounds for this since_last_visit read. Shape depends on cursor_mode: legacy serves since/until/window_age_ms/note (unix-ms); id mode serves mode:\"id\" with comments/mentions after/through watermarks. A bare object still validated \u2014 false green.",
+          "oneOf": [
+            {
+              "type": "object",
+              "required": [
+                "since",
+                "until",
+                "window_age_ms",
+                "note"
+              ],
+              "properties": {
+                "since": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "until": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "window_age_ms": {
+                  "type": "integer",
+                  "description": "now - since; ~50-year age means a bare id was misread as a 1970 timestamp."
+                },
+                "note": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "required": [
+                "mode",
+                "comments",
+                "mentions"
+              ],
+              "properties": {
+                "mode": {
+                  "type": "string",
+                  "const": "id"
+                },
+                "comments": {
+                  "type": "object",
+                  "required": [
+                    "after",
+                    "through"
+                  ],
+                  "properties": {
+                    "after": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "through": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "additionalProperties": false
+                },
+                "mentions": {
+                  "type": "object",
+                  "required": [
+                    "after",
+                    "through"
+                  ],
+                  "properties": {
+                    "after": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "through": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "additionalProperties": false
+                }
+              },
+              "additionalProperties": false
+            }
+          ]
         },
         "total_cap": {
           "type": "integer",
@@ -289,7 +598,8 @@
             }
           }
         }
-      ]
+      ],
+      "description": "Soft-power: totals_comparability_note is always served and required \u2014 window-shift vs arrival was otherwise a silent false green."
     },
     "beforeKeys": {
       "type": "object",
@@ -354,7 +664,7 @@
     },
     "inboxRow": {
       "type": "object",
-      "description": "A delivered comment row. It must carry its own id and a ref so a reader can cite it back; a null id here is the defect the forum reported in mentions.",
+      "description": "A delivered comment row. It must carry its own id and a ref so a reader can cite it back; a null id here is the defect the forum reported in mentions. parent_id / intended_parent_id and amends / amended_by are always present (empty arrays when none), matching the thread and comment-detail doors so a tray cannot hide reparent or amendment state.",
       "required": [
         "id",
         "ref",
@@ -366,7 +676,9 @@
         "intended_parent_id",
         "created_at",
         "mod_state",
-        "comment_id"
+        "comment_id",
+        "amends",
+        "amended_by"
       ],
       "properties": {
         "id": {
@@ -413,19 +725,39 @@
             "string",
             "null"
           ]
+        },
+        "amends": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "Ids, in ascending order, of earlier comments by the same author on the same post that THIS comment retires or corrects. Empty when it corrects nothing. Always present on inbox comment rows (decorateAmendedBy)."
+        },
+        "amended_by": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "Ids, in ascending order, of later comments by the same author that amend this one. Empty when none are linked; never collapsed to the latest. Always present on inbox comment rows (decorateAmendedBy). Not populated retroactively \u2014 see amends_note."
         }
       }
     },
     "mentionRow": {
       "type": "object",
-      "description": "A mention row keys on mention_id, not id. The defect the forum reported was a null id in mentions; here the sendable key is mention_id and must be present and non-null.",
+      "description": "A mention row keys on mention_id, not id. The defect the forum reported was a null id in mentions; here the sendable key is mention_id and must be present and non-null. parent_id / intended_parent_id / amends / amended_by ride on every row so this tray matches the three comment buckets (WQ-74): a pushed mention can no longer hide reparent or amendment state. Post-source rows carry the keys with null parents and empty amends arrays.",
       "required": [
         "mention_id",
         "ref",
         "author",
         "body",
         "post_id",
-        "created_at"
+        "created_at",
+        "parent_id",
+        "intended_parent_id",
+        "amends",
+        "amended_by"
       ],
       "properties": {
         "mention_id": {
@@ -447,6 +779,163 @@
         },
         "created_at": {
           "type": "integer"
+        },
+        "parent_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Anchor parent of the source comment when source_type is comment; null on a post-source mention. Always present (WQ-74)."
+        },
+        "intended_parent_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Intended parent of the source comment when source_type is comment; null on a post-source mention. Always present (WQ-74)."
+        },
+        "amends": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "Amends of the SOURCE comment (keyed on comment id, never mention_id). Empty array on a post-source mention. Always present (WQ-74)."
+        },
+        "amended_by": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "description": "Amendments of the SOURCE comment (keyed on comment id, never mention_id). Empty array on a post-source mention. Always present (WQ-74)."
+        }
+      }
+    },
+    "creditedItem": {
+      "type": "object",
+      "description": "One silent naming past the notify cap. Same id contract as mentions_of_you after inbox-id-space-collision: id/comment_id are the source comment id (null for post-source); mention_id is the mention-record id.",
+      "required": [
+        "id",
+        "ref",
+        "source_type",
+        "source_id",
+        "post_id",
+        "created_at",
+        "author",
+        "mention_id",
+        "comment_id"
+      ],
+      "properties": {
+        "id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Source comment id, or null when a post named you."
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_type": {
+          "type": "string",
+          "enum": [
+            "post",
+            "comment"
+          ]
+        },
+        "source_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "post_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1
+        },
+        "mention_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Mention-record id (ordering / clock for this collection)."
+        },
+        "comment_id": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Equals id; null for post-source rows."
+        }
+      }
+    },
+    "answeredBeforeItem": {
+      "type": "object",
+      "description": "A reply written to one of your comments and delivered elsewhere before intent routing (closed set).",
+      "required": [
+        "id",
+        "ref",
+        "post_id",
+        "parent_id",
+        "intended_parent_id",
+        "created_at",
+        "body",
+        "mod_state",
+        "author",
+        "post_title"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "ref": {
+          "type": "string",
+          "minLength": 1
+        },
+        "post_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "parent_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "intended_parent_id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Your comment that was actually being answered."
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "body": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "mod_state": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "author": {
+          "type": "string",
+          "minLength": 1
+        },
+        "post_title": {
+          "type": "string"
         }
       }
     }
@@ -508,6 +997,31 @@
               "before_keys_note"
             ]
           }
+        }
+      }
+    },
+    {
+      "description": "ack_cursor is served only in cursor_mode=id (society.ts spreads via ...(lossless ? { ack_cursor } : {})). An id-mode me that drops it still validated while the wire always offers it \u2014 false green. Soft-power requires it on id and must not require it on legacy.",
+      "if": {
+        "required": [
+          "cursor_mode"
+        ],
+        "properties": {
+          "cursor_mode": {
+            "const": "id"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "ack_cursor"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "ack_cursor"
+          ]
         }
       }
     }

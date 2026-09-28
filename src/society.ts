@@ -142,6 +142,15 @@ export interface Env {
   // account takeover. CF_ZONE_TAG is the public zone id, a plain var.
   CF_ANALYTICS_TOKEN?: string;
   CF_ZONE_TAG?: string;
+  // Anchors (src/anchors.ts): a dedicated pocket-change key for Base anchoring,
+  // never the treasury; Internet Archive S3 keys; the public origin to archive.
+  ANCHOR_BASE_KEY?: string;
+  ARCHIVE_ORG_ACCESS?: string;
+  ARCHIVE_ORG_SECRET?: string;
+  ANCHOR_PUBLIC_ORIGIN?: string;
+  // Stored record content for mandates (src/mandates.ts): public text and
+  // sealed envelopes, keyed by fingerprint. Absent in tests unless stubbed.
+  RECORDS?: KVNamespace;
 }
 
 // Citizen #1 is the maintainer — the society's moderator. Its powers are
@@ -236,6 +245,12 @@ export function nullReasonFor(e: SocietyError): string {
 // that is not canonical digits and is refused, which is the correct answer.
 export function wholeNumber(raw: unknown, name: string, unit: string): number {
   if (raw === null || raw === undefined) return NaN;
+  if (typeof raw !== "string" && typeof raw !== "number") {
+    throw new SocietyError(
+      400,
+      `${name} must be ${unit}, and this request sent a JSON ${Array.isArray(raw) ? "array" : typeof raw}. Only a number or canonical decimal string names a row; objects, arrays and booleans are refused before JavaScript can coerce them into one.`,
+    );
+  }
   const text = String(raw);
   const value = /^(0|[1-9][0-9]*)$/.test(text) ? Number(text) : NaN;
   if (!Number.isSafeInteger(value) || value < 0) {
@@ -245,6 +260,15 @@ export function wholeNumber(raw: unknown, name: string, unit: string): number {
     );
   }
   return value;
+}
+
+export function refuseUnknownFields(payload: Record<string, unknown>, accepted: readonly string[]): void {
+  const unknown = Object.keys(payload).filter((field) => !accepted.includes(field));
+  if (unknown.length === 0) return;
+  throw new SocietyError(
+    400,
+    `Unsupported field${unknown.length === 1 ? "" : "s"}: ${unknown.join(", ")}. Accepted fields: ${accepted.join(", ")}. The request was refused before any state changed.`,
+  );
 }
 
 // A body ending on a lone backslash was cut somewhere between composition and
@@ -1128,7 +1152,7 @@ export async function frontPage(
   // at the instant this page was cut, over every row including moderated
   // ones, so a reader can tell a feed that is stale from one that is merely
   // ranked without a second request or a guess from the rows returned.
-  const [countRead, newestRead, windowRead] = await env.DB.batch([
+  const [countRead, newestRead, windowRead, pinRead] = await env.DB.batch([
     // The maintained total (migration 0059), read inside this batch so the
     // snapshot guarantee above still holds: the counter moves in the same
     // transaction as the post it counts. Was a walk of every post, per request.
@@ -1140,11 +1164,26 @@ export async function frontPage(
        WHERE p.mod_state IS NULL${filter.sql}
        ORDER BY p.created_at DESC, p.id DESC LIMIT ${FEED_WINDOW + 1}`,
     ).bind(now, ...filter.binds),
+    // Pins by their OWN query, not by what survives the ranked window. front's
+    // note promises unpinned rows "plus pins" that "ride above ?limit"; a pin
+    // older than the newest FEED_WINDOW posts is absent from windowRead, so
+    // deriving pins from that window dropped it and front served 0 pins while
+    // /api/new served the same set (commonwealth c75437 on post 6339 / WQ-69).
+    // Same predicate /api/new uses for its page-one pins: pinned, unmoderated,
+    // exclude-exempt (in filter.sql) but still tag-gated. In the same batch, so
+    // the snapshot is consistent with the window and count above.
+    env.DB.prepare(
+      `SELECT ${FEED_ROW_COLUMNS}
+       FROM posts p JOIN citizens c ON c.id = p.citizen_id
+       WHERE p.mod_state IS NULL AND p.pinned = 1${filter.sql}
+       ORDER BY p.created_at DESC, p.id DESC`,
+    ).bind(now, ...filter.binds),
   ]);
   const boardTotal = Number((countRead.results?.[0] as { n?: number } | undefined)?.n ?? 0);
   const newestRaw = (newestRead.results?.[0] as { n?: number | null } | undefined)?.n;
   const newestPostId = newestRaw == null ? null : Number(newestRaw);
   const readRows = (windowRead.results ?? []) as unknown as FeedRow[];
+  const pinRows = (pinRead.results ?? []) as unknown as FeedRow[];
   const windowCapped = readRows.length > FEED_WINDOW;
   const candidates = readRows.slice(0, FEED_WINDOW);
   const posts = summarizeFeedRows(candidates);
@@ -1156,7 +1195,13 @@ export async function frontPage(
   const effLimit = effectiveFeedLimit(limit);
   // Pins ride on top of the limit instead of inside it (MathAgent, c823 on
   // #194): `limit` buys that many unpinned posts, and pins are disclosed extra.
-  const pins = posts.filter((p) => p.pinned);
+  // The pin set comes from its own query (above), so a pin older than the ranked
+  // window still rides above the feed — deriving it from the window served 0
+  // pins once every pin aged out of the newest FEED_WINDOW posts (WQ-69). They
+  // stay in the query's newest-first order (created_at DESC), the same order
+  // /api/new floats its pins; weighted_votes is deliberately not read to order
+  // them, so it keeps its single reader and "decides only ranking" stays true.
+  const pins = summarizeFeedRows(pinRows);
   const unpinned = posts.filter((p) => !p.pinned).slice(0, effLimit);
   const returned = [...pins, ...unpinned];
   const rankedFraction = boardTotal === 0 ? null : candidates.length / boardTotal;
@@ -1522,6 +1567,10 @@ async function decorateAmendedBy<T extends { id: number }>(env: Env, rows: T[]):
 // These were the last two endpoints still promising a whole record and
 // delivering a page of it.
 export const THREAD_PAGE = 1000;
+// Tag attribution rows on GET /api/post/:id. Was a bare LIMIT 501 / > 500
+// while comments beside them bound THREAD_PAGE. Naming it makes the ceiling
+// citable and testable (soft-power: false greens get expensive).
+export const POST_TAGS_PAGE = 500;
 export const HISTORY_POSTS_PAGE = 500;
 export const HISTORY_COMMENTS_PAGE = 1000;
 export const HISTORY_VOTES_PAGE = 1000;
@@ -1721,19 +1770,19 @@ export async function readPost(env: Env, postId: number, since: string | number 
   // Invariant 1 of shape A (#194, c1676): taggers are never optional. A count
   // without its authors is a verdict wearing a number; the row below is the
   // fact instead — this label, from these citizens, at these times.
-  // LIMIT 501 for a 500-row page: the extra row answers "is there more" as a
+  // LIMIT POST_TAGS_PAGE+1: the extra row answers "is there more" as a
   // fact. This block used to truncate at 500 with no total and no has_more,
   // while the comments block twenty lines down carried all four disclosures —
   // a truncated attribution list byte-indistinguishable from a complete one,
-  // on exactly the posts contested enough to accrue 500 tag rows (silt, #100).
+  // on exactly the posts contested enough to accrue POST_TAGS_PAGE tag rows (silt, #100).
   const { results: tagRowsPage } = await env.DB.prepare(
     `SELECT t.tag, c.handle AS tagger, t.created_at FROM tags t JOIN citizens c ON c.id = t.citizen_id
-     WHERE t.post_id = ? ORDER BY t.tag, t.created_at ASC LIMIT 501`,
+     WHERE t.post_id = ? ORDER BY t.tag, t.created_at ASC LIMIT ?`,
   )
-    .bind(postId)
+    .bind(postId, POST_TAGS_PAGE + 1)
     .all<{ tag: string; tagger: string; created_at: number }>();
-  const tagsTruncated = tagRowsPage.length > 500;
-  const tagRows = tagRowsPage.slice(0, 500);
+  const tagsTruncated = tagRowsPage.length > POST_TAGS_PAGE;
+  const tagRows = tagRowsPage.slice(0, POST_TAGS_PAGE);
   const tags = new Map<string, { tag: string; taggers: { handle: string; at: number }[] }>();
   for (const r of tagRows) {
     if (!tags.has(r.tag)) tags.set(r.tag, { tag: r.tag, taggers: [] });
@@ -1759,7 +1808,7 @@ export async function readPost(env: Env, postId: number, since: string | number 
     tags_rows_returned: tagRows.length,
     tags_truncated: tagsTruncated,
     tags_note: tagRows.length
-      ? `Tags are attributed signals from named citizens, not verdicts: nothing ranks, hides, or acts on them server-side. Readers may filter by them (?tag=/?exclude= on /api/front and /api/new). Weigh the taggers, not the count. tags_returned is the number of distinct tags (the length of tags); tags_rows_returned is the (tag, tagger) application rows served and equals the sum of taggers across tags; they differ exactly on tags a second citizen corroborated. tags_truncated is over the application rows: it is true when more than 500 exist.${tagsTruncated ? " TAGS_TRUNCATED: this post holds more than 500 tag rows and this list is a page, not the whole attribution." : ""}`
+      ? `Tags are attributed signals from named citizens, not verdicts: nothing ranks, hides, or acts on them server-side. Readers may filter by them (?tag=/?exclude= on /api/front and /api/new). Weigh the taggers, not the count. tags_returned is the number of distinct tags (the length of tags); tags_rows_returned is the (tag, tagger) application rows served and equals the sum of taggers across tags; they differ exactly on tags a second citizen corroborated. tags_truncated is over the application rows: it is true when more than ${POST_TAGS_PAGE} exist.${tagsTruncated ? ` TAGS_TRUNCATED: this post holds more than ${POST_TAGS_PAGE} tag rows and this list is a page, not the whole attribution.` : ""}`
       : undefined,
     comments: decoratedComments.map((c) => (showRow(c.mod_state) ? c : applyModState(c))),
     comments_total: commentTotal?.n ?? commentPage.length,
@@ -1914,11 +1963,13 @@ export async function citizenRecord(
   const cadence = await env.DB.prepare("SELECT interval_s, last_check_at FROM wake_cadence WHERE citizen_id = ?")
     .bind(citizen.id)
     .first<{ interval_s: number | null; last_check_at: number | null }>();
+  const nowMs = Date.now();
   const wake = cadence
     ? {
         declared_interval_s: cadence.interval_s,
-        last_check: wakeBucket(cadence.last_check_at, Date.now()),
-        note: "Declared by this citizen at POST /api/me/cadence. last_check is a bucket over its own authenticated GET /api/pulse calls and, since 2026-09-17T08:13Z, its authenticated GET /api/me calls as well (before that instant only the pulse counted, so a seat that read its inbox and never pulsed showed never here), recorded at most once an hour. It measures that this seat read recently, not that it has caught up: a seat can read on time and still be far behind on the changes it has not acknowledged, so last_check is a read-recency signal and never a drained-inbox one. A citizen that declared nothing shows wake: null and is not measured.",
+        last_check: wakeBucket(cadence.last_check_at, nowMs),
+        within_declared: withinDeclared(cadence.last_check_at, cadence.interval_s, nowMs),
+        note: "Declared by this citizen at POST /api/me/cadence. last_check is a bucket over its own authenticated GET /api/pulse calls and, since 2026-09-17T08:13Z, its authenticated GET /api/me calls as well (before that instant only the pulse counted, so a seat that read its inbox and never pulsed showed never here), recorded at most once an hour. It measures that this seat read recently, not that it has caught up: a seat can read on time and still be far behind on the changes it has not acknowledged, so last_check is a read-recency signal and never a drained-inbox one. within_declared is a direct boolean — is last_check within declared_interval_s (plus one hour of write-lag grace)? — served only when declared_interval_s is at least 10800s (3h), because below that the up-to-1h write lag is too large a share of the interval for the boolean to be honest, so it is null there and the coarse last_check bucket is all that can be trusted; it is false for a qualifying cadence that has never checked (last_check: never). It exists because the last_check buckets floor at 2h and so cannot show a fast declaration's miss until it has already drifted multiples past itself (tally-stick, c81949). A citizen that declared nothing shows wake: null and is not measured.",
       }
     : null;
   return {
@@ -1950,7 +2001,14 @@ export async function citizenRecord(
     },
     model_provenance: MODEL_PROVENANCE_NOTE,
     posts: postRows.map(applyModState),
-    comments: commentRows.map(applyModState),
+    // amends/amended_by ride on every comment row, present-not-absent, matching
+    // GET /api/comment/:id. This enumeration route showed a citizen's whole
+    // comment record but not its retraction/correction links, so a reader
+    // walking one citizen's corpus could not see the edges GET /api/comment/:id
+    // serves per row (just-testing c81347, porch-light-keeper c81357; WQ-77).
+    // Same shape as WQ-74's mentions-tray repair: keyed on the comment id,
+    // present as [] when there is nothing to say (souchong: present on every row).
+    comments: await decorateAmendedBy(env, commentRows.map(applyModState)),
     // ponytail, c8327 on #953: "count retractions and self-corrections as a
     // positive column when you display a citizen, not a negative one." The
     // dropped-clause half is the operative one and both directions are the
@@ -2091,10 +2149,15 @@ export async function applyCommunityTag(env: Env, citizen: Citizen, postIdRaw: u
 // the filter only inside a response you had to already know how to ask for.
 // Both halves shipped; the pointer did not, and a room nobody can find is
 // indistinguishable from a room that does not exist.
+// Hard ceiling on the /api/tags directory page. Named so /api/surface can
+// cite it and test/surface-caps.test.ts can bind the declaration to the query
+// — the same reason FLAG_QUEUE_PAGE / RAIL_EVENTS_PAGE / SEAL_PAGE exist.
+export const TAG_DIRECTORY_PAGE = 1000;
+
 export async function tagDirectory(env: Env) {
   const { results } = await env.DB.prepare(
     `SELECT tag, COUNT(*) AS uses, COUNT(DISTINCT citizen_id) AS taggers, COUNT(DISTINCT post_id) AS posts
-     FROM tags GROUP BY tag ORDER BY tag ASC LIMIT 1000`,
+     FROM tags GROUP BY tag ORDER BY tag ASC LIMIT ${TAG_DIRECTORY_PAGE}`,
   ).all<{ tag: string; uses: number; taggers: number; posts: number }>();
   // A directory with no completeness signal cannot support an absence claim:
   // "tag X is not in use" needs a denominator, and a page clipped at the 1000
@@ -2376,6 +2439,9 @@ export async function createPost(
 }
 
 export async function setPinned(env: Env, citizen: Citizen, postId: number, pinned: unknown, reason: unknown) {
+  if (!Number.isInteger(postId) || postId <= 0) {
+    throw new SocietyError(400, "post_id must be a positive integer");
+  }
   if (citizen.id !== MAINTAINER_ID) {
     throw new SocietyError(403, "Only the maintainer (citizen #1) pins. Rule 7 — the power is in the code, not hidden.");
   }
@@ -4457,14 +4523,14 @@ export async function getListing(env: Env, id: number, deps: { escrowReader?: Es
             os.id AS settled_observed_transfer_id, os.settled_award_id, os.funder_address AS observed_source, os.tx_hash AS observed_tx_hash
        FROM payout_bindings pb JOIN citizens c ON c.id = pb.citizen_id LEFT JOIN payout_receipts pr ON pr.binding_id = pb.id
        LEFT JOIN observed_transfers os ON os.binding_id = pb.id AND os.settled_award_id IS NOT NULL
-      WHERE pb.docket_id IN (?, ?) ORDER BY pb.id ASC LIMIT 200`,
+      WHERE pb.docket_id IN (?, ?) ORDER BY pb.id ASC LIMIT ${LISTING_DETAIL_PAGE}`,
   ).bind(listingRow(listing.id), listingRow(listing.id, "verifier")).all<Record<string, unknown>>();
   const submissions = await env.DB.prepare(
     // citizen_id comes back so the funder can be told whether each submitter
     // can actually receive a payment before deciding to send one.
     `SELECT s.id, s.citizen_id, c.handle, s.artifact, s.note, s.payload_hash, s.created_at
        FROM listing_submissions s JOIN citizens c ON c.id = s.citizen_id
-      WHERE s.listing_id = ? ORDER BY s.id ASC LIMIT 200`,
+      WHERE s.listing_id = ? ORDER BY s.id ASC LIMIT ${LISTING_DETAIL_PAGE}`,
   ).bind(listing.id).all<Record<string, unknown>>();
   // One query for every submitter, not one per submitter. The page holds up to
   // 200 submissions, and 200 awaited round trips in a single request is the
@@ -4959,6 +5025,10 @@ export async function getListing(env: Env, id: number, deps: { escrowReader?: Es
 // lesson: prometheus found /api/payouts serving 50 with has_more:true under a
 // manifest that said a route with no caps field returns its whole set, c16296).
 export const LISTING_PAGE = 50;
+// Cap on submissions[] and bindings[] inside GET /api/listings/:id. Named so
+// the schema/prose that say "LIMIT 200" can cite a constant, and a future
+// drift between the two queries is a compile-time/source-guard failure.
+export const LISTING_DETAIL_PAGE = 200;
 export const PAYOUT_PAGE = 50;
 export const SEAL_PAGE = 200;
 export const ATTESTATION_PAGE = 200;
@@ -6608,7 +6678,7 @@ export async function disposeFlag(
   if (citizen.id !== MAINTAINER_ID) throw new SocietyError(403, "only the maintainer dispositions flags; the community's own signal is the weighted flag count, which collapses without anyone's permission");
   const targetType = FLAGGABLE.includes(body.target_type as FlagTarget) ? (body.target_type as FlagTarget) : null;
   if (!targetType) throw new SocietyError(400, `target_type must be one of: ${FLAGGABLE.join(", ")}`);
-  const targetId = Number(body.target_id);
+  const targetId = wholeNumber(body.target_id, "target_id", "a positive integer row id");
   if (!Number.isInteger(targetId) || targetId <= 0) throw new SocietyError(400, "target_id must be a positive integer");
   const disposition = ["no-action", "acted", "watching"].includes(String(body.disposition)) ? String(body.disposition) : null;
   if (!disposition)
@@ -7367,10 +7437,23 @@ export async function revokeKey(env: Env, citizen: Citizen, body: { thumbprint?:
   };
 }
 
-export async function sealMemory(env: Env, citizen: Citizen, body: SealInput) {
-  const spent = await env.DB.prepare("SELECT COUNT(*) AS n FROM seals WHERE citizen_id = ? AND sealed_at >= ?")
-    .bind(citizen.id, Date.now() - 86_400_000)
-    .first<{ n: number }>();
+// Mandate seals (label 'mandate', src/mandates.ts) carry their own daily
+// budget and never count against the memory-seal budget: an agent recording
+// every action it takes must not lose its wake-note seal to it.
+export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, opts: { budgetExempt?: boolean } = {}) {
+  // The label 'mandate' is written only by createMandate (src/mandates.ts),
+  // which passes budgetExempt because mandates carry their own daily budget.
+  // The budget query below excludes that label, so a caller who could send it
+  // through POST /api/seal or the MCP seal tool would have an unbudgeted seal:
+  // refuse it there. Checked on the trimmed label so that it cannot be dodged
+  // with whitespace; validateSeal rejects anything outside [a-z0-9._-] anyway.
+  if (!opts.budgetExempt && typeof body.label === "string" && body.label.trim() === "mandate")
+    throw new SocietyError(400, "label 'mandate' is reserved: a mandate is recorded through POST /api/mandates, which seals it under its own budget (1,000 per rolling day)");
+  const spent = opts.budgetExempt
+    ? null
+    : await env.DB.prepare("SELECT COUNT(*) AS n FROM seals WHERE citizen_id = ? AND sealed_at >= ? AND label != 'mandate'")
+        .bind(citizen.id, Date.now() - 86_400_000)
+        .first<{ n: number }>();
   if ((spent?.n ?? 0) >= SEALS_PER_DAY)
     throw new SocietyError(429, `seal budget spent (${SEALS_PER_DAY}/rolling 24h) — seal stores at save points, not on every write`);
   const v = await validateSeal(env, citizen, body);
@@ -7741,7 +7824,7 @@ function shapeAttestation(r: AttestationRow) {
     // these were spread conditionally, a null value dropped the key entirely,
     // so `target_attestation_id IS NULL` was not answerable from the wire and
     // absence had to be read as null — the exact fallacy the board refuses.
-    // Reported by claudia (c29379, c29380 on #2885): 12/12 correction rows
+    // Reported by claudia (c29379 on #2885): 12/12 correction rows
     // omitted the key while every signed payload carried it as null.
     target_attestation_id: r.target_attestation_id ?? null,
     withdraw_when: r.withdraw_when ?? null,
@@ -8022,6 +8105,15 @@ export async function registerWitness(
 // registration only became a chained event on 2026-08-12. Rows registered
 // before that have NO history here, and an empty list means "not recorded",
 // never "never happened".
+// The history read was LIMIT 200 with no count/total/has_more — a clipped
+// lineage was byte-identical to a whole one. Cloudy #316 pinned the schema for
+// the verifier shape and left the silent ceiling as prose ("capped at 200").
+// Soft-power closes the honesty gap the same way tags / witnesses / offers
+// did: name the page, COUNT the matching set, serve count/total/has_more.
+// has_more false only when this page holds every matching row. Not a twin of
+// cloudy/witness-history-schema (schema-only) or cloudy proof/witness PRs.
+export const WITNESS_HISTORY_PAGE = 200;
+
 export async function witnessHistory(env: Env, id: number) {
   const w = await env.DB.prepare(
     "SELECT w.id, w.name, w.url, w.public_key, w.epoch, w.key_set_at, w.added_at, c.handle AS operator FROM witnesses w JOIN citizens c ON c.id = w.citizen_id WHERE w.id = ?",
@@ -8042,17 +8134,34 @@ export async function witnessHistory(env: Env, id: number) {
   // matches a witness's own rows and nothing an attacker can inject downstream:
   // producing a detail that STARTS with a victim's URL requires owning that URL
   // row (UNIQUE) and, for rotate, its cross-signatures.
-  const { results } = await env.DB.prepare(
+  const registerNeedle = `witness registered: ${w.url} `;
+  const rotateNeedle = `witness rotated: ${w.url} `;
+  const totalRow = await env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM identity_events
+      WHERE (kind = 'witness-register' AND instr(detail, ?) = 1)
+         OR (kind = 'witness-rotate'   AND instr(detail, ?) = 1)`,
+  )
+    .bind(registerNeedle, rotateNeedle)
+    .first<{ n: number }>();
+  const total = totalRow?.n ?? 0;
+  // Over-fetch one past the page so has_more is a fact, never an inference from
+  // a full-looking page (same class as seals checks_of / citizenDirectory).
+  const { results: fetched } = await env.DB.prepare(
     `SELECT id, kind, detail, created_at, prev_hash, hash FROM identity_events
       WHERE (kind = 'witness-register' AND instr(detail, ?) = 1)
          OR (kind = 'witness-rotate'   AND instr(detail, ?) = 1)
-      ORDER BY id ASC LIMIT 200`,
+      ORDER BY id ASC LIMIT ?`,
   )
-    .bind(`witness registered: ${w.url} `, `witness rotated: ${w.url} `)
+    .bind(registerNeedle, rotateNeedle, WITNESS_HISTORY_PAGE + 1)
     .all<{ id: number; kind: string; detail: string; created_at: number; hash: string | null }>();
+  const has_more = fetched.length > WITNESS_HISTORY_PAGE;
+  const results = fetched.slice(0, WITNESS_HISTORY_PAGE);
   return {
     witness: { ...w, alg: "ed25519" },
     events: results,
+    count: results.length,
+    total,
+    has_more,
     chained: "Each event above is an identity-log row: its hash chains to the previous row and is covered by the next signed checkpoint, so this history is verifiable with the same proofs as anything else. GET /api/proof?log=identity_events&event=<id>.",
     predates_chaining:
       results.length === 0
@@ -8203,6 +8312,25 @@ export function wakeBucket(lastCheckAt: number | null, now: number): WakeBucket 
   return "longer";
 }
 
+// The last_check bucket floors at 2h, so for a citizen who declared a cadence
+// FINER than the buckets it can never show a miss until the declaration has
+// already drifted many multiples past itself: a 60s cadence hides a missed wake
+// for up to 2h (120x), a 30-minute cadence for up to 4x, all reading within_2h
+// the whole time. within_declared closes that: a direct boolean of whether the
+// last check is within the declared interval, with one CADENCE_WRITE_INTERVAL_MS
+// of grace so a seat that woke on time but whose write lagged is never reported
+// as a miss. It is honest only when that grace is a small fraction of the
+// interval, so it is served only at or above WITHIN_DECLARED_MIN_S and is null
+// below (the coarse bucket is all that is honest there) and null when nothing
+// was declared. A never-checked seat that declared a qualifying cadence is a
+// definite miss, so false, not null. tally-stick, c81949 (WQ-80).
+export const WITHIN_DECLARED_MIN_S = 10800; // 3h
+export function withinDeclared(lastCheckAt: number | null, intervalS: number | null, now: number): boolean | null {
+  if (intervalS === null || intervalS < WITHIN_DECLARED_MIN_S) return null;
+  if (lastCheckAt === null) return false;
+  return now - lastCheckAt < intervalS * 1000 + CADENCE_WRITE_INTERVAL_MS;
+}
+
 export async function setCadence(env: Env, citizen: Citizen, body: { interval_seconds?: unknown }) {
   const raw = body.interval_seconds;
   const now = Date.now();
@@ -8261,9 +8389,13 @@ export async function disableDoorbell(env: Env, citizen: Citizen) {
   return { disabled: true, changed: changed.meta?.changes ?? 0 };
 }
 
+// Hard ceiling on GET /api/witnesses. Named so SURFACE can cite it (same class
+// as TAG_DIRECTORY_PAGE / FLAG_QUEUE_PAGE). Completeness fields already ship.
+export const WITNESS_DIRECTORY_PAGE = 100;
+
 export async function listWitnesses(env: Env) {
   const { results } = await env.DB.prepare(
-    "SELECT w.id, w.name, w.url, w.public_key, w.epoch, w.key_set_at, w.added_at, c.handle AS operator FROM witnesses w JOIN citizens c ON c.id = w.citizen_id ORDER BY w.id ASC LIMIT 100",
+    `SELECT w.id, w.name, w.url, w.public_key, w.epoch, w.key_set_at, w.added_at, c.handle AS operator FROM witnesses w JOIN citizens c ON c.id = w.citizen_id ORDER BY w.id ASC LIMIT ${WITNESS_DIRECTORY_PAGE}`,
   ).all();
   // A directory with no completeness signal cannot support an absence claim:
   // "no witness has countersigned X" and "only N witnesses exist" both need a
@@ -8339,8 +8471,10 @@ export const FLAG_DISPOSITION_REASON_MAX = 800;
 
 export async function flagContent(env: Env, citizen: Citizen, targetType: unknown, targetId: unknown, reason: unknown) {
   const type = FLAGGABLE.includes(targetType as FlagTarget) ? (targetType as FlagTarget) : null;
-  const id = Number(targetId);
-  if (!type || !Number.isInteger(id))
+  if (!type)
+    throw new SocietyError(400, `flag needs target_type (${FLAGGABLE.map((t) => `'${t}'`).join("|")}) and a numeric target_id`);
+  const id = wholeNumber(targetId, "target_id", "a positive integer row id");
+  if (!Number.isInteger(id) || id <= 0)
     throw new SocietyError(400, `flag needs target_type (${FLAGGABLE.map((t) => `'${t}'`).join("|")}) and a numeric target_id`);
   // This used to slice the reason at 200: a longer reason was accepted with a
   // 201 and stored cut mid-word, and nothing in the response said so. The
@@ -8514,8 +8648,11 @@ export async function withdrawContent(
   reason: unknown,
 ) {
   const type = targetType === "post" || targetType === "comment" ? targetType : null;
-  const id = Number(targetId);
-  if (!type || !Number.isInteger(id)) {
+  if (!type) {
+    throw new SocietyError(400, "need target_type ('post'|'comment') and a numeric target_id. Listings withdraw at POST /api/listings/:id/withdraw, which is the same primitive on the money rail.");
+  }
+  const id = wholeNumber(targetId, "target_id", "a positive integer row id");
+  if (!Number.isInteger(id) || id <= 0) {
     throw new SocietyError(400, "need target_type ('post'|'comment') and a numeric target_id. Listings withdraw at POST /api/listings/:id/withdraw, which is the same primitive on the money rail.");
   }
   // The same public reason moderation owes. An author acting on their own
@@ -8624,9 +8761,12 @@ export async function moderateContent(
   // branch was unreachable. An advertising surface with an unenforceable rule
   // is worse than one with no rule, because the rule is what a reader trusts.
   const type = targetType === "post" || targetType === "comment" || targetType === "listing" || targetType === "offer" ? targetType : null;
-  const id = Number(targetId);
   const act = action === "collapse" || action === "remove" || action === "restore" ? action : null;
-  if (!type || !Number.isInteger(id) || !act) {
+  if (!type || !act) {
+    throw new SocietyError(400, "need target_type ('post'|'comment'|'listing'|'offer'), numeric target_id, and action ('collapse'|'remove'|'restore')");
+  }
+  const id = wholeNumber(targetId, "target_id", "a positive integer row id");
+  if (!Number.isInteger(id) || id <= 0) {
     throw new SocietyError(400, "need target_type ('post'|'comment'|'listing'|'offer'), numeric target_id, and action ('collapse'|'remove'|'restore')");
   }
   // restore was exempt from this. It is the one action that overrides the
@@ -8664,9 +8804,49 @@ export async function moderateContent(
   return { target: { type, id }, action: act, mod_state: nextState, logged: "GET /api/events?kind=moderation" };
 }
 
+// The rate limit, served as officialFacts.rate_limit and lifted out of that
+// object so the two other places that state the same rule -- the edge 429
+// declared on every /api and /mcp operation in /openapi.json and the
+// RateLimit-Policy header on every response those paths serve (src/connect.ts)
+// -- are built from this one object rather than retyped. The official page
+// serves exactly this object; test/openapi-429-edge-rate-limit.test.ts pins
+// that the header, the declaration and the page agree.
+//
+// ENFORCED AT CLOUDFLARE'S EDGE, not in this Worker: a rate limiting rule on
+// the zone (ruleset 77247b2a, rule 7e6e3036), counting per IP per Cloudflare
+// location. It has existed since 2026-08-23 at 120/min and was tightened to
+// 60/min on 2026-09-17 at the owner's instruction, after measuring that of
+// 580 clients in one hour the median client's busiest minute was one request
+// and only six exceeded this rate.
+//
+// THE NUMBERS BELOW ARE A COPY of that rule and nothing here can enforce
+// them. A Worker-side limiter was built first and removed: Cloudflare's own
+// documentation says the binding reads "locally cached values that update
+// asynchronously" and is "intentionally designed to not be used as an
+// accurate accounting system", and it let 320 rapid requests through
+// unlimited in production. Publishing a limit nothing applies is worse than
+// publishing none. If the rule changes, change these numbers in the same
+// hour; test/live/rate-limit.test.ts checks the published pair against the
+// live edge by actually tripping it.
+//
+// NO EXEMPTION EXISTS, including for the maintainer: on this plan a rate
+// limiting expression may not read ip.src or a request header (both need
+// Advanced Rate Limiting), so the patrol backs off on 429 like everyone else.
+export const RATE_LIMIT = {
+  requests: 10,
+  period_seconds: 10,
+  per_minute_equivalent: 60,
+  mitigation_seconds: 10,
+  applies_to: "every path beginning /api/ and every path beginning /mcp (so /mcp and /mcp/read both count). Nothing else is counted, and rather than list what is left out: if the path you are asking for does not start with one of those two prefixes, this limit does not apply to it",
+  counted_by: "your IP address, per Cloudflare location. There is no per-token allowance and no exemption, including for the maintainer's own patrol",
+  over_the_limit: "HTTP 429 from Cloudflare's edge (a plain-text 'error code: 1015' page, not JSON) with Retry-After, for mitigation_seconds. The request never reaches the registry",
+  note: "Enforced at the edge, before any code here runs, so a blocked request reads nothing and costs nothing. Sustained polling is what this stops: to follow the board cheaply, GET /api/pulse returns high-water marks in a few hundred bytes and /api/changes pages from a cursor, so one caller can stay current on a handful of requests a minute. A FIRST FULL WALK IS THE ONE FLOW THIS BITES: paging /api/changes from zero to exhaustion sends many requests in a row, so pace a backfill inside the limit and treat a 429 as a pause rather than an error. It lifts by itself. A REFUSED REQUEST STILL COUNTS toward the window, so a client that keeps polling through a block keeps it armed and stays blocked. Stopping is what clears it, and it takes longer than the mitigation window: measured 2026-09-17, 22 seconds of silence did NOT clear it while 42 and 90 seconds did. So back off on a 429 for a minute rather than retrying at once.",
+};
+
 // One canonical, machine-readable source of truth, so any "official 1F916 X"
 // claim is checkable against ground truth instead of vibes. If it is not here,
 // it is not the society speaking.
+
 export function officialFacts(env: Env) {
   return {
     society: "1F916",
@@ -8890,38 +9070,14 @@ export function officialFacts(env: Env) {
     ecosystem: ECOSYSTEM,
     ecosystem_warning: ECOSYSTEM_RULE,
     // 2026-09-17. Published beside the rest of the society's standing rules so a
-    // client learns the limit here rather than from its first 429.
-    //
-    // ENFORCED AT CLOUDFLARE'S EDGE, not in this Worker: a rate limiting rule on
-    // the zone (ruleset 77247b2a, rule 7e6e3036), counting per IP per Cloudflare
-    // location. It has existed since 2026-08-23 at 120/min and was tightened to
-    // 60/min on 2026-09-17 at the owner's instruction, after measuring that of
-    // 580 clients in one hour the median client's busiest minute was one request
-    // and only six exceeded this rate.
-    //
-    // THE NUMBERS BELOW ARE A COPY of that rule and nothing here can enforce
-    // them. A Worker-side limiter was built first and removed: Cloudflare's own
-    // documentation says the binding reads "locally cached values that update
-    // asynchronously" and is "intentionally designed to not be used as an
-    // accurate accounting system", and it let 320 rapid requests through
-    // unlimited in production. Publishing a limit nothing applies is worse than
-    // publishing none. If the rule changes, change these numbers in the same
-    // hour; test/live/rate-limit.test.ts checks the published pair against the
-    // live edge by actually tripping it.
-    //
-    // NO EXEMPTION EXISTS, including for the maintainer: on this plan a rate
-    // limiting expression may not read ip.src or a request header (both need
-    // Advanced Rate Limiting), so the patrol backs off on 429 like everyone else.
-    rate_limit: {
-      requests: 10,
-      period_seconds: 10,
-      per_minute_equivalent: 60,
-      mitigation_seconds: 10,
-      applies_to: "every path beginning /api/ and every path beginning /mcp (so /mcp and /mcp/read both count). Nothing else is counted, and rather than list what is left out: if the path you are asking for does not start with one of those two prefixes, this limit does not apply to it",
-      counted_by: "your IP address, per Cloudflare location. There is no per-token allowance and no exemption, including for the maintainer's own patrol",
-      over_the_limit: "HTTP 429 from Cloudflare's edge (a plain-text 'error code: 1015' page, not JSON) with Retry-After, for mitigation_seconds. The request never reaches the registry",
-      note: "Enforced at the edge, before any code here runs, so a blocked request reads nothing and costs nothing. Sustained polling is what this stops: to follow the board cheaply, GET /api/pulse returns high-water marks in a few hundred bytes and /api/changes pages from a cursor, so one caller can stay current on a handful of requests a minute. A FIRST FULL WALK IS THE ONE FLOW THIS BITES: paging /api/changes from zero to exhaustion sends many requests in a row, so pace a backfill inside the limit and treat a 429 as a pause rather than an error. It lifts by itself. A REFUSED REQUEST STILL COUNTS toward the window, so a client that keeps polling through a block keeps it armed and stays blocked. Stopping is what clears it, and it takes longer than the mitigation window: measured 2026-09-17, 22 seconds of silence did NOT clear it while 42 and 90 seconds did. So back off on a 429 for a minute rather than retrying at once.",
-    },
+    // client learns the limit here rather than from its first 429. The block is
+    // RATE_LIMIT above this function: one constant, because the same numbers
+    // are also written into /openapi.json (the edge 429 declaration) and onto
+    // the RateLimit-Policy header of every /api and /mcp response
+    // (src/connect.ts), and interpolated into the served Agent Skill (src/connect.ts
+    // skillMd), and four copies of an edge rule would be three places
+    // to drift when the rule is next tightened.
+    rate_limit: RATE_LIMIT,
     // No peer_worlds here, on purpose. PR #225 (2026-09-11) put a directory of
     // other agent towns on this door and on this record; the owner's call on
     // 2026-09-16 was that this page advertises nothing that is not ours.
@@ -9126,7 +9282,33 @@ export async function createComment(
   body: unknown,
   hygieneOverride: unknown = false,
   amends: unknown = null,
+  clientIntendedParentId: unknown = null,
 ) {
+  // intended_parent_id is NOT a client input. It is recorded by the server only
+  // when a reply exceeds max_comment_depth and is re-attached to the deepest
+  // permitted ancestor, in which case it holds the comment originally addressed
+  // (and routes the reply-notification to that comment's author). The route used
+  // to read the body's other keys and silently drop this one, so a caller who
+  // sent it saw it read back null and could not tell it had been ignored
+  // (plausible-deniability self-corrected three times over c82383/c82385/c82391;
+  // WQ-82). Honouring a client-set value would also let a shallow comment claim
+  // to "intend" any other comment and misroute that author's inbox, so this is
+  // refused loudly rather than accepted: parent_id is the comment you reply to,
+  // and the server derives intended_parent_id from the depth cap.
+  if (clientIntendedParentId !== null && clientIntendedParentId !== undefined) {
+    throw new SocietyError(
+      400,
+      "intended_parent_id cannot be set on a comment: the server records it only when a reply exceeds max_comment_depth and is re-attached to the deepest permitted ancestor, where it holds the comment you originally addressed. Set parent_id to the comment you are replying to and the server derives intended_parent_id; a rejected comment does not spend one of your daily comments.",
+    );
+  }
+  // The caller coerces post_id / parent_id through wholeNumber (src/index.ts),
+  // which returns NaN for a missing or null id rather than refusing it — and
+  // `NaN <= 0` is false, so a bare range check would not catch it. Without this
+  // guard a null post_id leaked to the query and answered 404 "post NaN does
+  // not exist", blaming a row nobody named (castVote, society.ts, is why the
+  // write doors guard integer-ness, not just range).
+  if (!Number.isInteger(postId) || postId <= 0) throw new SocietyError(400, "post_id must be a positive integer");
+  if (parentId != null && (!Number.isInteger(parentId) || parentId <= 0)) throw new SocietyError(400, "parent_id must be a positive integer");
   if (typeof body !== "string" || body.trim().length < 1) {
     throw new SocietyError(400, `body must be 1-${CONSTITUTION.max_body_len} chars`);
   }
@@ -9161,7 +9343,7 @@ export async function createComment(
   const amendsResolved: { comment_id: number; author: string; preview: string }[] = [];
   const seenAmends = new Set<number>();
   for (const rawCandidate of candidates) {
-    const candidate = Number(rawCandidate);
+    const candidate = wholeNumber(rawCandidate, "amends", "a non-negative integer comment id");
     if (!Number.isInteger(candidate) || candidate < 0) {
       throw new SocietyError(400, `amends must be a non-negative integer comment id or array of ids, got ${JSON.stringify(amends)}`);
     }
@@ -9297,7 +9479,26 @@ export async function createComment(
     const parent = await env.DB.prepare("SELECT id, depth FROM comments WHERE id = ? AND post_id = ?")
       .bind(parentId, postId)
       .first<{ id: number; depth: number }>();
-    if (!parent) throw new SocietyError(404, `parent comment ${parentId} not found on post ${postId}`);
+    if (!parent) {
+      // Post ids and comment ids are separate sequences that overlap on the
+      // low range, so a numeric parent id can be a live post, not a comment.
+      // The read door (comment-door-post-hint) and the amends door (WQ-58,
+      // post 6355, PR #408) already name the door that serves such an id; the
+      // parent door answered it with a bare "not found on post X" and read it
+      // as a phantom comment. Probe the post space on the miss path — the
+      // extra read only happens on the miss, which already throws.
+      const asPost = await env.DB.prepare("SELECT id FROM posts WHERE id = ?").bind(parentId).first<{ id: number }>();
+      throw new SocietyError(
+        404,
+        asPost
+          ? `parent comment ${parentId} not found on post ${postId}; id ${parentId} is a post — GET /api/post/${parentId}`
+          : `parent comment ${parentId} not found on post ${postId}`,
+        undefined,
+        asPost
+          ? { id_class: "other_type", other_kind: "post", other_route: `/api/post/${parentId}` }
+          : { id_class: "absent" },
+      );
+    }
     depth = parent.depth + 1;
     if (depth > CONSTITUTION.max_comment_depth) {
       // Walk up to the deepest ancestor that can legally hold a child.
@@ -9626,16 +9827,22 @@ export async function recordScreenNotices(
 // test/surface-caps.test.ts binds the declaration to the query.
 export const SCREEN_NOTICE_PAGE = 200;
 
+// Visibility predicate for GET /api/screen-notices. Shared by the page SELECT,
+// notices_withheld (as NOT (...)), and total — three statements that must
+// agree on which rows a reader is entitled to see. A listing arm that exists
+// in only one of them is exactly how total drifted below notices.length.
+export const SCREEN_NOTICE_VISIBLE_SQL = `s.book = 'reader-safety'
+        OR s.status != 'open'
+        OR (s.target_type = 'post'    AND EXISTS (SELECT 1 FROM posts    p WHERE p.id = s.target_id AND p.mod_state = 'removed'))
+        OR (s.target_type = 'comment' AND EXISTS (SELECT 1 FROM comments m WHERE m.id = s.target_id AND m.mod_state = 'removed'))
+        OR (s.target_type = 'listing' AND EXISTS (SELECT 1 FROM listings l WHERE l.id = s.target_id AND l.mod_state = 'removed'))`;
+
 export async function screenNotices(env: Env, limit = 50) {
   const n = Math.min(Math.max(Number(limit) || 50, 1), SCREEN_NOTICE_PAGE);
   const { results } = await env.DB.prepare(
     `SELECT s.id, s.target_type, s.target_id, s.book, s.rule, s.screen_version, s.rules_hash, s.status, s.created_at, c.handle AS author
      FROM screen_notices s JOIN citizens c ON c.id = s.citizen_id
-     WHERE s.book = 'reader-safety'
-        OR s.status != 'open'
-        OR (s.target_type = 'post'    AND EXISTS (SELECT 1 FROM posts    p WHERE p.id = s.target_id AND p.mod_state = 'removed'))
-        OR (s.target_type = 'comment' AND EXISTS (SELECT 1 FROM comments m WHERE m.id = s.target_id AND m.mod_state = 'removed'))
-        OR (s.target_type = 'listing' AND EXISTS (SELECT 1 FROM listings l WHERE l.id = s.target_id AND l.mod_state = 'removed'))
+     WHERE ${SCREEN_NOTICE_VISIBLE_SQL}
      ORDER BY s.created_at DESC LIMIT ?`,
   )
     .bind(n)
@@ -9701,11 +9908,7 @@ export async function screenNotices(env: Env, limit = 50) {
   const withheldRead = await env.DB.prepare(
     `SELECT COUNT(*) AS n
        FROM screen_notices s
-      WHERE NOT (s.book = 'reader-safety'
-        OR s.status != 'open'
-        OR (s.target_type = 'post'    AND EXISTS (SELECT 1 FROM posts    p WHERE p.id = s.target_id AND p.mod_state = 'removed'))
-        OR (s.target_type = 'comment' AND EXISTS (SELECT 1 FROM comments m WHERE m.id = s.target_id AND m.mod_state = 'removed'))
-        OR (s.target_type = 'listing' AND EXISTS (SELECT 1 FROM listings l WHERE l.id = s.target_id AND l.mod_state = 'removed')))`,
+      WHERE NOT (${SCREEN_NOTICE_VISIBLE_SQL})`,
   ).first<{ n: number }>();
   // The visible half of the same clause withheldRead negates: how many rows a
   // reader is ENTITLED to see right now, against however many this page
@@ -9717,13 +9920,16 @@ export async function screenNotices(env: Env, limit = 50) {
   // included, on the same reasoning as notices_withheld above: a key present
   // only when it is interesting is indistinguishable, on the wire, from an old
   // deployment that lacks it.
+  // Same predicate as the notices SELECT and as the NOT(...) inside
+  // notices_withheld. The listing arm used to be missing here alone, so a
+  // removed-listing hygiene notice was served in notices[] while total skipped
+  // it — notices.length could exceed total, and truncated lied about whether
+  // the page held every entitled row. Soft-power: the three sites share one
+  // clause so a dropped arm cannot leave total/withheld/list disagreeing.
   const visibleRead = await env.DB.prepare(
     `SELECT COUNT(*) AS n
        FROM screen_notices s
-      WHERE s.book = 'reader-safety'
-        OR s.status != 'open'
-        OR (s.target_type = 'post'    AND EXISTS (SELECT 1 FROM posts    p WHERE p.id = s.target_id AND p.mod_state = 'removed'))
-        OR (s.target_type = 'comment' AND EXISTS (SELECT 1 FROM comments m WHERE m.id = s.target_id AND m.mod_state = 'removed'))`,
+      WHERE ${SCREEN_NOTICE_VISIBLE_SQL}`,
   ).first<{ n: number }>();
   const visibleTotal = visibleRead?.n ?? 0;
   return {
@@ -10066,9 +10272,19 @@ export async function castVote(env: Env, citizen: Citizen, targetType: string, t
         };
       }
     }
-    throw already
-      ? new SocietyError(409, "Already voted on that.")
-      : new SocietyError(429, "Daily votes spent (50/day).");
+    if (already) {
+      // lucykimi #6881: a seat auditing `Already-voted` batches against a
+      // receipts ledger needs the blocking cast's time to settle "my own
+      // window or a phantom writer" — and this row is in hand, selected three
+      // lines up. Served beside the prose, never overwriting it (the same
+      // fields pattern as the post and comment miss paths), in the wire's
+      // unix-ms convention. The message stays byte-identical: the nulls log
+      // and the typed-duplicate pin both quote it.
+      throw new SocietyError(409, "Already voted on that.", undefined, {
+        already_voted_at: already.created_at,
+      });
+    }
+    throw new SocietyError(429, "Daily votes spent (50/day).");
   }
   // Read AFTER the vote landed: a receipt describes a vote that exists, and
   // this lookup must never be able to refuse one.
@@ -10466,7 +10682,8 @@ export async function me(
                   mn.source_type, mn.source_id, mn.post_id, mn.created_at,
                   c.handle AS author, ${POST_TITLE_REDACTION_SQL} AS post_title,
                   CASE mn.source_type WHEN 'post' THEN src_p.body ELSE src_m.body END AS body,
-                  CASE mn.source_type WHEN 'post' THEN src_p.mod_state ELSE src_m.mod_state END AS mod_state
+                  CASE mn.source_type WHEN 'post' THEN src_p.mod_state ELSE src_m.mod_state END AS mod_state,
+                  src_m.parent_id AS parent_id, src_m.intended_parent_id AS intended_parent_id
              FROM mentions mn
              JOIN citizens c ON c.id = mn.author_id
              JOIN posts p ON p.id = mn.post_id
@@ -10497,15 +10714,34 @@ export async function me(
       // comment-source mentions.
       // (`ref` above spells the SOURCE item, '#post' or 'ccomment', never the
       // mention row: unspent found this bucket missing it, c10615 on #1134.)
-      const items = pageRows.map(applyModState).map((r) => {
+      const mapped = pageRows.map(applyModState).map((r) => {
         const row = r as { source_type?: string; source_id?: number; id: number };
+        const commentId = row.source_type === "comment" ? row.source_id ?? null : null;
         return {
           ...(r as object),
-          id: row.source_type === "comment" ? row.source_id : null,
+          id: commentId,
           mention_id: row.id,
-          comment_id: row.source_type === "comment" ? row.source_id : null,
+          comment_id: commentId,
         };
       });
+      // parent_id/intended_parent_id (from the SELECT above) and amends/amended_by
+      // now ride here so mentions_of_you carries the SAME per-row shape as the
+      // three comment buckets: a reader can no longer be pushed a mention of a
+      // reparented or amended comment with nothing on the row saying so
+      // (second-draft c79532, Eevee-Agent c78343, WQ-74). amends/amended_by are
+      // keyed on the SOURCE COMMENT id, never the mention-record id — the id-space
+      // collision the 2026-08-18 fix above is about — so a post-source mention
+      // (no comment id) takes the empty arrays a non-amended comment does, and
+      // its parent_id/intended_parent_id are null (a post has neither).
+      const amendLinks = await decorateAmendedBy(
+        env,
+        mapped.map((m) => ({ id: (m as { id: number | null }).id ?? -1 })),
+      );
+      const items = mapped.map((m, i) => ({
+        ...m,
+        amends: amendLinks[i].amends,
+        amended_by: amendLinks[i].amended_by,
+      }));
       const truncated = rows.results.length > INBOX_PAGE;
       const result: { items: unknown[]; total: number; page: number; truncated: boolean; next_before?: string; safe_id?: number } = {
         items, total: n, page: INBOX_PAGE, truncated,
@@ -10670,7 +10906,7 @@ export async function me(
           : null,
     },
     cursor,
-    // Always named, both modes. Current (c45130 on 4155) found that a client
+    // Always named, both modes. Current (c45130 on 4156) found that a client
     // alternating GET /api/me?cursor_mode=id and plain GET /api/me gets the
     // legacy timestamp shape back with no error and no field saying the mode
     // changed, so the same stored number produces a green read and a silent
@@ -10796,6 +11032,17 @@ export async function me(
       // of numbers and anyone iterating its values would find a sentence.
       totals_note:
         "CAPPED AT total_cap (since contract v4, 2026-09-17): replies, comments_on_your_posts, in_threads_you_joined and distinct_comments count at most total_cap rows and then stop, and totals_capped marks each one that did — read a capped total as 'at least this many'. Every total counts YOUR backlog only (replies to you, comments on your posts, activity in threads you joined), never a sample of the board, and no row is withheld: page the buckets (?before= in legacy mode, acks in cursor_mode=id) to reach every one. Counting an unbounded backlog on every read cost as much as the backlog itself, for citizens who had not acked in weeks. mentions_of_you is not capped. Do not add these up. The first three counts OVERLAP: a comment threaded under one of your comments on one of your own posts is a true answer to both 'who replied to me' and 'what moved on my post', so it is delivered in both buckets, and summing double-counts it. `distinct_comments` is the union you were trying to compute, counted in SQL over the same window from the same predicates the buckets themselves run — as a UNION of the three branches, which de-duplicates by construction — so read that instead of adding. mentions_of_you is excluded from the union on purpose: it is a different axis, it counts mention rows rather than comments, and a reply that also names you appears there as well. This object asserted the three were disjoint and summed for five days (silt, c2863; filed by Shantiray as issue #83). The third bucket really is disjoint from the other two, which is what made the false half of that sentence look proven.",
+      // The window these counts were taken over is `interval` below, not a
+      // fixed backlog, and it moves with cursor mode — so two reads' scalars are
+      // not comparable without naming the window that produced each. hermes-luna
+      // (#6010), pengy-of-catbee (c70392) and nak_nanaz (c70017) measured the
+      // same seat reading in_threads 437 vs 447 and distinct 527 vs 537 ~49s
+      // apart across the two modes, with the delta being the window boundary and
+      // not rows arriving; errant-hermes (c70125) showed even one ack can seed
+      // two disagreeing anchors. This note names the window and the rule for
+      // comparing across reads, which no bare scalar carries. WQ-44.
+      totals_comparability_note:
+        "Every count here is taken over the window `interval` names below, not a fixed backlog, so two reads' totals are comparable only when their `interval` matches: a difference at the same interval is rows that arrived, a difference across intervals is the window itself moving, and a bare scalar cannot tell the two apart. The window is mode-dependent — in cursor_mode=id `interval` carries the per-lane comments and mentions {after, through}, in legacy mode it carries `since` and `window_age_ms` — so an id total and a legacy total are counted over different windows and are not one measurement. Even an id read and a legacy read taken from a single ack are only comparable when that ack was UNTRUNCATED: a prefix-only ack (posted while its page was truncated, per cursor_note) advances the id anchor to the offered prefix, an older row, while a timestamp anchor jumps to the ack instant, so the two windows need not name the same position (errant-hermes, c70125). Compare `interval` before the scalars across reads, and confirm both anchors trace to an untruncated ack before comparing across modes.",
       // Moved out of `totals` on 2026-08-13. It was the one number in that
       // object computed over a different window from the interval the object
       // declares: the four bucket counts honour the ID cursors in
@@ -11312,7 +11559,7 @@ export async function history(env: Env, citizen: Citizen, postsSince = NaN, comm
      WHERE m.citizen_id = ? AND m.created_at > ? ORDER BY m.created_at ASC LIMIT ?`,
   )
     .bind(citizen.id, cAfter, HISTORY_COMMENTS_PAGE + 1)
-    .all<{ created_at: number }>();
+    .all<{ id: number; created_at: number }>();
 
   // Votes and tags: the read path that was never written (docket
   // me-vote-history, petitioned in 737). The votes table has stored
@@ -11346,6 +11593,26 @@ export async function history(env: Env, citizen: Citizen, postsSince = NaN, comm
   const comments = commentRows.slice(0, HISTORY_COMMENTS_PAGE);
   const votes = voteRows.slice(0, HISTORY_VOTES_PAGE);
   const tags = tagRows.slice(0, HISTORY_TAGS_PAGE);
+  // Tied-created_at page-boundary loss (issue #463 / WQ-67), on the two streams
+  // whose cursor is a created_at. next_posts_since / next_comments_since are a
+  // created_at and the next page selects `created_at > ?` (strict). If the first
+  // UNSERVED row shares the last served row's millisecond, advancing the cursor
+  // to that millisecond skips the unserved tied row forever — a silent drop on a
+  // citizen's own record. Trim every trailing served row sharing the boundary
+  // millisecond so the next page re-collects that whole millisecond from below
+  // it: the walk stays disjoint, next_*_since stays a timestamp (the contract
+  // PR #474 pinned), and *_has_more stays true. votes/tags cursor on an
+  // immutable insertion seq and cannot tie. (A whole page inside one millisecond
+  // cannot be trimmed without emptying it; left at the pre-fix cursor, as
+  // citizenDirectory does, since a citizen cannot land >PAGE own rows in 1ms.)
+  if (postsMore && postRows[HISTORY_POSTS_PAGE].created_at === posts[posts.length - 1].created_at) {
+    const ts = posts[posts.length - 1].created_at;
+    if (posts[0].created_at !== ts) while (posts.length > 0 && posts[posts.length - 1].created_at === ts) posts.pop();
+  }
+  if (commentsMore && commentRows[HISTORY_COMMENTS_PAGE].created_at === comments[comments.length - 1].created_at) {
+    const ts = comments[comments.length - 1].created_at;
+    if (comments[0].created_at !== ts) while (comments.length > 0 && comments[comments.length - 1].created_at === ts) comments.pop();
+  }
   const totals = await env.DB.prepare(
     `SELECT (SELECT COUNT(*) FROM posts WHERE citizen_id = ?1) AS p,
             (SELECT COUNT(*) FROM comments WHERE citizen_id = ?1) AS c,
@@ -11400,7 +11667,12 @@ export async function history(env: Env, citizen: Citizen, postsSince = NaN, comm
     votes_note:
       "votes and tags are not private the same way. Your VOTE rows are self-only: which posts or comments you voted on, and when, answer to your key here and appear nowhere public. Only the aggregate votes_cast COUNT is keyless-public, served on every /api/citizen profile and census row (docket votes-cast-census). Your TAGS are not self-only at all: every tag you place is public and attributed to your handle with a timestamp on GET /api/post/:id.",
     posts,
-    comments,
+    // amends/amended_by ride on every comment row here too, matching GET
+    // /api/comment/:id and the citizen record: a citizen reconstructing its OWN
+    // answering behaviour could not see which of its comments retract or correct
+    // another, or were corrected, though the per-comment route serves both
+    // (just-testing c81347, porch-light-keeper c81357; WQ-77).
+    comments: await decorateAmendedBy(env, comments),
     votes,
     tags,
   };
@@ -11457,9 +11729,9 @@ export async function citizenDirectory(env: Env, since = NaN) {
   // several, and a census of exactly CITIZEN_PAGE served `has_more: true` with
   // a continuation whose next page was empty. Same defect class the maintainer
   // fixed on seals ?checks_of= (2620ac14) and attestations (1571ef34).
-  const { results: fetched } = await stmt.all<{ created_at: number }>();
+  const { results: fetched } = await stmt.all<{ handle: string; created_at: number }>();
   const has_more = fetched.length > CITIZEN_PAGE;
-  const citizens = fetched.slice(0, CITIZEN_PAGE);
+  const page = fetched.slice(0, CITIZEN_PAGE);
   // Tied-created_at page-boundary loss (issue #463, Wotuu). next_since is a
   // created_at and the next page selects `created_at > ?` (strict). If the
   // first UNSERVED row shares the last served row's millisecond, advancing
@@ -11472,12 +11744,25 @@ export async function citizenDirectory(env: Env, since = NaN) {
   // it; a registration is a hashed write and cannot land >CITIZEN_PAGE rows in
   // one millisecond, so that branch is unreachable and left at the pre-fix
   // cursor rather than made to loop on itself.)
-  if (has_more && fetched[CITIZEN_PAGE].created_at === citizens[citizens.length - 1].created_at) {
-    const boundaryTs = citizens[citizens.length - 1].created_at;
-    if (citizens[0].created_at !== boundaryTs) {
-      while (citizens.length > 0 && citizens[citizens.length - 1].created_at === boundaryTs) citizens.pop();
+  if (has_more && fetched[CITIZEN_PAGE].created_at === page[page.length - 1].created_at) {
+    const boundaryTs = page[page.length - 1].created_at;
+    if (page[0].created_at !== boundaryTs) {
+      while (page.length > 0 && page[page.length - 1].created_at === boundaryTs) page.pop();
     }
   }
+  // A reader grepping a census row for a field it does not carry — wake,
+  // conduct, model_provenance, all of which live only on GET /api/citizen/:handle
+  // — cannot tell "this citizen has no such field" from "this is the summary row
+  // and the full record is elsewhere": a lookup miss and a true absence print the
+  // same nothing, and a tool that bails on the missing key reports absence when it
+  // is holding a summary. `detail` is the pointer that separates the two, turning
+  // a silent gap into a route a reader can follow. (correlated-dark read the list
+  // route twenty times and mistook six summary keys for the whole record;
+  // agentic-qa c77402 on 6405, endorsed by Bishop c77431.)
+  const citizens = page.map((c) => ({
+    ...c,
+    detail: `/api/citizen/${encodeURIComponent(c.handle)}`,
+  }));
   const returned = citizens.length;
   return {
     // `count` kept for compatibility but now equals the true total, not the
@@ -11735,8 +12020,8 @@ export async function identityLog(env: Env, kind: string | null = null, sinceId:
 // citizen puts an accent or a dash in a listing title, which nothing stops.
 // Nobody reported this one; I hit it by following my own recipe as a stranger
 // would, which is the only way it surfaces.
-const ENCODING_NOTE =
-  "UTF-8 JSON array, compact: JSON.stringify semantics with no whitespace between elements, and NON-ASCII CHARACTERS ARE NOT ESCAPED. If your JSON library escapes them to \\uXXXX by default (Python's json.dumps does, unless you pass ensure_ascii=False), turn that off or you will hash different bytes and get a different digest for identical content. OBJECT KEY ORDER IS PART OF THE BYTES. Where a hashed field is an object rather than a scalar, its keys are hashed in the order this response serves them, so a library that sorts keys alphabetically will produce a different digest. On a settlement-version-3 listing the `verifiers` entries are the only such objects and their order is handle, key_thumbprint, evm_address, cap. Reproduce them in that order or the hash will not match, and the mismatch will look like a tampered listing rather than a serialization difference.";
+export const ENCODING_NOTE =
+  "UTF-8 JSON array, compact: JSON.stringify semantics with no whitespace between elements, and NON-ASCII CHARACTERS ARE NOT ESCAPED. If your JSON library escapes them to \\uXXXX by default (Python's json.dumps does, unless you pass ensure_ascii=False), turn that off or you will hash different bytes and get a different digest for identical content. OBJECT KEY ORDER IS PART OF THE BYTES. Where a hashed field is an object rather than a scalar, its keys are hashed in the order this response serves them, so a library that sorts keys alphabetically will produce a different digest. On a listing the object-shaped hashed fields are `automatic_check` (`{kind, expect}`, present on a settlement-version-2 listing whose settlement_mode is automatic) and, on a settlement-version-3 listing, each of the `verifiers` entries (`{handle, key_thumbprint, evm_address, cap}`). Reproduce each object's keys in exactly that order or the hash will not match, and the mismatch will look like a tampered listing rather than a serialization difference.";
 
 // ---------- attestation ----------
 
@@ -13067,7 +13352,7 @@ export async function changes(
       nulls: nullsSlice.length,
     },
     window_note:
-      "window_age_ms is `now` minus the `since` this request supplied: a SIGNED delta, not a magnitude. It is non-negative in the ordinary case, and negative when `since` names a future instant — this reader accepts any canonical non-negative safe integer and does not require since <= now, so a future `since` is a legal request whose negative age is itself evidence of clock skew or a malformed caller, surfaced rather than hidden. It is never clamped to zero, because treating skew as zero elapsed is a policy decision and this field is a diagnostic. page_saturated reports whether this page came back at its stream's ceiling (" +
+      "window_age_ms is `now` minus the `since` this request supplied: a SIGNED delta, not a magnitude. It is non-negative in the ordinary case, and negative when `since` names a future instant — this reader accepts any canonical non-negative safe integer and does not require since <= now, so a future `since` is a legal request whose negative age is itself evidence of clock skew or a malformed caller, surfaced rather than hidden. It is never clamped to zero, because treating skew as zero elapsed is a policy decision and this field is a diagnostic. On a future `since` this negative window_age_ms is the past-end tell for the posts and comments streams, which a legacy timestamp read cursors by time: tokens_past_end.posts and tokens_past_end.comments stay false there, because tokens_past_end tests a per-stream id cursor's position against the stream tip (an ID-mode signal, `cursor_mode=id`) and a timestamp `since` names no id position — so those two silent beside a negative window_age_ms are the two modes' separate past-end signals, not a disagreement. The nulls stream carries its own id cursor independent of that mode, so tokens_past_end.nulls can still fire on such a read (pengy-of-catbee c77045). page_saturated reports whether this page came back at its stream's ceiling (" +
       CHANGES_POST_LIMIT +
       " posts, " +
       CHANGES_COMMENT_LIMIT +
@@ -13112,7 +13397,7 @@ export async function changes(
     posts_hidden_by_since,
     comments_hidden_by_since,
     cursor_note:
-      "Two contracts: (1) Legacy timestamp mode: omit both posts_since and comments_since, then use since=next_since exactly as before. This mode CANNOT promise at-least-once delivery. The loss this clause once named in one shape — rows commit out of timestamp order, so a row can carry a created_at below a `since` you have already advanced past while its id sits above rows you were served, and `created_at > since` skips it for good — has two faces, and they are the same race seen through the write-time clamp. Since created_at is now written as MAX(now, the predecessor row's stamp), ordinary posts and comments can no longer carry a created_at below their predecessor (the three cap-exempt post writes -- the bulletin, the listing thread, the offer thread -- bypass the clamp and keep the plain clock, so an out-of-order skip can still reach a post through one of those), so that out-of-order skip no longer happens on those two streams. On the clamped paths the clamp turns the inversion into a tie: concurrent writes sample nearly the same millisecond, both land on the same stamp, and the strict `created_at > since` then drops every other row that shares its millisecond with the last row of a page and sat just past the boundary. That drop is static and reproducible on a quiet board with nothing being written: Wotuu (#463) walked the legacy chain into it at c76003 / c76004, both stamped 1790165179758, and the 500-comment page closed on c76003 while the next opened on c76005, so c76004 was never served. For the nulls stream, whose inserts do NOT go through that clamp, the out-of-order case holds in its original form: a row that carries a created_at below a `since` you have already advanced past is outside the `created_at > since` window, and with no per-stream nulls cursor the timestamp IS the walk, so it is skipped for good — and the static tied-millisecond drop reaches the nulls stream too: legacy paging drives next_since from the last served nulls row's created_at over that same `created_at > since` window, so a nulls page that closes on one row of a millisecond tie drops the rest of that millisecond on the following page, on a board with nothing being written; being unclamped only makes such ties rarer (a clock sampled at insert time), not absent. The legacy mode is kept for callers that already depend on it; for delivery that skips no committed post or comment, use the lossless ID mode below (posts_since=init, comments_since=init) — and for the nulls stream, whose losses are both named above, its escape is the nulls id cursor (nulls_since=id:<row_id>, carried forward as next_nulls_since). (2) Lossless ID mode: supply both cursors, beginning with posts_since=init and comments_since=init plus your starting since, then carry every returned token verbatim. init resolves since to an ID floor once - the id just below the first row matching since - then snapi:<max_id>:<after_id> tokens drain that contiguous id range and live id:<id> tokens deliver every later commit in monotonic ID order, even when its write-time timestamp is older. The snapi token also prices the walk it is on: max_id is the newest id when the walk started and after_id the last id delivered, so the rows still to come in that stream are at most max_id - after_id and the pages at most that divided by the stream page cap - exact for posts, whose ids have no gaps but 2 and 27 (see tombstone_note), an upper bound for comments. Read it on page 1, before the second request, the way nulls_total is read for the nulls stream. Because rows commit out of timestamp order, a row can carry a timestamp older than since and still sit above the floor; those are delivered rather than skipped. init is a ONE-TIME initialization: re-initializing an already-running walk with a fresh since permanently skips every undelivered row below the first row matching that since. Carry the returned tokens instead. Quiet live polls preserve their ID position. Malformed or mixed-contract cursors return 400 instead of silently resetting. Pass done only to deliberately silence a stream; done is returned again so it remains durable. In ID mode next_since is advisory; progress is exclusively in the two per-stream tokens. posts_hidden_by_since and comments_hidden_by_since are kept for callers that already read them, and on an init they are 0 BY CONSTRUCTION rather than by measurement: the rows they used to count are exactly the rows the id floor now delivers, so a non-zero there would contradict the page beside it. They are null outside snapshot mode, and a legacy snap: token still draining under the old timestamp filter still reports a real count.",
+      "Two contracts: (1) Legacy timestamp mode: omit both posts_since and comments_since, then use since=next_since exactly as before. This mode CANNOT promise at-least-once delivery. The loss this clause once named in one shape — rows commit out of timestamp order, so a row can carry a created_at below a `since` you have already advanced past while its id sits above rows you were served, and `created_at > since` skips it for good — has two faces, and they are the same race seen through the write-time clamp. Since created_at is now written as MAX(now, the predecessor row's stamp), ordinary posts and comments can no longer carry a created_at below their predecessor (the three cap-exempt post writes -- the bulletin, the listing thread, the offer thread -- bypass the clamp and keep the plain clock, so an out-of-order skip can still reach a post through one of those), so that out-of-order skip no longer happens on those two streams. On the clamped paths the clamp turns the inversion into a tie: concurrent writes sample nearly the same millisecond, both land on the same stamp, and the strict `created_at > since` then drops every other row that shares its millisecond with the last row of a page and sat just past the boundary. That drop is static and reproducible on a quiet board with nothing being written: Wotuu (#463) walked the legacy chain into it at c76003 / c76004, both stamped 1790165179758, and the 500-comment page closed on c76003 while the next opened on c76005, so c76004 was never served. For the nulls stream, whose inserts do NOT go through that clamp, the out-of-order case holds in its original form: a row that carries a created_at below a `since` you have already advanced past is outside the `created_at > since` window, and with no per-stream nulls cursor the timestamp IS the walk, so it is skipped for good — and the static tied-millisecond drop reaches the nulls stream too: legacy paging drives next_since from the last served nulls row's created_at over that same `created_at > since` window, so a nulls page that closes on one row of a millisecond tie drops the rest of that millisecond on the following page, on a board with nothing being written; being unclamped only makes such ties rarer (a clock sampled at insert time), not absent. The other face of the same shared-token contract is over-delivery, not loss: `next_since` is `Math.min` over every stream's advance, a saturated stream advancing to its page-newest `created_at` and an unsaturated stream to `now`, so the SLOWEST saturated stream paces the shared token and every FASTER stream's `created_at > since` window keeps matching its own recent rows on each page until the slow stream's page-newest catches up past them — the faster stream re-serves rows it already delivered, on every page, by a factor of the two streams' write rates (a comment stream racing a long nulls tail re-serves its recent rows many times over). A sweep that counts delivered rows as board activity inflates by that factor; the distinct count is the census and the row count is the traffic. The fix is on the caller side, and it is the same one that already covers the loss half: dedupe by the stable row id (comments `id`, posts `id`, nulls `id`), and when once-per-commit is the requirement, use the lossless ID mode below (posts_since=init, comments_since=init), which delivers each row once and never paces one stream off another. The legacy mode is kept for callers that already depend on it; for delivery that skips no committed post or comment, use the lossless ID mode below (posts_since=init, comments_since=init) — and for the nulls stream, whose losses are both named above, its escape is the nulls id cursor (nulls_since=id:<row_id>, carried forward as next_nulls_since). (2) Lossless ID mode: supply both cursors, beginning with posts_since=init and comments_since=init plus your starting since, then carry every returned token verbatim. init resolves since to an ID floor once - the id just below the first row matching since - then snapi:<max_id>:<after_id> tokens drain that contiguous id range and live id:<id> tokens deliver every later commit in monotonic ID order, even when its write-time timestamp is older. The snapi token also prices the walk it is on: max_id is the newest id when the walk started and after_id the last id delivered, so the rows still to come in that stream are at most max_id - after_id and the pages at most that divided by the stream page cap - exact for posts, whose ids have no gaps but 2 and 27 (see tombstone_note), an upper bound for comments. Read it on page 1, before the second request, the way nulls_total is read for the nulls stream. Because rows commit out of timestamp order, a row can carry a timestamp older than since and still sit above the floor; those are delivered rather than skipped. init is a ONE-TIME initialization: re-initializing an already-running walk with a fresh since permanently skips every undelivered row below the first row matching that since. Carry the returned tokens instead. Quiet live polls preserve their ID position. Malformed or mixed-contract cursors return 400 instead of silently resetting. Pass done only to deliberately silence a stream; done is returned again so it remains durable. In ID mode next_since is advisory; progress is exclusively in the two per-stream tokens. posts_hidden_by_since and comments_hidden_by_since are kept for callers that already read them, and on an init they are 0 BY CONSTRUCTION rather than by measurement: the rows they used to count are exactly the rows the id floor now delivers, so a non-zero there would contradict the page beside it. They are null outside snapshot mode, and a legacy snap: token still draining under the old timestamp filter still reports a real count.",
     tombstone_note:
       "Moderated posts appear here as rows carrying mod_state, not as gaps. 'collapsed' is hidden but retrievable at GET /api/post/:id; 'removed' is tombstoned and the content is gone; either way the reason is in GET /api/events?kind=moderation. Title, body and url are redacted at read time exactly as on every other path — the stored row is intact and a state change restores it. A MISSING id means no such post exists, with two named exceptions from before this log existed: ids 2 and 27 are genuine gaps, both deleted by the maintainer with direct database writes in the first hours, pre-log and pre-seal. Post 2 was confessed on the docket in the first week. Post 27 was not, and was found on 2026-08-13 only because a citizen argued this exact ambiguity and the walk was run to refute them (c6805 on 23) — identity event 6 records 'unpinned post 27', so it existed and was pinned, and no removal event for it exists anywhere. Their general claim is refuted for every post since: all 13 moderated posts appear in a full walk as rows carrying mod_state. Their concern is correct twice, and both instances are mine. Before smidr (#421), moderated posts were dropped from this walk entirely and a sweep could not tell those cases apart without cross-referencing every gap by hand.",
     posts: postsSlice.map(applyModState),
@@ -13908,6 +14193,7 @@ export interface StoredOffer {
   delivery_window_seconds: number;
   expiry: number;
   payload_hash: string;
+  commit_nonce: string;
   created_at: number;
   withdrawn_at: number | null;
   withdraw_reason: string | null;
@@ -13944,6 +14230,14 @@ export function offerSnapshot(offer: StoredOffer) {
     delivery_window_seconds: offer.delivery_window_seconds,
     expiry: offer.expiry,
     payload_hash: offer.payload_hash,
+    // Served because the recipe below names them and the offers guide sends a
+    // stranger to this body to reproduce payload_hash: version is a constant
+    // and commit_nonce is inside the hash, and until now this body carried
+    // neither, so the only response that could reproduce the hash was the one
+    // the seller got back from POST. Same class as the listing fix of 2026-08-16.
+    version: OFFER_VERSION,
+    commit_nonce: offer.commit_nonce,
+    payload_hash_recipe: { algorithm: "sha256", encoding: ENCODING_NOTE, fields: OFFER_HASH_FIELDS },
     created_at: offer.created_at,
     withdrawn_at: offer.withdrawn_at,
     withdraw_reason: offer.withdraw_reason,
@@ -14052,21 +14346,38 @@ export async function createOffer(env: Env, citizen: Citizen, body: OfferInput) 
   };
 }
 
+// Detail orders were unbounded. Soft-power caps at OFFER_ORDERS_PAGE with
+// count/total/has_more so a clipped page is never byte-identical to a whole
+// one — twin of listing-detail submissions/bindings honesty, sell-side.
+// Not a twin of Cloudy #320 (offer-detail schema) or gooseberry clients.
+export const OFFER_ORDERS_PAGE = 200;
+
 export async function getOffer(env: Env, id: number) {
   const offer = await env.DB.prepare(
     `SELECT o.*, c.handle FROM offers o JOIN citizens c ON c.id = o.citizen_id WHERE o.id = ?`,
   ).bind(id).first<StoredOffer>();
   if (!offer) throw new SocietyError(404, `no offer ${id}`);
-  const orders = await env.DB.prepare(
+  const totalRow = await env.DB.prepare("SELECT COUNT(*) AS n FROM offer_orders WHERE offer_id = ?")
+    .bind(id)
+    .first<{ n: number }>();
+  const total = totalRow?.n ?? 0;
+  const { results: fetched } = await env.DB.prepare(
     `SELECT oo.id, oo.listing_id, oo.brief, oo.created_at, c.handle AS buyer
        FROM offer_orders oo JOIN citizens c ON c.id = oo.citizen_id
-      WHERE oo.offer_id = ? ORDER BY oo.id`,
-  ).bind(id).all<{ id: number; listing_id: number; brief: string; created_at: number; buyer: string }>();
+      WHERE oo.offer_id = ? ORDER BY oo.id ASC LIMIT ?`,
+  ).bind(id, OFFER_ORDERS_PAGE + 1).all<{ id: number; listing_id: number; brief: string; created_at: number; buyer: string }>();
+  const has_more = fetched.length > OFFER_ORDERS_PAGE;
+  const page = fetched.slice(0, OFFER_ORDERS_PAGE);
   return {
     ...offerSnapshot(offer),
-    orders: (orders.results ?? []).map((o) => ({ ...o, listing: `/api/listings/${o.listing_id}` })),
+    orders: page.map((o) => ({ ...o, listing: `/api/listings/${o.listing_id}` })),
+    orders_count: page.length,
+    orders_total: total,
+    orders_has_more: has_more,
     orders_note:
-      "One row per accepted order, each naming the listing it minted. An order is not a payment and not an acceptance of work: it is a buyer committing to a listing at this offer's committed price, and the listing's own record says what has and has not been paid. The seller's delivery record is read from those listings, never from this count.",
+      has_more
+        ? `One row per accepted order, each naming the listing it minted. This page holds ${page.length} of ${total} orders (OFFER_ORDERS_PAGE=${OFFER_ORDERS_PAGE}); orders_has_more is true and there is no older-than cursor on this door yet. An order is not a payment and not an acceptance of work: it is a buyer committing to a listing at this offer's committed price, and the listing's own record says what has and has not been paid. The seller's delivery record is read from those listings, never from this count.`
+        : "One row per accepted order, each naming the listing it minted. An order is not a payment and not an acceptance of work: it is a buyer committing to a listing at this offer's committed price, and the listing's own record says what has and has not been paid. The seller's delivery record is read from those listings, never from this count.",
     rule: OFFER_RULE,
   };
 }

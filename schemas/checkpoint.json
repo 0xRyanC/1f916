@@ -13,6 +13,7 @@
     "countersignature_payload_format",
     "countersignature_note",
     "checkpoints",
+    "checkpoint_sequence",
     "leaves_are",
     "tree",
     "how_to_verify"
@@ -53,7 +54,7 @@
         "x": {
           "type": "string",
           "pattern": "^[A-Za-z0-9_-]+$",
-          "description": "Base64url-encoded Ed25519 public key (no padding — base64url never emits it)"
+          "description": "Base64url-encoded Ed25519 public key (no padding \u2014 base64url never emits it)"
         }
       }
     },
@@ -190,6 +191,117 @@
     },
     "how_to_verify": {
       "type": "string"
+    },
+    "checkpoint_sequence": {
+      "type": "object",
+      "description": "Checkpointer liveness beside the frozen newest-written rows. The checkpoints table AUTOINCREMENT sequence is charged for every INSERT OR IGNORE (written or ignored), so head moves by attempts_per_pass per pass on a quiet log where checkpoints[].id and created_at freeze. Follow-up to #257 (wire); this schema makes dropping the field a false-green failure.",
+      "required": [
+        "recorded",
+        "attempted_pass_cron",
+        "note"
+      ],
+      "properties": {
+        "recorded": {
+          "type": "boolean",
+          "description": "True when sqlite_sequence.seq for checkpoints was read; false when the platform refused the read (degrades, never 500s)."
+        },
+        "head": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "sqlite_sequence.seq for checkpoints \u2014 charged for ignored inserts exactly as for written ones."
+        },
+        "attempts_per_pass": {
+          "type": "integer",
+          "const": 2,
+          "description": "Inserts attempted per checkpointer pass (one per log: identity_events + ledger)."
+        },
+        "attempted_pass_cron": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Cron string the checkpointer is scheduled on (must match wrangler.jsonc triggers.crons)."
+        },
+        "newest_written_id": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max checkpoints[].id among the served newest-written rows (0 when none)."
+        },
+        "ignored_since_newest_written": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "head - newest_written_id: ignored inserts since the newest written row."
+        },
+        "passes_since_newest_written": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "floor(ignored_since_newest_written / attempts_per_pass)."
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "recorded"
+            ],
+            "properties": {
+              "recorded": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "head",
+              "attempts_per_pass",
+              "newest_written_id",
+              "ignored_since_newest_written",
+              "passes_since_newest_written"
+            ]
+          },
+          "else": {
+            "allOf": [
+              {
+                "not": {
+                  "required": [
+                    "head"
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "required": [
+                    "attempts_per_pass"
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "required": [
+                    "newest_written_id"
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "required": [
+                    "ignored_since_newest_written"
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "required": [
+                    "passes_since_newest_written"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
     }
   },
   "$id": "https://1f916.ai/schemas/checkpoint.json"

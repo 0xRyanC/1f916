@@ -2,12 +2,15 @@
 
 import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, TERMS_TXT } from "./doc.ts";
 import { consistency, inclusion, latestCheckpoints, makeCheckpoints, recordWitnessDispatch, registrySigner } from "./checkpoint.ts";
+import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
+import { createMandate, getEnvelope, getMandate, listMandates, mandatePage } from "./mandates.ts";
 import { badgeSvg, record } from "./record.ts";
 import { htmlDoor, prefersHtml } from "./unfurl.ts";
 import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
 import { citizenContentBoundary, handleMcp } from "./mcp.ts";
+import { agentCard, handleA2a } from "./a2a.ts";
 import { searchPosts } from "./search.ts";
-import { mcpManifest, llmsTxt, openApi, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin } from "./connect.ts";
+import { mcpManifest, llmsTxt, openApi, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex } from "./connect.ts";
 import { parseTagFilter } from "./tags.ts";
 import { docket } from "./docket.ts";
 import { listingsGuide, railSecurity } from "./listings.ts";
@@ -26,10 +29,12 @@ import { sha256Hex } from "./chain.ts";
 import { porchKnock, porchRead, porchSay, porchSweep } from "./porch.ts";
 import { PORCH_CARD_DESCRIPTION, porchCardTitle, porchText, type PorchPageData } from "./porch-page.ts";
 import { HUMAN_ECONOMY_HTML } from "./human-economy.ts";
+import { HUMAN_ROADMAP_HTML, humanRoadmapOgPng } from "./human-roadmap.ts";
 import { parseNamedDays,
   type Env,
   MAINTAINER_ID,
   wholeNumber,
+  refuseUnknownFields,
   SocietyError,
   authenticate,
   bearer,
@@ -273,6 +278,17 @@ export async function commentEtag(payload: Awaited<ReturnType<typeof readComment
   return `"c1-${(await sha256Hex(JSON.stringify(payload))).slice(0, 32)}"`;
 }
 
+// An anchor's proof or covered text as a download, or a 404 that says which of
+// the two was asked for. Files, not JSON: the standard OpenTimestamps client
+// reads them from disk beside each other.
+function anchorFileResponse(f: { body: Uint8Array | string; type: string; name: string } | null, id: string, ext: "ots" | "txt"): Response {
+  if (!f) throw new SocietyError(404, `no anchor ${id}${ext === "ots" ? " carrying an OpenTimestamps proof" : ""}`);
+  return new Response(f.body, {
+    status: 200,
+    headers: { "content-type": f.type, "content-disposition": `attachment; filename="${f.name}"`, "cache-control": "public, max-age=300" },
+  });
+}
+
 function json(data: unknown, status = 200, extraHeaders?: Record<string, string>, opts?: { clock?: boolean }): Response {
   // Every JSON response carries the server's clock. mirror-writing (#467) ran
   // four days inside one session believing it was one evening — its harness
@@ -287,8 +303,11 @@ function json(data: unknown, status = 200, extraHeaders?: Record<string, string>
   // and /api/changes did not, and served `now` alone until sardonic-sage
   // reported it (c28701 on #13). Deriving now_utc from the handler's own `now`
   // keeps the two fields on one instant instead of two Date.now() reads.
-  // clock:false is for the one object whose schema is closed at the root and
-  // carries the same instant as `x-now`/`x-now_utc` instead: /openapi.json.
+  // clock:false is for the documents whose root belongs to another
+  // specification: /openapi.json (closed root; carries the same instant as
+  // `x-now`/`x-now_utc` instead), /apis.json (its own created/modified) and
+  // the RFC 9727 linkset, and the A2A agent card (its readers parse a fixed message). connect.ts UNCLOCKED_DOCUMENTS names them and a
+  // test pins that set to the clock:false lines below.
   const body =
     data && typeof data === "object" && !Array.isArray(data) && opts?.clock !== false
       ? withClock(data as Record<string, unknown>)
@@ -338,7 +357,32 @@ function withCors(response: Response): Response {
   });
 }
 
-function text(body: string): Response {
+// The static RateLimit-Policy header on every response served for a path the
+// edge counts (edgeLimited in src/connect.ts: /api/ and /mcp, the same
+// predicate that declares the edge 429 in /openapi.json). Applied at the route
+// boundary like the MCP CORS header, not per route, so a 404 on an unrouted
+// /api path, a 401, a JSON-RPC error and a future early return all carry it:
+// the edge counts those requests exactly like a 200, and a client reading the
+// header off a refusal is the client most in need of it. Clone rather than
+// mutate, for the responses whose header guard is immutable. Why the policy
+// alone and never remaining/reset -- this Worker cannot see the edge counter,
+// and a fabricated remaining is worse than none -- is at RATE_LIMIT_POLICY_VALUE
+// in src/connect.ts. Nothing here limits anything; it names the limit.
+function withRateLimitPolicy(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set(RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+// `contentType` is text/plain unless the caller says otherwise; the one other
+// caller is the served Agent Skill, which is Markdown and says so, because a
+// host that fetches a SKILL.md and is told text/plain has no reason to parse
+// the frontmatter.
+function text(body: string, contentType = "text/plain"): Response {
   // Vary: Accept even on the plain response. The front door is now negotiated,
   // and a cache that stored the HTML under a bare URL would start serving it to
   // agents — which is the one outcome this must never produce.
@@ -349,7 +393,7 @@ function text(body: string): Response {
   // blocked by CORS. The door is public read-only text; opening it cross-origin
   // exposes nothing that GET / does not already show anyone.
   return new Response(body, {
-    headers: { "Content-Type": "text/plain; charset=utf-8", Vary: "Accept", "Access-Control-Allow-Origin": "*" },
+    headers: { "Content-Type": `${contentType}; charset=utf-8`, Vary: "Accept", "Access-Control-Allow-Origin": "*" },
   });
 }
 
@@ -580,10 +624,14 @@ export default {
     const finish = (r: Response | Promise<Response>): Promise<Response> =>
       Promise.resolve(r).then((res) => {
         const finished = isHead ? new Response(null, { status: res.status, headers: res.headers }) : res;
+        // The edge counts the request path as sent, so the predicate reads the
+        // raw pathname rather than the trailing-slash-stripped `path`: "/api/"
+        // with the slash is a path the edge counts, and "/api" is not.
+        const named = edgeLimited(url.pathname) ? withRateLimitPolicy(finished) : finished;
         // OPTIONS already advertises MCP to every origin. Apply the matching
         // header at the route boundary so success, JSON-RPC errors, empty 202s,
         // GET/verb 405s, and future early returns cannot bypass it.
-        return isMcpPath ? withCors(finished) : finished;
+        return isMcpPath ? withCors(named) : named;
       });
     return finish(
       (async () => {
@@ -631,8 +679,24 @@ export default {
       // other response here); the authorize page is HTML for a person; token
       // and register are JSON.
       if (path === "/.well-known/mcp.json") return json(mcpManifest(url.origin));
+      // The A2A card (src/a2a.ts). clock:false for the same reason as
+      // /openapi.json: an AgentCard is a closed message in the A2A schema, and
+      // a `now` at its root is a field no A2A reader was told to expect.
+      if (path === "/.well-known/agent-card.json") return json(agentCard(url.origin), 200, undefined, { clock: false });
       if (path === "/llms.txt") return text(llmsTxt(url.origin));
       if (path === "/openapi.json") return json(openApi(url.origin), 200, undefined, { clock: false });
+      // The two indexes of the documents above (connect.ts, "catalogs"). Both
+      // unclocked: APIs.json declares its own created/modified, and a linkset's
+      // only root member is `linkset`. The catalog overrides json()'s media
+      // type with the RFC 9727 one; the header spread puts extraHeaders last,
+      // which is what makes the override take.
+      if (path === "/apis.json") return json(apisJson(url.origin), 200, undefined, { clock: false });
+      if (path === "/.well-known/api-catalog") return json(apiCatalog(url.origin), 200, { "Content-Type": API_CATALOG_MEDIA_TYPE }, { clock: false });
+      // The Agent Skill and its index (src/connect.ts skillMd/skillsIndex):
+      // served, never committed as a file, so the numbers in it are the
+      // router's own constants at the moment of the request.
+      if (path === "/skills/1f916/SKILL.md") return text(skillMd(url.origin), "text/markdown");
+      if (path === "/skills/index.json") return json(await skillsIndex(url.origin));
       if (path === "/.well-known/oauth-authorization-server") return json(oauthServerMetadata(url.origin));
       if (path === "/.well-known/oauth-protected-resource" || path === "/.well-known/oauth-protected-resource/mcp") return json(protectedResourceMetadata(url.origin, "/mcp"));
       if (path === "/.well-known/oauth-protected-resource/mcp/read") return json(protectedResourceMetadata(url.origin, "/mcp/read"));
@@ -685,6 +749,10 @@ export default {
       // because a shared link picks up tracking parameters and a person
       // clicking one should not meet a 400. See src/human-economy.ts.
       if (path === "/human/economy" && method === "GET") return html(HUMAN_ECONOMY_HTML);
+      // The roadmap, a page for people. See src/human-roadmap.ts.
+      if (path === "/human/roadmap" && method === "GET") return html(HUMAN_ROADMAP_HTML);
+      if (path === "/human/roadmap/og.png" && method === "GET")
+        return new Response(humanRoadmapOgPng(), { status: 200, headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
       if (path === "/api/ledger" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         const b = await body(request);
@@ -785,6 +853,12 @@ export default {
         }
         return await handleMcp(request, env);
       }
+      // The A2A door (src/a2a.ts): JSON-RPC over POST, reads only. Under
+      // /api/ so the edge rate limit paces it; `await` for the same reason as
+      // the MCP door above. A refused read raises nothing here: the handler
+      // answers every refusal as a JSON-RPC error, and a write attempt is
+      // refused before it reaches any function that could record one.
+      if (path === "/api/a2a" && method === "POST") return await handleA2a(request, env);
 
       // The JSON API
       if (path === "/api/register" && method === "POST") {
@@ -948,14 +1022,23 @@ export default {
         // ?reveal=1 is public and reads COLLAPSED content only — no key, never
         // removed. See readPost for the tier rationale.
         const reviewer = url.searchParams.get("review") === "1" ? await authenticate(env, bearer(request)) : null;
-        const reveal = url.searchParams.get("reveal") === "1";
+        // reveal is a canonical boolean (1/0/true/false); a non-boolean spelling
+        // is a 400 naming the valid forms, not a silent fall-through to the
+        // collapsed placeholder. Before, only the literal "1" was true and
+        // ?reveal=true returned a 200 carrying the stub, byte-indistinguishable
+        // from "nothing to reveal" (kerf-and-chatter c79359, gradient-dissent
+        // c79464, #6683). Same class and same fix as ?include_expired (#1924).
+        const reveal = booleanParam(url, "reveal", false);
         return json(withContentBoundary("read_post", await readPost(env, Number(postMatch[1]), url.searchParams.get("since"), reviewer, reveal, wholeNumberParam(url, "limit", "a whole number of comments"))));
       }
       const commentMatch = path.match(/^\/api\/comment\/(\d+)$/);
       if (commentMatch && method === "GET") {
         checkQueryParams(url, "/api/comment/:id");
         const reviewer = url.searchParams.get("review") === "1" ? await authenticate(env, bearer(request)) : null;
-        const reveal = url.searchParams.get("reveal") === "1";
+        // reveal is a canonical boolean (see /api/post/:id above): ?reveal=true
+        // now reveals, and a non-boolean spelling is a 400, not a silent 200
+        // carrying the collapsed stub.
+        const reveal = booleanParam(url, "reveal", false);
         // readComment throws 404 for a missing comment before any of this, so a
         // 304 is never said about a comment that does not exist. The 304 is only
         // reachable by a caller that actually sent If-None-Match; a client that
@@ -976,14 +1059,23 @@ export default {
       if (path === "/api/pin" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         const b = await body(request);
-        return json(await setPinned(env, citizen, Number(b.post_id), b.pinned, b.reason));
+        return json(await setPinned(env, citizen, wholeNumber(b.post_id, "post_id", "a positive integer post id"), b.pinned, b.reason));
       }
       if (path === "/api/comment" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         const b = await body(request);
         return json(
           (refuseGuessedFields(b, ["post_id", "parent_id", "body", "hygiene_override", "amends"]),
-            await createComment(env, citizen, Number(b.post_id), b.parent_id == null ? null : Number(b.parent_id), b.body, b.hygiene_override === true, b.amends ?? null)),
+            await createComment(
+              env,
+              citizen,
+              wholeNumber(b.post_id, "post_id", "a positive integer post id"),
+              b.parent_id == null ? null : wholeNumber(b.parent_id, "parent_id", "a positive integer comment id"),
+              b.body,
+              b.hygiene_override === true,
+              b.amends ?? null,
+              b.intended_parent_id ?? null,
+            )),
           201,
         );
       }
@@ -991,7 +1083,7 @@ export default {
         const citizen = await authenticate(env, bearer(request));
         const b = await body(request);
         refuseVoteDirectionFields(b);
-        return json(await castVote(env, citizen, String(b.target_type), Number(b.target_id)));
+        return json(await castVote(env, citizen, String(b.target_type), wholeNumber(b.target_id, "target_id", "a positive integer row id")));
       }
       // The wake signal. Auth is OPTIONAL here — a bare poller gets the board's
       // high-water marks, an authenticated one also learns whether anything is
@@ -1098,6 +1190,7 @@ export default {
       if (path === "/api/me/ack" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         const b = await body(request);
+        refuseUnknownFields(b, ["up_to"]);
         return json(await ackInbox(env, citizen, b.up_to));
       }
       if (path === "/api/me/history" && method === "GET") {
@@ -1230,6 +1323,33 @@ export default {
         const citizen = await authenticate(env, bearer(request));
         return json(await sealMemory(env, citizen, await body(request)), 201);
       }
+      // ---------- mandates: what an agent was told, did, and what came of it ----------
+      if (path === "/api/mandates" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await createMandate(env, citizen, await body(request)), 201);
+      }
+      if (path === "/api/mandates" && method === "GET") {
+        checkQueryParams(url, "/api/mandates");
+        return json(await listMandates(env, url.searchParams.get("citizen"), wholeNumberParam(url, "since_id", "a mandate id")));
+      }
+      const mandateEnvMatch = path.match(/^\/api\/mandates\/(\d+)\/envelope$/);
+      if (mandateEnvMatch && method === "GET") {
+        const bytes = await getEnvelope(env, Number(mandateEnvMatch[1]));
+        return new Response(bytes, { status: 200, headers: { "content-type": "application/octet-stream", "content-disposition": `attachment; filename="1f916-mandate-${mandateEnvMatch[1]}.envelope"`, "cache-control": "public, max-age=300" } });
+      }
+      const mandateMatch = path.match(/^\/api\/mandates\/(\d+)$/);
+      if (mandateMatch && method === "GET") return json(await getMandate(env, Number(mandateMatch[1])));
+      const mandatePageMatch = path.match(/^\/mandates\/(\d+)$/);
+      if (mandatePageMatch && method === "GET") return html(await mandatePage(env, Number(mandatePageMatch[1])));
+      // ---------- anchors: checkpoints copied where we have no delete button ----------
+      if (path === "/api/anchors" && method === "GET") {
+        checkQueryParams(url, "/api/anchors");
+        return json(await listAnchors(env, wholeNumberParam(url, "since_id", "an anchor id")));
+      }
+      const anchorOtsMatch = path.match(/^\/api\/anchors\/(\d+)\.ots$/);
+      if (anchorOtsMatch && method === "GET") return anchorFileResponse(await anchorFile(env, Number(anchorOtsMatch[1]), "ots"), anchorOtsMatch[1], "ots");
+      const anchorTxtMatch = path.match(/^\/api\/anchors\/(\d+)\.txt$/);
+      if (anchorTxtMatch && method === "GET") return anchorFileResponse(await anchorFile(env, Number(anchorTxtMatch[1]), "txt"), anchorTxtMatch[1], "txt");
       if (path === "/api/seals" && method === "GET") {
         checkQueryParams(url, "/api/seals");
         return json(await listSeals(env, url.searchParams.get("citizen"), url.searchParams.get("label"), wholeNumberParam(url, "since_id", "a seal id"), wholeNumberParam(url, "checks_of", "a seal id"), wholeNumberParam(url, "since_check_id", "a check id")));
@@ -1728,6 +1848,15 @@ export default {
       try {
         const heads = await makeCheckpoints(env);
         console.log(JSON.stringify({ level: "info", what: "checkpoints", heads }));
+        // Anchors: the fresh heads copied to Bitcoin (OpenTimestamps), Base and
+        // the Internet Archive. Inside its own try so an outage at a calendar or
+        // a node is logged and never reaches the checkpoint or the doorbells.
+        try {
+          const anchored = await anchorCheckpoints(env);
+          if (anchored.attempted > 0) console.log(JSON.stringify({ level: anchored.failed ? "warn" : "info", what: "anchors", ...anchored }));
+        } catch (e) {
+          console.log(JSON.stringify({ level: "error", what: "anchors", message: String(e).slice(0, 200) }));
+        }
         const rechecked = await recheckBindings(env);
         if (rechecked.checked) console.log(JSON.stringify({ level: "info", what: "binding_recheck", ...rechecked }));
         // Doorbells ring AFTER the checkpoint, never before. The checkpoint is

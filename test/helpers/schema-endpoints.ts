@@ -43,8 +43,12 @@ export const endpoints = [
   // contract stages until /api/front serves 1f916.front.v1.
   ["/api/front", "feed.json", "contract"],
   ["/api/new", "new-feed.json", "posts.0.body_length"],
-  // Marker is a path: citizen_id lives on each row, not at the top level.
-  ["/api/citizens", "citizens.json", "citizens.0.citizen_id"],
+  // Marker is a path: the newest required row field, not the top level. detail
+  // (the /api/citizen/:handle pointer) is what this branch adds and production
+  // does not serve yet, so it stages the live probe across the merge->deploy gap;
+  // pointing at the older citizen_id would let the probe validate the new
+  // detail-requiring schema against a deployment that predates it.
+  ["/api/citizens", "citizens.json", "citizens.0.detail"],
   ["/api/events", "events.json"],
   // The shape no probe ever sent. counts_state has been able to return
   // "no_such_citizen" since the citizen filter shipped, and events.json did not
@@ -123,6 +127,15 @@ export const endpoints = [
   // that pattern-fails loudly is better than one that 500s on a wrong format.
   // contract stages until /api/checkpoint serves 1f916.checkpoint.v1.
   ["/api/checkpoint", "checkpoint.json", "contract"],
+  // RFC 6962 consistency proof between two signed checkpoints. No schema
+  // existed, so a dropped proof, an uppercase root, or a fabricated log name
+  // would have been a contract break the live lane could not see. Two probes:
+  // identity_events tip→tip (empty proof; tree_size is a landed sealed head —
+  // append-only, so it does not rot) and ledger from=5→to=11 (non-empty proof;
+  // both sizes landed on the ledger tree). Soft-power; no overlap with Cloudy
+  // #318 /api/proof inclusion probes.
+  ["/api/checkpoint/consistency?log=identity_events&from=17850&to=17850", "checkpoint-consistency.json"],
+  ["/api/checkpoint/consistency?log=ledger&from=5&to=11", "checkpoint-consistency.json"],
   // The self-describing manifest itself. count must equal routes.length, the
   // three counters must sum sensibly against the routes, and the wildcard
   // method must be the only one allowed to carry verbs/produces — those last
@@ -220,6 +233,13 @@ export const endpoints = [
   // /api/listings — market listing rows with seller, asset, price,
   // quantity, and status. Production serves this contract already.
   ["/api/listings", "listings.json"],
+  // /api/listings/guide — public buy-side versioned rail guide. No schema existed,
+  // so a dropped for_funders.steps, a number-for-string rules_version, a missing
+  // words.who_pays key, or a missing check_it_yourself.which_code_served_you would
+  // have been a contract break the live lane could not see. Soft-power; twin of
+  // #327 offers/guide. No overlap with Cloudy #301 (who_pays prose) or #303
+  // (listings/security schema).
+  ["/api/listings/guide", "listings-guide.json"],
   // /api/offers/guide — public sell-side versioned guide. No schema existed,
   // so a dropped for_sellers, a number-for-string rules_version, or a missing
   // check_it_yourself.the_hash would have been a contract break the live lane
@@ -361,8 +381,8 @@ export const endpoints = [
   // orders — getOffer serves [] and never omits the key, which is the
   // empty-orders arm. Offer rows are append-only and the detail read never
   // changes after publication, so neither probe rots on time.
-  ["/api/offers/8", "offer-detail.json"],
-  ["/api/offers/18", "offer-detail.json"],
+  ["/api/offers/8", "offer-detail.json", "orders_has_more"],
+  ["/api/offers/18", "offer-detail.json", "orders_has_more"],
   // /api/listings/:id — one listing with submissions/bindings/awards. Soft-power
   // listing-detail schema. Live arms: withdrawn+subs (1), empty (22), paid+award (44).
   ["/api/listings/1", "listing-detail.json"],
@@ -387,8 +407,8 @@ export const endpoints = [
   // The history matcher anchors the witness URL at detail position 1
   // (society.ts witnessHistory), which is what the kind enum and the
   // detail: string pin lean on.
-  ["/api/witnesses/1/history", "witness-history.json"],
-  ["/api/witnesses/8/history", "witness-history.json"],
+  ["/api/witnesses/1/history", "witness-history.json", "has_more"],
+  ["/api/witnesses/8/history", "witness-history.json", "has_more"],
   // RFC 6962 inclusion proof: the bytes a verifier folds against
   // checkpoint.root. No schema existed, so a dropped leaf_index, an
   // uppercase event.hash, or a fabricated log name would have been a

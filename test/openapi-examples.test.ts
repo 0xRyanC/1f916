@@ -41,7 +41,7 @@ import { validate } from "./helpers/json-schema.ts";
 import { DEFERRED_WRITES, ORIGIN, RESPONSE_PROBES, postJson, probe, requestFor, seedExamplesFixture, typedWritePaths } from "./helpers/openapi-examples-fixture.ts";
 import worker from "../src/index.ts";
 import { SURFACE } from "../src/surface.ts";
-import { ABSENT_ID_EXAMPLE_REF, ERROR_SCHEMA, REFUSAL_EXAMPLE_REF } from "../src/connect.ts";
+import { ABSENT_ID_EXAMPLE_REF, ERROR_SCHEMA, ERROR_SCHEMA_REF, REFUSAL_EXAMPLE_REF } from "../src/connect.ts";
 import { ABSENT_ID_EXAMPLE, REFUSAL_EXAMPLE, REQUEST_EXAMPLES, RESPONSE_EXAMPLES } from "../src/openapi-examples.ts";
 
 const schema = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
@@ -111,6 +111,7 @@ test("the document carries every example where a client reads it, and the share 
   let withOwnExample = 0;
   let withAnyExample = 0;
   const unreferenced: string[] = [];
+  const mislabelled: string[] = [];
   for (const [path, ops] of Object.entries(doc.paths)) {
     for (const [verb, op] of Object.entries(ops)) {
       operations++;
@@ -123,7 +124,15 @@ test("the document carries every example where a client reads it, and the share 
           if (/^4\d\d$/.test(status) && media === "application/json") {
             // Only the typed 404 (an allOf extending the envelope with id_class)
             // carries the absent-id example; a plain-miss 404 never serves id_class.
-            const typed = Array.isArray((c as { schema?: { allOf?: unknown } }).schema?.allOf);
+            const schema = (c as { schema?: { allOf?: unknown; $ref?: string } }).schema;
+            const typed = Array.isArray(schema?.allOf);
+            // A body typed as something other than the envelope (the x402 402,
+            // the patron 409, the MCP JSON-RPC 400 / isError 401) must not carry
+            // the envelope's example: it would contradict its own schema.
+            if (!typed && schema?.$ref !== ERROR_SCHEMA_REF) {
+              if (examples.some((e) => e.$ref === REFUSAL_EXAMPLE_REF || e.$ref === ABSENT_ID_EXAMPLE_REF)) mislabelled.push(`${verb.toUpperCase()} ${path} ${status}`);
+              continue;
+            }
             const want = status === "404" && typed ? ABSENT_ID_EXAMPLE_REF : REFUSAL_EXAMPLE_REF;
             if (examples.length === 1 && examples[0].$ref === want) any = true;
             else unreferenced.push(`${verb.toUpperCase()} ${path} ${status}`);
@@ -135,6 +144,7 @@ test("the document carries every example where a client reads it, and the share 
     }
   }
   assert.deepEqual(unreferenced, [], "declared 4xx JSON bodies that do not reference the shared refusal example");
+  assert.deepEqual(mislabelled, [], "non-envelope 4xx bodies (x402 402, patron 409, MCP JSON-RPC) must not carry the envelope's example");
   assert.ok(operations >= 100, `only ${operations} operations; the path scan has drifted`);
   // The rubric grades full credit at half the operations carrying a request
   // or response example. Counted here WITHOUT the by-reference refusal

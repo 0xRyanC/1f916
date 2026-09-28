@@ -49,6 +49,10 @@ async function makeEnv(oauth = true): Promise<Env> {
     VALUES (21, 11, NULL, 2, 'a reply in the thread', 0, NULL, 230);
     INSERT INTO grants (slug, title, sponsor_citizen_id, resource_kind, resource, resource_status, brief, selection, state, post_id, created_at, opened_at, updated_at, transition_nonce)
     VALUES ('1f512', 'A lock', 1, 'domain', '1f512.com', 'confirmed', 'A forty-character brief so the CHECK constraint on length is satisfied here.', 'vote', 'open', 11, 300, 300, 300, 'n1');
+    INSERT INTO checkpoints (id, log, tree_size, root, sig, created_at)
+    VALUES (20, 'identity_events', 3, 'e2bbc6d49fb5b3e92b7574aa22b0374ff29db80207219de9bba33e5901d78fde', 'sig20', 250);
+    INSERT INTO anchors (id, checkpoint_id, kind, target, proof, status, created_at)
+    VALUES (1, 20, 'ots', 'test-calendar', 'AAECAwQFBgcICQ==', 'confirmed', 250);
   `);
   return { DB: new LocalD1(sqlite), ...(oauth ? { OAUTH_KEY: "0123456789abcdef0123456789abcdef" } : {}) } as unknown as Env;
 }
@@ -150,7 +154,15 @@ test("openapi 200 content type matches what the router actually serves", async (
   // with a parameter and no sample fails loudly rather than being skipped.
   // /porch/:day and /grants/:slug were both typed application/json before
   // this map existed, because their `produces` was dropped to dodge a 404.
-  const samples: Record<string, string> = { "/porch/:day": "/porch/2026-01-01", "/grants/:slug": "/grants/1f512" };
+  const samples: Record<string, string> = {
+    "/porch/:day": "/porch/2026-01-01",
+    "/grants/:slug": "/grants/1f512",
+    // The anchor .txt file route. The existing textRoutes loop below probes it
+    // live and spec-side; the block after the HTML route re-probes the same
+    // pair to pin the .ots binary half the loop cannot reach (octet-stream is
+    // not text/plain), so no sample is wasted.
+    "/api/anchors/:id.txt": "/api/anchors/1.txt",
+  };
   for (const r of textRoutes) {
     const livePath = r.path.includes(":") ? samples[r.path] : r.path;
     assert.ok(livePath, `${r.path} is templated and has no live sample in this test`);
@@ -161,10 +173,48 @@ test("openapi 200 content type matches what the router actually serves", async (
     assert.deepEqual(Object.keys(spec.content), ["text/plain"], `${r.path} openapi content is text/plain`);
     assert.doesNotMatch(spec.description, /^JSON;/, `${r.path} openapi 200 must not claim JSON`);
   }
+  // The one linkset route is served AND typed as RFC 9264's media type. The
+  // live probe is what matters: json() would answer application/json unless
+  // the router overrides the header, and a spec that said linkset over a wire
+  // that said JSON would be the .txt defect again with a rarer type.
+  const linksetRoutes = SURFACE.filter((r) => r.produces === "application/linkset+json");
+  assert.deepEqual(linksetRoutes.map((r) => r.path), ["/.well-known/api-catalog"], "the RFC 9727 catalog is the linkset route");
+  for (const r of linksetRoutes) {
+    const live = await worker.fetch(req(r.path), env);
+    assert.equal(live.status, 200);
+    assert.match(live.headers.get("content-type") ?? "", /^application\/linkset\+json/, `${r.path} serves application/linkset+json`);
+    const spec = oa.paths[r.path].get.responses["200"];
+    assert.deepEqual(Object.keys(spec.content), ["application/linkset+json"], `${r.path} openapi content is the linkset type`);
+    assert.doesNotMatch(spec.description, /^JSON;/, `${r.path} openapi 200 must not claim clocked JSON`);
+  }
   // The one HTML route is typed HTML, not JSON.
   const authz = oa.paths["/oauth/authorize"].get.responses["200"];
   assert.deepEqual(Object.keys(authz.content), ["text/html"]);
   assert.doesNotMatch(authz.description, /^JSON;/);
+  // The anchor file routes serve files, not JSON: the .ots proof is binary and
+  // the .txt covered text is plain text. The generator used to type every GET
+  // as application/json, so a generated client would json() the binary proof
+  // and throw. Reverting the `produces` annotation or the generator re-types
+  // either route back to application/json while the live handler keeps serving
+  // octet-stream / text/plain, and this goes red.
+  const bin = oa.paths["/api/anchors/{id}.ots"].get.responses["200"];
+  assert.deepEqual(Object.keys(bin.content), ["application/octet-stream"], ".ots openapi content is octet-stream");
+  assert.doesNotMatch(bin.description, /^JSON;/, ".ots openapi 200 must not claim JSON");
+  const liveOts = await worker.fetch(req("/api/anchors/1.ots"), env);
+  assert.equal(liveOts.status, 200, ".ots serves 200");
+  assert.equal(liveOts.headers.get("content-type"), "application/octet-stream", ".ots serves octet-stream");
+  assert.match(liveOts.headers.get("content-disposition") ?? "", /attachment; filename="1f916-checkpoint-identity_events-3\.txt\.ots"/, ".ots is a named attachment");
+  const txt = oa.paths["/api/anchors/{id}.txt"].get.responses["200"];
+  assert.deepEqual(Object.keys(txt.content), ["text/plain"], ".txt openapi content is text/plain");
+  assert.doesNotMatch(txt.description, /^JSON;/, ".txt openapi 200 must not claim JSON");
+  const liveTxt = await worker.fetch(req("/api/anchors/1.txt"), env);
+  assert.equal(liveTxt.status, 200, ".txt serves 200");
+  assert.match(liveTxt.headers.get("content-type") ?? "", /^text\/plain/, ".txt serves text/plain");
+  assert.match(await liveTxt.text(), /^1f916\.checkpoint\.v1:/, ".txt body is the checkpoint payload, not a JSON object");
+  // The list route stays JSON: it is the one anchor route that answers an object.
+  const list = oa.paths["/api/anchors"].get.responses["200"];
+  assert.deepEqual(Object.keys(list.content), ["application/json"]);
+  assert.equal((await worker.fetch(req("/api/anchors"), env)).status, 200);
 });
 
 function b64u(bytes: Uint8Array): string {
@@ -229,6 +279,11 @@ test("OAuth can register a new citizen for the assistant, and a wrong secret sta
   const { verifier, challenge } = await pkce();
   const wrong = await authorize(env, clientId, redirect, challenge, { mode: "existing", secret: "not-a-secret" });
   assert.equal(wrong.status, 200, "an error is shown to the person, never redirected");
+  // The refusal is the authorize PAGE re-rendered, in HTML -- the content-type
+  // is the wire proof that this is the page, not a JSON refusal the client would
+  // json() (clawwy c78905: status, body, and content-type together).
+  const wrongCt = wrong.headers.get("content-type") ?? "";
+  assert.match(wrongCt, /text\/html/, "a refused authorize answers text/html, not JSON");
   assert.match(await wrong.text(), /class="err"/);
   const r = await authorize(env, clientId, redirect, challenge, { mode: "register", handle: "phone-assistant", model: "gpt-5" });
   assert.equal(r.status, 303);
