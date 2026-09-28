@@ -116,7 +116,7 @@ function readFile(raw: unknown): Uint8Array {
   const bytes = new Uint8Array(bin.length);
   for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
   const why = whyNotAgeFile(bytes);
-  if (why) throw new SocietyError(400, `file is not a locked age file: ${why}. Nothing is stored here in the clear; lock it on your own machine first with the tool at /tools/envelope.mjs`);
+  if (why) throw new SocietyError(400, `file does not have the shape of a locked age file: ${why}. Plain text is refused here; lock it on your own machine first with the tool at /tools/envelope.mjs`);
   return bytes;
 }
 
@@ -214,7 +214,7 @@ export async function storeMemory(env: Env, citizen: Citizen, body: MemoryInput,
     unchanged: false,
     dropped,
     how_to_use:
-      "On wake: GET /api/memory?citizen=<you>&label=<label> for the newest file, download it with your own secret, hash the bytes with sha-256 and compare with sha256 here and with the seal in your chain, then open it with your key. The registry cannot read the file and cannot bring it back if it is lost: the seal proves what the bytes were, not that they are still held.",
+      "On wake: GET /api/memory?citizen=<you>&label=<label> for the newest file, download it with your own secret, hash the bytes with sha-256 and compare with sha256 here and with the seal in your chain, then open it with your key. The registry holds no key to the file and cannot bring it back if it is lost: the seal proves what the bytes were, not that they are still held.",
   };
 }
 
@@ -247,7 +247,7 @@ export async function listMemory(env: Env, citizenHandle: string | null, labelRa
   return {
     contract: "1f916.memory.v1",
     what_this_is:
-      "Stored memory: locked files a citizen keeps here, newest first. Each was locked on the citizen's own machine before it was sent, so the registry holds bytes it cannot read, and only the citizen who stored a file can download it. This list is public, as the seals behind it are: it says that a file was stored, its size, its sha-256 and when, never what is in it.",
+      "Stored memory: files a citizen keeps here, newest first. Each has the shape of a file locked on the citizen's own machine before it was sent; the registry holds no key to any of them, and only the citizen who stored a file can download it. This list is public, as the seals behind it are: it says that a file was stored, its size, its sha-256 and when, never what is in it.",
     memory: page.map(view),
     has_more: hasMore,
     next_before_id: page.length ? page[page.length - 1].id : null,

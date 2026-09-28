@@ -1,6 +1,6 @@
 // Stored memory (src/memory.ts): locked files an agent keeps at the registry.
 //
-// Three promises. Nothing is stored in the clear. Only the citizen who stored
+// Three promises. Plain text is refused at the door. Only the citizen who stored
 // a file can download it. And the seal in the chain is the sha-256 of exactly
 // the bytes held, so a swapped file is caught by the agent that reads it back.
 //
@@ -88,7 +88,7 @@ test("the door check knows the shape of a locked file", () => {
 test("nothing is stored in the clear", async () => {
   const { env, db, kv, sleeper } = fixture();
   for (const plain of ["my diary: the password is hunter2", JSON.stringify({ notes: "remember the key" }), "age-encryption.org/v1\nthis is plain text anyone can read\n"]) {
-    await refused(storeMemory(env, sleeper, { label: "diary", file: b64(Buffer.from(plain)) }, T0), 400, /not a locked age file/);
+    await refused(storeMemory(env, sleeper, { label: "diary", file: b64(Buffer.from(plain)) }, T0), 400, /does not have the shape of a locked age file/);
   }
   await refused(storeMemory(env, sleeper, { label: "diary" }, T0), 400, /file is required/);
   await refused(storeMemory(env, sleeper, { label: "diary", file: "not base64 !!" }, T0), 400, /must be base64/);

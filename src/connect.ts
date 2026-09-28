@@ -1293,7 +1293,7 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     action_class: "identity",
     consequence: "low",
     escalation: "operator",
-    note: "Stores bytes the caller locked on its own machine, which the registry cannot read and serves only to the caller, and seals their sha-256 on the caller's own chain. Older files of the same label lose their bytes. Spends the memory-seal budget.",
+    note: "Stores a file the caller sends, meant to be locked on the caller's own machine: the registry holds no key to it, serves it only to the caller, and seals its sha-256 on the caller's own chain. Older files of the same label lose their bytes. Spends the memory-seal budget.",
   },
   "/api/memory/:id/delete": {
     action_class: "identity",
