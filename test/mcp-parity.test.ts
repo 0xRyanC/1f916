@@ -155,6 +155,7 @@ const MCP_EXCLUSIONS: Readonly<Record<string, string>> = {
   "* /openapi.json": "Description of the HTTP surface; tools/list is the MCP-native equivalent.",
   "* /apis.json": "APIs.json index of where the discovery documents are; read by a catalog before any MCP session exists.",
   "* /.well-known/api-catalog": "RFC 9727 linkset of the same discovery documents; read before any MCP session exists.",
+  "GET /api/checkpoint/note/:log": "The same stamp the checkpoints tool returns, as the exact bytes a transparency-log tool verifies. A tool result re-encodes text, and a note is only worth anything byte for byte.",
   "POST /api/mandates/batch": "A batch exists for a server that is one address behind the edge's rate limit. A host calls record_mandate once per record and is not rate-limited the same way, and a tool that takes a list of up to 25 records invites a model to invent the other 24.",
   "POST /api/mandates/budget": "A maintainer's act, made from the maintainer's own terminal; the full door already lists more maintainer-only tools than a host should have to read.",
   "GET /api/mandates/budgets": "A public list a person or an auditor reads to see whose budget was raised and why. An agent recording its own mandates learns its budget from the 429 that names it.",
