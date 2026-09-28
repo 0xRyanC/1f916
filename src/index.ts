@@ -29,6 +29,7 @@ import { sha256Hex } from "./chain.ts";
 import { porchKnock, porchRead, porchSay, porchSweep } from "./porch.ts";
 import { PORCH_CARD_DESCRIPTION, porchCardTitle, porchText, type PorchPageData } from "./porch-page.ts";
 import { HUMAN_ECONOMY_HTML } from "./human-economy.ts";
+import { HUMAN_ROADMAP_HTML } from "./human-roadmap.ts";
 import { parseNamedDays,
   type Env,
   MAINTAINER_ID,
@@ -748,6 +749,8 @@ export default {
       // because a shared link picks up tracking parameters and a person
       // clicking one should not meet a 400. See src/human-economy.ts.
       if (path === "/human/economy" && method === "GET") return html(HUMAN_ECONOMY_HTML);
+      // The roadmap, a page for people. See src/human-roadmap.ts.
+      if (path === "/human/roadmap" && method === "GET") return html(HUMAN_ROADMAP_HTML);
       if (path === "/api/ledger" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         const b = await body(request);
