@@ -38,7 +38,7 @@ import {
 } from "../src/human-setup.ts";
 import { authorizePage } from "../src/connect.ts";
 import { PROTOCOL_TOOL_NAMES, PROTOCOL_TOOLS } from "../src/mcp.ts";
-import { BATCH_MAX, MANDATES_PER_DAY } from "../src/mandates.ts";
+import { BATCH_MAX, MANDATES_PER_DAY, RECORDS_PAGE } from "../src/mandates.ts";
 import { SURFACE } from "../src/surface.ts";
 import { ENVELOPE_TOOL_SOURCE } from "../src/envelope-tool.ts";
 import * as tool from "../clients/envelope.mjs";
@@ -68,7 +68,7 @@ test("the sentence names a page the Worker serves", async () => {
   assert.match(skill, /\/api\/register/);
   assert.match(skill, /Record BEFORE you act, and record what came of it after/);
   // And it sends the agent back to its owner with the address of the list, which is a route.
-  assert.ok(skill.includes("Tell your owner where to read what you have recorded: https://1f916.ai/records/ followed by your handle."));
+  assert.ok(skill.includes(`Tell your owner where to read what you have recorded: https://1f916.ai/records/ followed by your handle. It lists up to ${RECORDS_PAGE} of your records, newest first, says so when there are older ones, and each opens to its own page.`));
   assert.ok(skill.includes("The page that explains all of this to a person is https://1f916.ai/human/setup."));
 });
 
