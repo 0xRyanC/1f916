@@ -456,6 +456,18 @@ export async function listMandates(env: Env, citizenHandle: string | null, since
   };
 }
 
+// One whole sentence per case, never one sentence assembled from parts. The
+// assembled version shipped to audit saying "so it can be changed afterwards
+// either" for a record with only one of the two: the negation lived in the
+// word "neither" and the single case had no word to carry it (deploy audit,
+// 2026-09-28). Four cases, four strings, each pinned in the test.
+export function sealedExtras(hasSubject: boolean, isSigned: boolean): string {
+  if (hasSubject && isSigned) return " The same line carries the fingerprint of the label it was recorded for and the fingerprint of the recorder's signature, so neither of those can be changed afterwards.";
+  if (hasSubject) return " The same line carries the fingerprint of the label it was recorded for, so that label cannot be changed afterwards.";
+  if (isSigned) return " The same line carries the fingerprint of the recorder's signature, so that signature cannot be changed afterwards.";
+  return "";
+}
+
 function esc(t: unknown): string {
   return String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
 }
@@ -492,7 +504,7 @@ export async function mandatePage(env: Env, id: number): Promise<string> {
     (m.envelope ? `<h2>Sealed envelope</h2><p class="dim">${esc(m.envelope_bytes)} bytes stored here exactly as the owner sent them; the registry does not interpret them, so they stay private only if the owner encrypted them. <a href="${esc(m.envelope as string)}">Download</a>.</p>` : "") +
     `<h2>Why this cannot have been changed</h2><ol class="chain">` +
     `<li>The ${m.outcome_hash ? "three" : added ? "first two" : "two"} fingerprints above were combined into one: sha-256 of <code>${esc(m.commit_payload)}</code> = <code>${esc(m.commit)}</code>.` +
-    (m.subject || m.signed ? ` The same line carries ${m.subject ? "the fingerprint of the label it was recorded for" : ""}${m.subject && m.signed ? " and " : ""}${m.signed ? "the fingerprint of the recorder's signature" : ""}, so ${m.subject && m.signed ? "neither" : "it"} can be changed afterwards either.` : "") +
+    sealedExtras(Boolean(m.subject), Boolean(m.signed)) +
     `</li>` +
     `<li>That fingerprint was sealed into the agent's chain as seal ${esc((m.seal as Record<string, unknown>).id)}` + (m.event_id ? `, chain event ${esc(m.event_id)}` : "") + `, at the time above. The chain only grows; each entry carries the fingerprint of the one before it.</li>` +
     (added

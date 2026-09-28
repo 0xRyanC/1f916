@@ -16,6 +16,8 @@
 //   S7  drop the subject's shape check                             -> "a subject is a short plain label"
 //   S8  drop `AND m.subject = ?` from the filtered list            -> "listing by subject returns that subject's records and nobody else's"
 //   S9  allow subject= without citizen=                            -> "a subject means something only beside its recorder"
+//   S10 lose the negation in a single-field sentence               -> "the page says what cannot be changed, in each of the four cases"
+//       (this is the defect the deploy audit found: the suite was green while the page said "it can be changed")
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -23,7 +25,7 @@ import { fileURLToPath } from "node:url";
 import { generateKeyPairSync, sign as edSign } from "node:crypto";
 import worker from "../src/index.ts";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
-import { createMandate, getMandate, listMandates, mandatePage, sha256Hex, commitPayload, commitPayloadV2, mandateSigMessage, addOutcome } from "../src/mandates.ts";
+import { createMandate, getMandate, listMandates, mandatePage, sealedExtras, sha256Hex, commitPayload, commitPayloadV2, mandateSigMessage, addOutcome } from "../src/mandates.ts";
 import { SocietyError, type Env, type Citizen } from "../src/society.ts";
 
 const SCHEMA = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
@@ -199,10 +201,10 @@ test("the page and the wire carry both, and an unsigned plain record's page is u
   const page = await mandatePage(env, signed.id);
   assert.match(page, /Recorded for <code>wallet:0xabc<\/code>/);
   assert.match(page, /Signed by the recorder&#39;s key <code>thumb-page<\/code>|Signed by the recorder's key <code>thumb-page<\/code>/);
-  assert.match(page, /neither can be changed afterwards either/);
+  assert.ok(page.includes(sealedExtras(true, true)));
   const plain = await createMandate(env, bank, { instruction: "a", action: "b", public: true }, T0 + 1);
   const plainPage = await mandatePage(env, plain.id);
-  assert.doesNotMatch(plainPage, /Recorded for|Signed by the recorder|can be changed afterwards either/);
+  assert.doesNotMatch(plainPage, /Recorded for|Signed by the recorder|changed afterwards/);
 
   // Over HTTP: the query parameter is accepted, and an unknown one is still refused.
   const get = (path: string) => worker.fetch(new Request(`https://1f916.ai${path}`), env);
@@ -211,4 +213,40 @@ test("the page and the wire carry both, and an unsigned plain record's page is u
   assert.deepEqual(((await ok.json()) as { mandates: { id: number }[] }).mandates.map((r) => r.id), [signed.id]);
   assert.equal((await get("/api/mandates?subject=wallet:0xabc")).status, 400);
   assert.equal((await get("/api/mandates?citizen=bank&subjekt=x")).status, 400);
+});
+
+test("the page says what cannot be changed, in each of the four cases", async () => {
+  // The four sentences, pinned as literals. Every one that speaks of change denies it.
+  assert.equal(sealedExtras(false, false), "");
+  assert.equal(sealedExtras(true, false), " The same line carries the fingerprint of the label it was recorded for, so that label cannot be changed afterwards.");
+  assert.equal(sealedExtras(false, true), " The same line carries the fingerprint of the recorder's signature, so that signature cannot be changed afterwards.");
+  assert.equal(sealedExtras(true, true), " The same line carries the fingerprint of the label it was recorded for and the fingerprint of the recorder's signature, so neither of those can be changed afterwards.");
+  for (const [a, b] of [[true, false], [false, true], [true, true]] as const) {
+    assert.match(sealedExtras(a, b), /cannot be changed|neither of those can be changed/);
+    assert.doesNotMatch(sealedExtras(a, b), /so (it|that label|that signature) can be changed/);
+  }
+
+  // And each case as the page actually renders it, under "Why this cannot have been changed".
+  const { env, bank, bindKey } = fixture();
+  const k = keypair();
+  bindKey(1, k.publicKey, "thumb-cases");
+  const ih = await sha256Hex("told");
+  const ah = await sha256Hex("did");
+  const subjectOnly = await createMandate(env, bank, { instruction: "told", action: "did", public: true, subject: "user:one" }, T0);
+  const signedOnly = await createMandate(env, bank, { instruction: "told", action: "did", public: true, signature: k.sign(mandateSigMessage("bank", ih, ah, null, null)) }, T0 + 1);
+  const both = await createMandate(env, bank, { instruction: "told", action: "did", public: true, subject: "user:two", signature: k.sign(mandateSigMessage("bank", ih, ah, null, await sha256Hex("user:two"))) }, T0 + 2);
+  const neither = await createMandate(env, bank, { instruction: "told", action: "did", public: true }, T0 + 3);
+  const esc = (t: string) => t.replace(/'/g, "&#39;");
+  const cases: [number, boolean, boolean][] = [[subjectOnly.id, true, false], [signedOnly.id, false, true], [both.id, true, true], [neither.id, false, false]];
+  for (const [id, hasSubject, isSigned] of cases) {
+    const page = await mandatePage(env, id);
+    const want = sealedExtras(hasSubject, isSigned);
+    if (want) assert.ok(page.includes(want) || page.includes(esc(want)), `mandate ${id}: the page does not carry "${want.trim()}"`);
+    const said = page.match(/The same line carries[^<]*/g) ?? [];
+    assert.equal(said.length, want ? 1 : 0, `mandate ${id}: ${said.length} such sentences`);
+    for (const sentence of said) {
+      assert.doesNotMatch(sentence, /so (it|that label|that signature) can be changed/, `mandate ${id} tells the reader the record can be changed`);
+      assert.match(sentence, /cannot be changed|neither of those can be changed/);
+    }
+  }
 });
