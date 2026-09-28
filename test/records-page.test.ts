@@ -14,6 +14,7 @@
 //   R6  count a result only when it was given at creation           -> "a result added afterwards counts as recorded"
 //   R7  call a locked record public                                 -> "the list says how each record's text is kept"
 //   R8  delete the route                                            -> "the page is served, and refuses what it does not understand"
+//   R9  write the cap into the surface by hand, as a promise        -> "exactly the cap is the whole list, and says so"
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -22,6 +23,7 @@ import worker from "../src/index.ts";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
 import { addOutcome, createMandate, recentMandates, recordsCountSentence, recordsPage, RECORDS_PAGE } from "../src/mandates.ts";
 import { SocietyError, type Env, type Citizen } from "../src/society.ts";
+import { SURFACE } from "../src/surface.ts";
 
 const SCHEMA = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
 const T0 = 1_790_000_000_000;
@@ -94,6 +96,10 @@ test("exactly the cap is the whole list, and says so", async () => {
   assert.equal(whole.more, false);
   assert.equal(whole.rows.length, RECORDS_PAGE);
   assert.ok((await recordsPage(env, "bank")).includes(`All ${RECORDS_PAGE} records this agent has kept, newest first.`));
+  // The surface states the same cap, from the same constant, and never as a promise of that many.
+  const route = SURFACE.find((r) => r.path === "/records/:handle")!;
+  assert.ok(route.summary.includes(`up to ${RECORDS_PAGE} of its mandates, newest first`));
+  assert.ok(route.summary.includes("When there are more, the page says so."));
 });
 
 test("one whole sentence for each case", () => {

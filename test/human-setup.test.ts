@@ -15,6 +15,7 @@
 //   U6  write a figure by hand that the handler does not enforce   -> "the figures are the ones the handlers enforce"
 //   U7  link an outside site                                       -> "the page names no site but this one"
 //   U8  rename a command the page tells the owner to run           -> "the commands are ones the tool has"
+//   U9  show record 9, which holds no locked text, being opened    -> "the commands are ones the tool has"
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -77,7 +78,7 @@ test("the sentence is the one that was tested", () => {
 test("the chat-app address carries record keeping only", async () => {
   const { env } = sqliteTestEnv(schema);
   assert.ok(HUMAN_SETUP_HTML.includes(`<code id="door">${SETUP_ORIGIN}${SETUP_DOOR_PATH}</code>`));
-  assert.match(HUMAN_SETUP_HTML, /Through it the assistant cannot post, comment or vote\./);
+  assert.match(HUMAN_SETUP_HTML, /This address carries only the tools for keeping records and checking them\. Through it the assistant cannot post, comment or vote\./);
   for (const name of ["post", "comment", "vote"]) {
     assert.ok(!PROTOCOL_TOOL_NAMES.has(name), `${name} is not a protocol tool`);
     assert.ok(!PROTOCOL_TOOLS.some((t) => t.name === name), `${name} is not offered at the protocol door`);
@@ -97,7 +98,7 @@ test("the chat-app steps quote our own authorize page", () => {
 
 test("the figures are the ones the handlers enforce", () => {
   assert.ok(HUMAN_SETUP_HTML.includes(`up to ${BATCH_MAX} can be sent in one request`));
-  assert.ok(HUMAN_SETUP_HTML.includes(`An account may make ${MANDATES_PER_DAY.toLocaleString("en-US")} records in any rolling day.`));
+  assert.ok(HUMAN_SETUP_HTML.includes(`An account may make ${MANDATES_PER_DAY.toLocaleString("en-US")} records in any rolling day, unless another limit has been set for it.`));
   // Every number in the two sentences that state a limit is one of those two.
   const limits = HUMAN_SETUP_HTML.match(/<h2>One account for many agents<\/h2>(.*?)<h2>/s)![1].replace(/<[^>]+>/g, " ");
   const figures = [...limits.matchAll(/\b\d[\d,]*\b/g)].map((m) => Number(m[0].replace(/,/g, "")));
@@ -131,7 +132,8 @@ test("every link on the page is a route, not a guess", async () => {
 
 test("the commands are ones the tool has", () => {
   assert.deepEqual(SETUP_KEY_COMMANDS, ["curl -s https://1f916.ai/tools/envelope.mjs -o envelope.mjs", "node envelope.mjs keygen -o key.txt"]);
-  assert.equal(SETUP_READ_COMMAND, "node envelope.mjs read 9 --key key.txt");
+  assert.equal(SETUP_READ_COMMAND, "node envelope.mjs read 12 --key key.txt");
+  assert.ok(HUMAN_SETUP_HTML.includes("To read a record later, with its number in place of 12:"), "the number in the command is an example and the page says so");
   for (const c of [...SETUP_KEY_COMMANDS, SETUP_READ_COMMAND]) assert.ok(HUMAN_SETUP_HTML.includes(c), c);
   // The served tool answers to the commands and the flags the page uses.
   for (const cmd of ["keygen", "read"]) assert.ok(ENVELOPE_TOOL_SOURCE.includes(`cmd === "${cmd}"`), cmd);
