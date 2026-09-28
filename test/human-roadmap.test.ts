@@ -33,6 +33,9 @@ test("GET /human/roadmap serves the page as HTML, query strings ignored", async 
 
 test("the figures are a dated snapshot and the page says so; it fetches nothing", () => {
   assert.match(HUMAN_ROADMAP_HTML, /Measured 28 September 2026/);
+  // One date only: the page once carried a second, older one in its closing note.
+  const dates = new Set([...HUMAN_ROADMAP_HTML.matchAll(/[Mm]easured (\d+ \w+ 2026)/g)].map((m) => m[1]));
+  assert.deepEqual([...dates], ["28 September 2026"]);
   assert.ok(!/fetch\(/.test(HUMAN_ROADMAP_HTML), "the page makes no request of its own");
   assert.ok(!/noindex/.test(HUMAN_ROADMAP_HTML), "a published page is not hidden from search");
 });
