@@ -20,6 +20,7 @@ import { b64urlDecode, b64urlEncode } from "./keys.ts";
 import { consistencyProof, inclusionProof, merkleRoot } from "./merkle.ts";
 import { SocietyError, type Env } from "./society.ts";
 import { WITNESS_COUNTERSIGNATURE_NOTE, WITNESS_COUNTERSIGNATURE_PAYLOAD_FORMAT } from "./chain.ts";
+import { NOTE_KEY_NAME, checkpointBody, formatNote, noteKeyId, originOf, verifierKey } from "./note.ts";
 
 export const CHECKPOINT_PAYLOAD_PREFIX = "1f916.checkpoint.v1";
 const LOGS = ["identity_events", "ledger"] as const;
@@ -267,11 +268,44 @@ export async function latestCheckpoints(env: Env) {
     countersignature_payload_format: WITNESS_COUNTERSIGNATURE_PAYLOAD_FORMAT,
     countersignature_note: WITNESS_COUNTERSIGNATURE_NOTE,
     checkpoints: rows,
+    note: await noteFacts(env),
     checkpoint_sequence: checkpointSequenceView(sequenceHead, rows),
     leaves_are: "the sealed rows' `hash` column values (lowercase hex, as UTF-8 bytes), in id order — the same hashes the linear chain and GET /api/attest already publish",
     tree: "RFC 6962: leaf = SHA-256(0x00 || leaf), node = SHA-256(0x01 || l || r)",
     how_to_verify:
       "Check sig over the payload format above with registry_public_key. Then GET /api/proof?log=&event= for inclusion, /api/checkpoint/consistency?log=&from=&to= for append-only-ness. The witness records checkpoints at github.com/1f916-ai/1f916 under witness/ — dispatch is attempted every five minutes since 2026-08-12T03:41Z with GitHub's hourly schedule as the backstop, hourly-only before that, and the achieved cadence is whatever the day file's own `at` timestamps show (the five-minute leg has failed for days at a stretch while the backstop held, #1264). Compare roots there before believing ours.",
+  };
+}
+
+// One stamp, said again in the format the certificate logs use (src/note.ts).
+// It states nothing the stamp did not already state: the log, the size and the
+// root are read from the stored row the registry signed when it made the stamp,
+// and the same key signs them here. Ed25519 is deterministic, so the same row
+// always yields the same note. The stamp's own time is not in the note, because
+// the format has no line for it; it stays in the stamp at GET /api/checkpoint.
+export async function checkpointNote(env: Env, logParam: string | null, sizeParam: number | undefined): Promise<string> {
+  const log = assertLog(logParam);
+  const wanted = typeof sizeParam === "number" && Number.isFinite(sizeParam) ? sizeParam : null;
+  const row =
+    wanted === null
+      ? await env.DB.prepare("SELECT tree_size, root FROM checkpoints WHERE log = ? ORDER BY id DESC LIMIT 1").bind(log).first<{ tree_size: number; root: string }>()
+      : await env.DB.prepare("SELECT tree_size, root FROM checkpoints WHERE log = ? AND tree_size = ?").bind(log, wanted).first<{ tree_size: number; root: string }>();
+  if (!row) throw new SocietyError(404, wanted === null ? `no checkpoint yet for log ${log}` : `no checkpoint at tree_size=${wanted} for log ${log}; a note exists only for a size a stamp landed on`);
+  const body = checkpointBody(originOf(log), row.tree_size, row.root);
+  const pub = b64urlDecode(await checkedPublicKey(env));
+  const signature = b64urlDecode(await signPayload(env, body));
+  return formatNote(body, NOTE_KEY_NAME, await noteKeyId(NOTE_KEY_NAME, pub), signature);
+}
+
+export async function noteFacts(env: Env) {
+  const pub = b64urlDecode(await checkedPublicKey(env));
+  return {
+    format: "A signed note whose text is a checkpoint, as the transparency logs publish them (C2SP signed-note and tlog-checkpoint): origin, tree size, base64 root, a blank line, then the signature line.",
+    key_name: NOTE_KEY_NAME,
+    verifier_key: await verifierKey(NOTE_KEY_NAME, pub),
+    origins: Object.fromEntries(LOGS.map((l) => [l, originOf(l)])),
+    url: "/api/checkpoint/note/<log>",
+    same_key: "The note is signed by the same registry key as the stamp above, over the same log, size and root.",
   };
 }
 

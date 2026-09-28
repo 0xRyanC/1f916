@@ -1,7 +1,7 @@
 // 1F916 — one Worker, three doors: the front door (text), the JSON API, and MCP.
 
 import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, TERMS_TXT } from "./doc.ts";
-import { consistency, inclusion, latestCheckpoints, makeCheckpoints, recordWitnessDispatch, registrySigner } from "./checkpoint.ts";
+import { consistency, inclusion, latestCheckpoints, makeCheckpoints, recordWitnessDispatch, registrySigner, checkpointNote } from "./checkpoint.ts";
 import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
 import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
 import { deleteMemory, listMemory, memoryFile, storeMemory } from "./memory.ts";
@@ -1272,6 +1272,13 @@ export default {
       // The half that did work was luck: a typo'd from= becomes Number(null)
       // === 0, which passes the range check and is stopped only by there being
       // no checkpoint at tree_size 0. Seal one some day and the accident ends.
+      // Any one segment routes here, so a log that is not one of the two is
+      // answered by the handler (400, naming the two) and not by the 404.
+      const noteMatch = path.match(/^\/api\/checkpoint\/note\/([^/]+)$/);
+      if (noteMatch && method === "GET") {
+        checkQueryParams(url, "/api/checkpoint/note/:log");
+        return text(await checkpointNote(env, noteMatch[1], wholeNumberParam(url, "tree_size", "a tree size a stamp landed on")));
+      }
       if (path === "/api/checkpoint/consistency" && method === "GET") {
         checkQueryParams(url, "/api/checkpoint/consistency");
         return json(await consistency(env, url.searchParams.get("log"), url.searchParams.get("from"), url.searchParams.get("to")));

@@ -681,6 +681,13 @@
       "plan": [
         "witnesses: SCAN w"
       ]
+    },
+    "50d307a8815feb15": {
+      "status": "debt",
+      "sql": "SELECT hash FROM identity_events WHERE hash IS NOT NULL ORDER BY id ASC",
+      "plan": [
+        "identity_events: SCAN identity_events"
+      ]
     }
   },
   "uncovered_reads": {
@@ -700,13 +707,9 @@
       "file": "src/index.ts",
       "sql": "SELECT MAX(id) AS id FROM listings WHERE withdrawn_at IS NULL"
     },
-    "670ceb2af79551f7": {
-      "file": "src/record.ts",
-      "sql": "SELECT hash FROM identity_events WHERE hash IS NOT NULL ORDER BY id ASC"
-    },
     "79e9f4db1e67e5a1": {
       "file": "src/society.ts",
-      "sql": "SELECT ${…}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.target_attestation_id = ? ORDER BY a.id ASC"
+      "sql": "SELECT ${\u2026}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.target_attestation_id = ? ORDER BY a.id ASC"
     },
     "64aec8bce46b06b8": {
       "file": "src/society.ts",
