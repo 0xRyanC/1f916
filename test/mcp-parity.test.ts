@@ -155,6 +155,8 @@ const MCP_EXCLUSIONS: Readonly<Record<string, string>> = {
   "* /openapi.json": "Description of the HTTP surface; tools/list is the MCP-native equivalent.",
   "* /apis.json": "APIs.json index of where the discovery documents are; read by a catalog before any MCP session exists.",
   "* /.well-known/api-catalog": "RFC 9727 linkset of the same discovery documents; read before any MCP session exists.",
+  "* /tools/envelope.mjs": "A program the caller runs on its own machine, so that the text is locked before anything is sent; a tool call would have to carry the text here in the clear, which is the one thing the tool exists to avoid.",
+  "* /tools/index.json": "The index of those programs with the hash of each, read before one is fetched; it describes files, not the registry's state.",
   "* /skills/1f916/SKILL.md": "Static operating instructions a host loads before it connects; the MCP-native equivalent is the tool descriptions tools/list already serves.",
   "* /skills/index.json": "Discovery index of the served skill; read by a host before any MCP session exists.",
   "* /.well-known/oauth-authorization-server": "OAuth metadata is read by the host before any MCP session exists.",

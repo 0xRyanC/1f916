@@ -41,6 +41,17 @@ export const STORED_INSTRUCTION = 1;
 export const STORED_ACTION = 2;
 export const STORED_OUTCOME = 4;
 export const STORED_ENVELOPE = 8;
+// Set when the envelope's first line is the age format's own. The registry
+// reads that one public line and nothing after it: it says how the owner opens
+// the file, and it says nothing about what is inside.
+export const STORED_ENVELOPE_AGE = 16;
+export const AGE_INTRO_LINE = "age-encryption.org/v1\n";
+
+export function isAgeFile(bytes: Uint8Array): boolean {
+  if (bytes.length < AGE_INTRO_LINE.length) return false;
+  for (let i = 0; i < AGE_INTRO_LINE.length; i++) if (bytes[i] !== AGE_INTRO_LINE.charCodeAt(i)) return false;
+  return true;
+}
 
 const te = new TextEncoder();
 const HEX64 = /^[0-9a-f]{64}$/;
@@ -212,6 +223,7 @@ export async function createMandate(env: Env, citizen: Citizen, body: MandateInp
   if (envelope) {
     await store(env).put(envelopeKey(id), envelope);
     stored |= STORED_ENVELOPE;
+    if (isAgeFile(envelope)) stored |= STORED_ENVELOPE_AGE;
   }
   if (stored) await env.DB.prepare("UPDATE mandates SET stored = ? WHERE id = ?").bind(stored, id).run();
 
@@ -367,6 +379,7 @@ async function view(env: Env, r: MandateRow, withContent: boolean) {
     seal: { id: r.seal_id, label: "mandate", chained: r.chained },
     stored: { instruction: Boolean(r.stored & STORED_INSTRUCTION), action: Boolean(r.stored & STORED_ACTION), outcome: Boolean(r.stored & STORED_OUTCOME), envelope: Boolean(r.stored & STORED_ENVELOPE) },
     envelope_bytes: r.envelope_bytes,
+    envelope_format: r.stored & STORED_ENVELOPE ? (r.stored & STORED_ENVELOPE_AGE ? "age-encryption.org/v1" : "not recognized") : null,
     page: `/mandates/${r.id}`,
     record: `/api/record/${encodeURIComponent(r.handle)}`,
   };
@@ -472,6 +485,21 @@ function esc(t: unknown): string {
   return String(t ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] as string);
 }
 
+// Two whole sentences, one per case (see sealedExtras for why never one
+// assembled from parts). What is claimed about an age file is only what the
+// registry can see: its first line. Whether the rest is really locked is
+// something only the key's holder can find out.
+export function envelopeSentence(format: unknown, bytes: unknown): string {
+  if (format === "age-encryption.org/v1")
+    return `${esc(bytes)} bytes whose first line says they are an age file (age-encryption.org/v1), the standard format the envelope tool at /tools/envelope.mjs writes. If they are, only the holder of the secret key they were locked to can read them, with that tool or with age itself. The registry reads the first line and nothing after it.`;
+  return `${esc(bytes)} bytes stored here exactly as the owner sent them; the registry does not interpret them, so they stay private only if the owner encrypted them.`;
+}
+
+function envelopeBlock(m: Record<string, unknown>): string {
+  if (!m.envelope) return "";
+  return `<h2>Sealed envelope</h2><p class="dim">${envelopeSentence(m.envelope_format, m.envelope_bytes)} <a href="${esc(m.envelope as string)}">Download</a>.</p>`;
+}
+
 // The human page: the plain reading of one mandate, for a dispute, a hire or
 // a story. No script, no external dependency; everything on it is also in
 // the JSON at /api/mandates/<id>.
@@ -501,7 +529,7 @@ export async function mandatePage(env: Env, id: number): Promise<string> {
       ? block("What came of it", added.outcome, added.outcome_hash as string, Boolean(added.stored)) +
         `<p class="fp">Added on ${esc(new Date(added.created_at as number).toISOString().replace("T", " ").slice(0, 19) + " UTC")}, after the instruction and the action above were sealed.</p>`
       : "") +
-    (m.envelope ? `<h2>Sealed envelope</h2><p class="dim">${esc(m.envelope_bytes)} bytes stored here exactly as the owner sent them; the registry does not interpret them, so they stay private only if the owner encrypted them. <a href="${esc(m.envelope as string)}">Download</a>.</p>` : "") +
+    envelopeBlock(m) +
     `<h2>Why this cannot have been changed</h2><ol class="chain">` +
     `<li>The ${m.outcome_hash ? "three" : added ? "first two" : "two"} fingerprints above were combined into one: sha-256 of <code>${esc(m.commit_payload)}</code> = <code>${esc(m.commit)}</code>.` +
     sealedExtras(Boolean(m.subject), Boolean(m.signed)) +

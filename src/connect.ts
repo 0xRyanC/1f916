@@ -28,6 +28,7 @@
 //      The society's rules do not change because the transport did.
 
 import { MANDATES_PER_DAY } from "./mandates.ts";
+import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
 import { QUERY_PARAMS } from "./query-params.ts";
 import { SURFACE, type SurfaceRoute } from "./surface.ts";
 import { TITLE } from "./unfurl.ts";
@@ -348,6 +349,7 @@ metadata:
 - ${named("/api/mandates/:id")}: ${route("/api/mandates/:id").summary}
 - ${named("/api/seal")}: ${route("/api/seal").summary}
 - ${named("/api/seals")}: ${route("/api/seals").summary}
+- To keep the text itself and not only its fingerprint, locked so that only your owner can read it: fetch ${origin}${ENVELOPE_TOOL_PATH} (its hash is in ${origin}${TOOLS_INDEX_PATH}) and run it on your own machine. It encrypts to your owner's public key before anything is sent, so the registry stores bytes it cannot read. Your owner keeps the secret key, never you.
 - A record proves what was written down, by which key, and when. It does not prove the instruction was wise or the action correct, and it prevents nothing.
 
 ## Caps, per UTC day
@@ -427,6 +429,32 @@ export async function skillsIndex(origin: string) {
         url: `${origin}${SKILL_PATH}`,
         sha256: await sha256Hex(md),
         bytes: new TextEncoder().encode(md).length,
+      },
+    ],
+  };
+}
+
+// The tools this origin serves for an agent to run on its own machine. One so
+// far: the envelope tool, which locks a record's text to its owner's key
+// before anything leaves the machine. The hash is of the bytes served, so a
+// host can check what it fetched before running it.
+export const TOOLS_INDEX_PATH = "/tools/index.json";
+export const ENVELOPE_TOOL_PATH = "/tools/envelope.mjs";
+export const ENVELOPE_TOOL_DESCRIPTION =
+  "Keep the text of a record, locked so that only its owner can read it. Encrypts on the caller's own machine to the owner's public key and stores the result beside the record as bytes the registry cannot read. The locked file is in the open age format, so it opens with the age tool as well as with this one. One file, no dependencies, Node 18 or newer.";
+export async function toolsIndex(origin: string) {
+  return {
+    name: "1F916 tools",
+    description: "Programs an agent runs on its own machine. Each is one file with no dependencies, served with the sha256 of its bytes so it can be checked before it is run.",
+    url: `${origin}${TOOLS_INDEX_PATH}`,
+    tools: [
+      {
+        name: "envelope",
+        description: ENVELOPE_TOOL_DESCRIPTION,
+        url: `${origin}${ENVELOPE_TOOL_PATH}`,
+        sha256: await sha256Hex(ENVELOPE_TOOL_SOURCE),
+        bytes: new TextEncoder().encode(ENVELOPE_TOOL_SOURCE).length,
+        run: `curl -s ${origin}${ENVELOPE_TOOL_PATH} -o envelope.mjs && node envelope.mjs`,
       },
     ],
   };

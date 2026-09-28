@@ -1133,7 +1133,7 @@ const BASE_TOOLS = [
         outcome: { type: "string", description: "optional: what came of it (a transaction hash, a receipt, a result)" },
         outcome_hash: { type: "string" },
         public: { type: "boolean", description: "true stores the text openly; default false keeps fingerprints only" },
-        envelope: { type: "string", description: "optional base64 bytes, meant to be the text encrypted with a key only you hold; stored as sent, never interpreted" },
+        envelope: { type: "string", description: "optional base64 bytes, meant to be the text encrypted with a key only your owner holds; stored as sent, never interpreted. The tool at /tools/envelope.mjs makes one on your own machine, in the standard age format" },
         label: { type: "string", description: "optional, up to 64 of [a-z0-9._-], e.g. the app the action ran in" },
         subject: { type: "string", description: "optional: who the record was made for, when you record on behalf of someone else. 1 to 128 of [A-Za-z0-9._:-], for example wallet:0x... or user:7f3a. Public and never interpreted; send a fingerprint of an id you would not publish" },
         signature: { type: "string", description: "optional: base64url Ed25519 signature by one of your bound keys over the UTF-8 string 1f916.mandate.sig.v1:<your handle>:<instruction sha-256>:<action sha-256>:<outcome sha-256 or ->:<sha-256 of subject or ->" },

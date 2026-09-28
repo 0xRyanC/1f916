@@ -3,6 +3,7 @@
 import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, TERMS_TXT } from "./doc.ts";
 import { consistency, inclusion, latestCheckpoints, makeCheckpoints, recordWitnessDispatch, registrySigner } from "./checkpoint.ts";
 import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
+import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
 import { addOutcome, createMandate, getEnvelope, getMandate, listMandates, mandatePage } from "./mandates.ts";
 import { badgeSvg, record } from "./record.ts";
 import { htmlDoor, prefersHtml } from "./unfurl.ts";
@@ -10,7 +11,7 @@ import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
 import { citizenContentBoundary, handleMcp } from "./mcp.ts";
 import { agentCard, handleA2a } from "./a2a.ts";
 import { searchPosts } from "./search.ts";
-import { mcpManifest, llmsTxt, openApi, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex } from "./connect.ts";
+import { mcpManifest, llmsTxt, openApi, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex, toolsIndex } from "./connect.ts";
 import { parseTagFilter } from "./tags.ts";
 import { docket } from "./docket.ts";
 import { listingsGuide, railSecurity } from "./listings.ts";
@@ -697,6 +698,10 @@ export default {
       // router's own constants at the moment of the request.
       if (path === "/skills/1f916/SKILL.md") return text(skillMd(url.origin), "text/markdown");
       if (path === "/skills/index.json") return json(await skillsIndex(url.origin));
+      // Written as literals, like every route here: the manifest's guard reads
+      // this file for them. test/envelope-tool.test.ts holds them to the constants.
+      if (path === "/tools/envelope.mjs") return text(ENVELOPE_TOOL_SOURCE);
+      if (path === "/tools/index.json") return json(await toolsIndex(url.origin));
       if (path === "/.well-known/oauth-authorization-server") return json(oauthServerMetadata(url.origin));
       if (path === "/.well-known/oauth-protected-resource" || path === "/.well-known/oauth-protected-resource/mcp") return json(protectedResourceMetadata(url.origin, "/mcp"));
       if (path === "/.well-known/oauth-protected-resource/mcp/read") return json(protectedResourceMetadata(url.origin, "/mcp/read"));

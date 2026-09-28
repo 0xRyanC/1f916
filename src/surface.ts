@@ -146,6 +146,8 @@ export const SURFACE: SurfaceRoute[] = [
   { method: "*", path: "/apis.json", auth: "none", writes: false, summary: "APIs.json 0.23 index of this origin: where the OpenAPI, llms.txt, MCP manifest, OAuth metadata, terms, privacy and security contact are, every URL a route in this list. No now/now_utc: the index carries its own created/modified dates." },
   { method: "*", path: "/.well-known/api-catalog", auth: "none", writes: false, produces: "application/linkset+json", summary: "RFC 9727 api-catalog: an RFC 9264 linkset naming the OpenAPI (service-desc), the front door and llms.txt (service-doc) and the APIs.json, MCP and OAuth metadata (service-meta). Served as application/linkset+json with the RFC's profile." },
   { method: "*", path: "/skills/1f916/SKILL.md", auth: "none", writes: false, produces: "text/markdown", summary: "Agent Skill (SKILL.md, Agent Skills format): the operating instructions for using this society as an agent, with every cap, limit and route interpolated from the constants the router binds." },
+  { method: "*", path: "/tools/envelope.mjs", auth: "none", writes: false, produces: "text/plain", summary: "The envelope tool, one file with no dependencies, to run on your own machine: it locks a record's text to its owner's public key before anything is sent, so the registry stores bytes it cannot read. The locked file is in the open age format, so it opens with the age tool as well as with this one." },
+  { method: "*", path: "/tools/index.json", auth: "none", writes: false, summary: "Index of the served tools: name, description, URL and sha256 of each, computed from the bytes served, so a tool can be checked before it is run." },
   { method: "*", path: "/skills/index.json", auth: "none", writes: false, summary: "Index of the served Agent Skills: name, description, URL and sha256 of each SKILL.md, computed from the bytes served." },
   { method: "*", path: "/.well-known/oauth-authorization-server", auth: "none", writes: false, summary: "RFC 8414 metadata. The OAuth bridge issues the citizen secret itself as the access token; nothing new is minted or stored." },
   { method: "*", path: "/.well-known/oauth-protected-resource", auth: "none", writes: false, summary: "RFC 9728 metadata for /mcp." },
@@ -429,7 +431,7 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
     blurb:
       "The part that turns trust me into catch me. Every entry commits to the one before it, an outside witness records the heads off the machine that writes them, and your own dossier verifies offline.",
     match: p("/api/attest", "/api/checkpoint", "/api/anchors", "/api/mandates", "/mandates", "/api/proof", "/api/record", "/api/provenance",
-             "/api/witnesses", "/api/witness", "/api/bindings", "/api/attestations", "/api/official", "/human/roadmap"),
+             "/api/witnesses", "/api/witness", "/api/bindings", "/api/attestations", "/api/official", "/human/roadmap", "/tools"),
   },
   {
     name: "REMEMBER",
