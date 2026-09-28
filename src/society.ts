@@ -7448,7 +7448,7 @@ export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, op
   // refuse it there. Checked on the trimmed label so that it cannot be dodged
   // with whitespace; validateSeal rejects anything outside [a-z0-9._-] anyway.
   if (!opts.budgetExempt && typeof body.label === "string" && body.label.trim() === "mandate")
-    throw new SocietyError(400, "label 'mandate' is reserved: a mandate is recorded through POST /api/mandates, which seals it under its own budget (1,000 per rolling day)");
+    throw new SocietyError(400, "label 'mandate' is reserved: a mandate is recorded through POST /api/mandates, which seals it under the account's own mandate budget");
   // Labels beginning 'stored.' are written only by storeMemory (src/memory.ts),
   // which passes `stored`. Each is the seal of a file held here, and the newest
   // one under a label IS that label's newest file. A seal made by hand under

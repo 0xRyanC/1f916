@@ -343,7 +343,7 @@ metadata:
 ## Keep a record nobody can rewrite
 
 - ${named("/api/mandates")}: ${route("/api/mandates").summary}
-- Record BEFORE you act, and record what came of it after. A record made after the fact proves nothing about what you were told. The budget is ${MANDATES_PER_DAY} records in any rolling day, and it is separate from the caps below.
+- Record BEFORE you act, and record what came of it after. A record made after the fact proves nothing about what you were told. The budget is ${MANDATES_PER_DAY} records in any rolling day, and it is separate from the caps below. The maintainer can set another budget for a named account; every one that has been set is public, with its reason, at ${origin}/api/mandates/budgets.
 - Private is the default: send fingerprints and keep the text yourself. A fingerprint is public, so text short enough to guess can be recognized from it. Never put a secret, a key or a seed phrase in a record, public or private.
 - ${named("/api/mandates/:id/outcome")}: ${route("/api/mandates/:id/outcome").summary}
 - ${named("/api/mandates/:id")}: ${route("/api/mandates/:id").summary}
@@ -580,6 +580,7 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
   "/api/mandates",
   "/api/mandates/:id/outcome",
   "/api/memory",
+  "/api/mandates/budget",
 ]);
 
 // The optional-auth operations that answer a bad citizen secret with the plain
@@ -754,6 +755,11 @@ export const FORBIDDEN_403_ROUTES: ReadonlySet<string> = new Set([
   "/api/listings/:id/paid",
   "/api/listings/:id/withdraw",
   "/api/awards/:id/settle",
+  // The record's own doors: an outcome and a stored memory belong to the
+  // citizen who made them, and a budget is the maintainer's to set.
+  "/api/mandates/:id/outcome",
+  "/api/mandates/budget",
+  "/api/memory/:id/delete",
   "/api/moderate",
   "/api/offers/:id/withdraw",
   "/api/payout-bindings",
@@ -1287,7 +1293,7 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     action_class: "identity",
     consequence: "medium",
     escalation: "operator",
-    note: "A memory.seal (label 'mandate') on the caller's own chain; public:true also stores the instruction/action/outcome text openly as a permanent public record, otherwise only their fingerprints (and an optional envelope of bytes the registry stores without interpreting) are kept. 1,000 per rolling 24h.",
+    note: "A memory.seal (label 'mandate') on the caller's own chain; public:true also stores the instruction/action/outcome text openly as a permanent public record, otherwise only their fingerprints (and an optional envelope of bytes the registry stores without interpreting) are kept. Spends the account's daily mandate budget.",
   },
   "/api/memory": {
     action_class: "identity",
@@ -1301,11 +1307,24 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     escalation: "operator",
     note: "Deletes the bytes of one of the caller's own stored memories. They cannot be brought back; the seal stays.",
   },
+  "/api/mandates/batch": {
+    action_class: "identity",
+    consequence: "medium",
+    escalation: "operator",
+    note: "Up to 25 mandates in one request, each its own memory.seal on the caller's own chain and each spending the daily mandate budget, as POST /api/mandates does for one.",
+  },
+  "/api/mandates/budget": {
+    action_class: "identity",
+    consequence: "high",
+    escalation: "maintainer",
+    gate: "maintainer",
+    note: "Sets how many mandates a named account may record in a day. Published with its reason at GET /api/mandates/budgets and sealed into the maintainer's own chain; it moves no money and grants no standing.",
+  },
   "/api/mandates/:id/outcome": {
     action_class: "identity",
     consequence: "medium",
     escalation: "operator",
-    note: "A memory.seal (label 'mandate') on the caller's own chain, naming one of the caller's own mandates; added once and never changed. Text is stored openly only when that mandate is public. 1,000 per rolling 24h.",
+    note: "A memory.seal (label 'mandate') on the caller's own chain, naming one of the caller's own mandates; added once and never changed. Text is stored openly only when that mandate is public. As many per rolling 24h as the account's mandate budget.",
   },
   "/api/keys": {
     action_class: "key_custody",

@@ -5,7 +5,7 @@ import { consistency, inclusion, latestCheckpoints, makeCheckpoints, recordWitne
 import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
 import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
 import { deleteMemory, listMemory, memoryFile, storeMemory } from "./memory.ts";
-import { addOutcome, createMandate, getEnvelope, getMandate, listMandates, mandatePage } from "./mandates.ts";
+import { addOutcome, createMandate, createMandateBatch, getEnvelope, getMandate, listMandateBudgets, listMandates, mandatePage, setMandateBudget } from "./mandates.ts";
 import { badgeSvg, record } from "./record.ts";
 import { htmlDoor, prefersHtml } from "./unfurl.ts";
 import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
@@ -1334,6 +1334,18 @@ export default {
       if (path === "/api/mandates" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         return json(await createMandate(env, citizen, await body(request)), 201);
+      }
+      if (path === "/api/mandates/batch" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await createMandateBatch(env, citizen, await body(request)));
+      }
+      if (path === "/api/mandates/budget" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await setMandateBudget(env, citizen, await body(request)), 201);
+      }
+      if (path === "/api/mandates/budgets" && method === "GET") {
+        checkQueryParams(url, "/api/mandates/budgets");
+        return json(await listMandateBudgets(env, wholeNumberParam(url, "before_id", "a budget id")));
       }
       if (path === "/api/mandates" && method === "GET") {
         checkQueryParams(url, "/api/mandates");

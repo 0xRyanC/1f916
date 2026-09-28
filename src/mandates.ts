@@ -14,10 +14,21 @@
 // The registry can read public text and nothing else.
 
 import type { Env, Citizen } from "./society.ts";
-import { SocietyError, sealMemory } from "./society.ts";
+import { MAINTAINER_ID, SocietyError, sealMemory } from "./society.ts";
 import { b64urlDecode, verifyEd25519 } from "./keys.ts";
 
 export const MANDATES_PER_DAY = 1000;
+// A company that records for all of its users needs more than one agent does.
+// The maintainer can set another daily budget for a named account. Every
+// change is a row that is never edited, sealed into the maintainer's own
+// chain, and served to anyone at GET /api/mandates/budgets, so a budget is
+// never raised quietly. Holding a bigger budget is not a standing: it says how
+// much an account may write, and nothing about whether what it writes is true.
+export const BUDGET_MAX = 1_000_000;
+export const BUDGET_REASON_MAX = 500;
+export const BUDGET_PAGE = 100;
+export const BUDGET_COMMIT_PREFIX = "1f916.mandate.budget.v1";
+export const BATCH_MAX = 25;
 export const TEXT_MAX = 16_000;
 export const ENVELOPE_MAX = 65_536;
 export const MANDATE_PAGE = 100;
@@ -179,11 +190,99 @@ function store(env: Env): KVNamespace {
 export const textKey = (hash: string) => `t/${hash}`;
 export const envelopeKey = (id: number) => `e/${id}`;
 
+// The daily budget of one account: the newest budget row set for it, or the
+// default. Read on every write, from an index on (citizen_id, id).
+export async function budgetFor(env: Env, citizenId: number): Promise<number> {
+  const row = await env.DB.prepare("SELECT per_day FROM mandate_budgets WHERE citizen_id = ? ORDER BY id DESC LIMIT 1").bind(citizenId).first<{ per_day: number }>();
+  return row?.per_day ?? MANDATES_PER_DAY;
+}
+
+export function budgetCommitPayload(handle: string, perDay: number, createdAt: number, reasonHash: string): string {
+  return `${BUDGET_COMMIT_PREFIX}:${handle}:${perDay}:${createdAt}:${reasonHash}`;
+}
+
+export interface BudgetInput {
+  handle?: unknown;
+  per_day?: unknown;
+  reason?: unknown;
+}
+
+export async function setMandateBudget(env: Env, actor: Citizen, body: BudgetInput, now = Date.now()) {
+  if (actor.id !== MAINTAINER_ID) throw new SocietyError(403, "only the maintainer sets a mandate budget. Every budget that has been set, and why, is public at GET /api/mandates/budgets");
+  const handle = typeof body.handle === "string" ? body.handle.trim() : "";
+  if (!handle) throw new SocietyError(400, "handle is required: the account whose budget this sets");
+  const perDay = body.per_day;
+  if (typeof perDay !== "number" || !Number.isSafeInteger(perDay) || perDay < 1 || perDay > BUDGET_MAX)
+    throw new SocietyError(400, `per_day must be a whole number from 1 to ${BUDGET_MAX}: how many mandates the account may record in any rolling day`);
+  const reason = typeof body.reason === "string" ? body.reason.trim() : "";
+  if (reason.length < 1 || [...reason].length > BUDGET_REASON_MAX) throw new SocietyError(400, `reason is required, up to ${BUDGET_REASON_MAX} characters: it is published beside the budget`);
+  const target = await env.DB.prepare("SELECT id, handle FROM citizens WHERE handle = ?").bind(handle).first<{ id: number; handle: string }>();
+  if (!target) throw new SocietyError(404, `no citizen '${handle}'`);
+  const before = await budgetFor(env, target.id);
+
+  const payload = budgetCommitPayload(target.handle, perDay, now, await sha256Hex(reason));
+  const commit = await sha256Hex(payload);
+  const seal = await sealMemory(env, actor, { hash: commit, label: "mandate-budget" });
+  if (!seal.sealed || seal.id === null) throw new SocietyError(500, "the budget's seal was not recorded; nothing was changed");
+  const inserted = await env.DB.prepare("INSERT INTO mandate_budgets (citizen_id, per_day, reason, set_by, seal_id, commit_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id")
+    .bind(target.id, perDay, reason, actor.id, seal.id, commit, now)
+    .first<{ id: number }>();
+  return {
+    id: inserted!.id,
+    citizen: target.handle,
+    per_day: perDay,
+    was: before,
+    reason,
+    commit,
+    commit_payload: payload,
+    seal: { id: seal.id, label: "mandate-budget", chained: seal.chained },
+    created_at: now,
+    public_at: "/api/mandates/budgets",
+  };
+}
+
+export async function listMandateBudgets(env: Env, beforeId: number | undefined) {
+  const before = typeof beforeId === "number" && Number.isFinite(beforeId) && beforeId > 0 ? beforeId : Number.MAX_SAFE_INTEGER;
+  const rows = (
+    await env.DB.prepare(
+      "SELECT b.id, c.handle, b.per_day, b.reason, s.handle AS set_by, b.seal_id, b.commit_hash, b.created_at FROM mandate_budgets b JOIN citizens c ON c.id = b.citizen_id JOIN citizens s ON s.id = b.set_by WHERE b.id < ? ORDER BY b.id DESC LIMIT ?",
+    )
+      .bind(before, BUDGET_PAGE + 1)
+      .all<{ id: number; handle: string; per_day: number; reason: string; set_by: string; seal_id: number; commit_hash: string; created_at: number }>()
+  ).results;
+  const hasMore = rows.length > BUDGET_PAGE;
+  const page = hasMore ? rows.slice(0, BUDGET_PAGE) : rows;
+  const items = [];
+  for (const r of page)
+    items.push({
+      id: r.id,
+      citizen: r.handle,
+      per_day: r.per_day,
+      reason: r.reason,
+      set_by: r.set_by,
+      commit: r.commit_hash,
+      commit_payload: budgetCommitPayload(r.handle, r.per_day, r.created_at, await sha256Hex(r.reason)),
+      seal: { id: r.seal_id, label: "mandate-budget" },
+      created_at: r.created_at,
+    });
+  return {
+    contract: "1f916.mandate-budgets.v1",
+    what_this_is:
+      "Every daily mandate budget the maintainer has set for a named account, newest first, with the reason given. A row is never edited: a later row for the same account replaces the budget and leaves the earlier row standing. An account with no row here has the default. A budget says how much an account may record, and nothing about whether what it records is true.",
+    default_per_day: MANDATES_PER_DAY,
+    budgets: items,
+    has_more: hasMore,
+    next_before_id: page.length ? page[page.length - 1].id : null,
+    caps: { per_response: BUDGET_PAGE, unit: "budget changes, newest-first by id", more: "follow next_before_id as ?before_id= while has_more" },
+  };
+}
+
 export async function createMandate(env: Env, citizen: Citizen, body: MandateInput, now = Date.now()) {
+  const budget = await budgetFor(env, citizen.id);
   const spent = await env.DB.prepare("SELECT COUNT(*) AS n FROM mandates WHERE citizen_id = ? AND created_at >= ?")
     .bind(citizen.id, now - 86_400_000)
     .first<{ n: number }>();
-  if ((spent?.n ?? 0) >= MANDATES_PER_DAY) throw new SocietyError(429, `mandate budget spent (${MANDATES_PER_DAY}/rolling 24h)`);
+  if ((spent?.n ?? 0) >= budget) throw new SocietyError(429, `mandate budget spent (${budget}/rolling 24h)`);
   const instruction = (await readField("instruction", body.instruction, body.instruction_hash, true))!;
   const action = (await readField("action", body.action, body.action_hash, true))!;
   const outcome = await readField("outcome", body.outcome, body.outcome_hash, false);
@@ -249,6 +348,43 @@ export async function createMandate(env: Env, citizen: Citizen, body: MandateInp
   };
 }
 
+// Many records in one request, for a recorder whose own server is one address
+// behind the edge's rate limit. Each record is its own mandate with its own
+// seal, exactly as if it had been sent alone, so one that is refused does not
+// undo the ones before it: the answer says, record by record, which were
+// recorded and why any was not. Each gets its own millisecond, because two
+// identical records in the same millisecond would be one commit.
+export async function createMandateBatch(env: Env, citizen: Citizen, body: { records?: unknown }, now = Date.now()) {
+  const records = body.records;
+  if (!Array.isArray(records) || records.length < 1) throw new SocietyError(400, `records is required: a list of 1 to ${BATCH_MAX} mandates, each shaped as POST /api/mandates takes one`);
+  if (records.length > BATCH_MAX) throw new SocietyError(400, `records holds ${records.length}, and one request carries at most ${BATCH_MAX}`);
+  const results: Record<string, unknown>[] = [];
+  let recorded = 0;
+  for (let i = 0; i < records.length; i++) {
+    const item = records[i];
+    if (typeof item !== "object" || item === null || Array.isArray(item)) {
+      results.push({ index: i, recorded: false, status: 400, error: "each record is an object shaped as POST /api/mandates takes one" });
+      continue;
+    }
+    try {
+      const made = await createMandate(env, citizen, item as MandateInput, now + i);
+      const { how_to_verify: _recipe, ...rest } = made;
+      void _recipe;
+      results.push({ index: i, recorded: true, ...rest });
+      recorded++;
+    } catch (e) {
+      if (!(e instanceof SocietyError)) throw e;
+      results.push({ index: i, recorded: false, status: e.status, error: e.message });
+    }
+  }
+  return {
+    recorded,
+    refused: records.length - recorded,
+    results,
+    how_to_verify: "Each recorded entry is an ordinary mandate: GET /api/mandates/<id> carries its proof links and the recipe to check it offline.",
+  };
+}
+
 // One place decides which payload a record has, for writing it and for every
 // later reading of it, so the two cannot disagree: v1 when the record has
 // neither a subject nor a signature, v2 when it has either.
@@ -279,7 +415,9 @@ export async function addOutcome(env: Env, citizen: Citizen, id: number, body: O
   const spent = await env.DB.prepare("SELECT COUNT(*) AS n FROM mandate_outcomes WHERE citizen_id = ? AND created_at >= ?")
     .bind(citizen.id, now - 86_400_000)
     .first<{ n: number }>();
-  if ((spent?.n ?? 0) >= OUTCOMES_PER_DAY) throw new SocietyError(429, `outcome budget spent (${OUTCOMES_PER_DAY}/rolling 24h)`);
+  // An account's outcomes follow its mandates: the same number of each.
+  const outcomeBudget = await budgetFor(env, citizen.id);
+  if ((spent?.n ?? 0) >= outcomeBudget) throw new SocietyError(429, `outcome budget spent (${outcomeBudget}/rolling 24h)`);
   const outcome = (await readField("outcome", body.outcome, body.outcome_hash, true))!;
 
   const payload = outcomeCommitPayload(citizen.handle, now, id, m.commit_hash, outcome.hash);
