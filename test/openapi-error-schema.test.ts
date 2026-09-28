@@ -30,6 +30,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
+import { validate } from "./helpers/json-schema.ts";
 import worker from "../src/index.ts";
 import { ERROR_SCHEMA_REF } from "../src/connect.ts";
 
@@ -76,11 +77,25 @@ test("components.schemas.Error is served: the clock and error required, the obje
   assert.match(String(err.description ?? ""), /error/, "the schema description explains how to read the envelope");
 });
 
-test("every declared 4xx/5xx JSON body references the envelope, and none is left untyped", async () => {
+// Bodies the Error pass must NOT claim: each carries an explicit non-Error
+// schema for a wire shape that is not the clocked envelope. Keyed as
+// "VERB path status" so a silent reopen of any of them (dropping the schema
+// so the pass fills Error back in) fails this test.
+const NON_ENVELOPE_ERROR_BODIES = new Set([
+  "POST /api/patron 402", // x402 challenge (X402_CHALLENGE_SCHEMA)
+  "POST /api/patron 409", // already-claimed payment, no clock
+  "POST /mcp 400", // JSON-RPC error envelope
+  "POST /mcp 401", // isError tool result + WWW-Authenticate
+  "POST /mcp/read 400",
+  "POST /mcp/read 401",
+]);
+
+test("every declared 4xx/5xx JSON body references the envelope, except the named non-envelope shapes", async () => {
   const d = await doc();
   let errorResponses = 0;
   let referencing = 0;
   const untyped: string[] = [];
+  const nonEnvelope: string[] = [];
   for (const [path, ops] of Object.entries(d.paths)) {
     for (const [verb, op] of Object.entries(ops)) {
       for (const [status, res] of Object.entries(op.responses)) {
@@ -88,8 +103,15 @@ test("every declared 4xx/5xx JSON body references the envelope, and none is left
         const json = res.content?.["application/json"];
         if (!json) continue; // a 4xx with no JSON body (none today) is not this envelope's concern
         errorResponses++;
-        if (referencesEnvelope(json.schema)) referencing++;
-        else untyped.push(`${verb.toUpperCase()} ${path} ${status}`);
+        const key = `${verb.toUpperCase()} ${path} ${status}`;
+        if (referencesEnvelope(json.schema)) {
+          referencing++;
+          assert.ok(!NON_ENVELOPE_ERROR_BODIES.has(key), `${key} is a named non-envelope shape but references ${ERROR_SCHEMA_REF}`);
+        } else if (!json.schema) {
+          untyped.push(key);
+        } else {
+          nonEnvelope.push(key);
+        }
       }
     }
   }
@@ -97,8 +119,9 @@ test("every declared 4xx/5xx JSON body references the envelope, and none is left
   // (103), rounded down: the class must not quietly shrink to a handful and
   // still pass.
   assert.ok(errorResponses >= 100, `only ${errorResponses} declared error responses; the scan or the declarations have drifted`);
-  assert.deepEqual(untyped, [], `declared JSON error bodies that do not reference ${ERROR_SCHEMA_REF}`);
-  assert.equal(referencing, errorResponses, "every declared JSON error body references the envelope");
+  assert.deepEqual(untyped, [], "declared JSON error bodies left with no schema at all");
+  assert.deepEqual(nonEnvelope.sort(), [...NON_ENVELOPE_ERROR_BODIES].sort(), "the non-envelope error bodies drifted from the named set");
+  assert.equal(referencing + nonEnvelope.length, errorResponses, "every declared JSON error body is either the envelope or a named exception");
 });
 
 test("no operation declares a default response: the edge 429 is plain text and would make it false", async () => {
@@ -157,17 +180,20 @@ test("the live router's refusals are instances of the declared envelope", async 
   assert.equal(typeof unrouted.body.hint, "string", "the router's own 404 carries its hint beside the envelope");
 });
 
-// The description names two errors on this origin that are NOT the envelope.
+// The description names three errors on this origin that are NOT the envelope.
 // The edge 429 never reaches the Worker, so it cannot be driven here; the MCP
-// transport can. Pin that its refusal really is JSON-RPC with a numeric code
-// and no clock, and that the description says so -- the claim was once "every
-// JSON error on this origin", which /mcp contradicted.
+// transport and the x402 402 can. Pin that the MCP refusal really is JSON-RPC
+// with a numeric code and no clock, and that the description says so -- the
+// claim was once "every JSON error on this origin", which /mcp contradicted.
 test("the MCP transport's JSON-RPC error is the named exception, not the envelope", async () => {
   const d = await doc();
   const description = String(d.components?.schemas?.Error?.description ?? "");
   assert.doesNotMatch(description, /every JSON error on this origin/, "the envelope is scoped to the declared REST errors");
   assert.match(description, /\/mcp/, "the description names the MCP transport as an exception");
   assert.match(description, /JSON-RPC/, "the description names the JSON-RPC shape the MCP transport serves");
+  assert.match(description, /x402|\/api\/patron/, "the description names the x402 402 as an exception");
+  assert.match(description, /Three kinds of error/, "the description counts three non-envelope kinds");
+  assert.match(description, /409/, "the description names the patron already-claimed 409 as unclocked");
 
   const { env } = sqliteTestEnv(schema);
   for (const path of ["/mcp", "/mcp/read"]) {
@@ -179,5 +205,10 @@ test("the MCP transport's JSON-RPC error is the named exception, not the envelop
     assert.equal(typeof error?.code, "number", `${path}: the JSON-RPC error carries a numeric code`);
     assert.equal(body.now, undefined, `${path}: no clock, so it is not the envelope`);
     assert.equal(body.now_utc, undefined, `${path}: no clock, so it is not the envelope`);
+    // The 400 the document declares on this door is the JSON-RPC schema, and
+    // the live body is an instance of it.
+    const declared = d.paths[path].post.responses["400"].content?.["application/json"]?.schema;
+    assert.ok(declared && !referencesEnvelope(declared), `${path}: the declared 400 is not the Error envelope`);
+    assert.deepEqual(validate(declared, body), [], `${path}: the live 400 validates against its declared schema`);
   }
 });
