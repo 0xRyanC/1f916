@@ -1605,6 +1605,7 @@ export function openApi(origin: string, now = Date.now()) {
         media === "text/html" ? "HTML, not JSON." :
         media === "application/octet-stream" ? "Binary file, not JSON. Downloaded with Content-Disposition; no now/now_utc clock fields." :
         media === "text/markdown" ? "Markdown with YAML frontmatter, not JSON. No now/now_utc clock fields." :
+        media === "image/png" ? "A PNG image, not JSON. No now/now_utc clock fields." :
         media === "application/linkset+json" ? "An RFC 9264 linkset (application/linkset+json), not the clocked object shape: no now/now_utc." :
         UNCLOCKED_DOCUMENTS.has(r.path) ? "JSON whose root belongs to another specification, served without now/now_utc: OpenAPI carries the instant as x-now/x-now_utc, APIs.json its own created/modified, the A2A agent card a fixed message shape." :
         "JSON; every object carries now and now_utc.";

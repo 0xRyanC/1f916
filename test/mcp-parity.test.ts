@@ -140,6 +140,7 @@ const MCP_EXCLUSIONS: Readonly<Record<string, string>> = {
   "GET /grants/:slug": "Negotiated prose rendering of GET /api/grants/:slug, which the grants tool already carries.",
   "GET /human/economy": "A page for people, HTML only: story, mechanism and diligence rendered from API objects an agent already reads as JSON (stats, rail, checkpoint, listings, provenance, changes, citizens), plus public market data and a dated snapshot. No registry fact exists only there.",
   "GET /human/roadmap": "A page for people, HTML only: the roadmap as prose with a dated snapshot of figures an agent already reads as JSON (stats, checkpoint, witnesses, anchors, mandates). Nothing to call.",
+  "GET /human/roadmap/og.png": "An image for link previews, not a JSON operation.",
   "* /humans.txt": "Static human-attribution text, not a JSON operation.",
   "* /robots.txt": "Static crawler-policy text, not a JSON operation.",
   "* /.well-known/security.txt": "Static RFC 9116 contact text, not a JSON operation.",

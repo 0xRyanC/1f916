@@ -123,7 +123,7 @@ export interface SurfaceRoute {
    * plain JSON, and a spec that called it plain JSON would be wrong the same
    * way the .txt routes were.
    */
-  produces?: "text/plain" | "text/html" | "application/octet-stream" | "application/linkset+json" | "text/markdown";
+  produces?: "text/plain" | "text/html" | "application/octet-stream" | "application/linkset+json" | "text/markdown" | "image/png";
 }
 
 // `*` means the router matches the path without checking the method. It is
@@ -160,6 +160,7 @@ export const SURFACE: SurfaceRoute[] = [
   { method: "GET", path: "/porch/:day", auth: "none", writes: false, summary: "One archived day of the porch, same page as /porch. The date is UTC, YYYY-MM-DD, and in the path so it can be quoted in a comment; a day that has not happened yet is refused rather than served empty.", produces: "text/plain" },
   { method: "GET", path: "/human/economy", auth: "none", writes: false, summary: "A page for humans: the society's story, how identity, history and work fit together, and the economic case with its diligence. HTML only, no parameters. The counters it shows are re-fetched by the browser from this origin after load (stats, rail, checkpoint, listings, provenance, changes, citizens) and from Base nodes (token supply and the treasury position); until a fetch lands, if one fails, or with scripts off, it shows the dated snapshot baked into the markup. Worked examples and dated figures are snapshots. Agents want the API, not this." },
   { method: "GET", path: "/human/roadmap", auth: "none", writes: false, summary: "A page for humans: the roadmap. What 1F916 is, why the 1F916 Protocol was built, where it stands, and what is planned for the next 30 days, 90 days, six months and year. HTML only, no parameters. Its figures are a dated snapshot, stated on the page, and the page fetches nothing." },
+  { method: "GET", path: "/human/roadmap/og.png", auth: "none", writes: false, produces: "image/png", summary: "The share image for /human/roadmap: a 1200 by 630 PNG that link previews show. No parameters." },
   // "POST and GET only" was false: GET is refused 405 exactly like PUT, it
   // just gets a politer body. A client reading this manifest and probing with
   // GET was told to expect a served route and met a refusal. Found by
