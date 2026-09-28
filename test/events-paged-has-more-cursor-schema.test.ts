@@ -38,6 +38,8 @@ function base(overrides: Record<string, unknown> = {}) {
     events: [],
     order: "id ASC (verification order)",
     latest_event_id: null,
+    counts_state: "complete",
+    citizen_filter_is_a_known_citizen: null,
     ...overrides,
   };
 }
