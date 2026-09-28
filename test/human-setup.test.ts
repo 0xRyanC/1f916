@@ -16,6 +16,7 @@
 //   U7  link an outside site                                       -> "the page names no site but this one"
 //   U8  rename a command the page tells the owner to run           -> "the commands are ones the tool has"
 //   U9  show record 9, which holds no locked text, being opened    -> "the commands are ones the tool has"
+//   U10 drop the line that sends the agent back to its owner       -> "the sentence names a page the Worker serves"
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -66,6 +67,9 @@ test("the sentence names a page the Worker serves", async () => {
   // What the sentence promises the owner, the page it points at must teach.
   assert.match(skill, /\/api\/register/);
   assert.match(skill, /Record BEFORE you act, and record what came of it after/);
+  // And it sends the agent back to its owner with the address of the list, which is a route.
+  assert.ok(skill.includes("Tell your owner where to read what you have recorded: https://1f916.ai/records/ followed by your handle."));
+  assert.ok(skill.includes("The page that explains all of this to a person is https://1f916.ai/human/setup."));
 });
 
 test("the sentence is the one that was tested", () => {

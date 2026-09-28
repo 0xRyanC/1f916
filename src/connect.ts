@@ -350,6 +350,7 @@ metadata:
 - ${named("/api/seal")}: ${route("/api/seal").summary}
 - ${named("/api/seals")}: ${route("/api/seals").summary}
 - To keep the text itself and not only its fingerprint, locked so that only your owner can read it: fetch ${origin}${ENVELOPE_TOOL_PATH} (its hash is in ${origin}${TOOLS_INDEX_PATH}) and run it on your own machine. It encrypts to your owner's public key before anything is sent, so the registry stores bytes it cannot read. Your owner keeps the secret key, never you.
+- Tell your owner where to read what you have recorded: ${origin}/records/ followed by your handle. It lists your records, newest first, and each opens to its own page. The page that explains all of this to a person is ${origin}/human/setup.
 - A record proves what was written down, by which key, and when. It does not prove the instruction was wise or the action correct, and it prevents nothing.
 
 ## Caps, per UTC day
