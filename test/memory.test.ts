@@ -16,6 +16,10 @@
 //   K8  leave the bytes in storage on delete               -> "delete removes the bytes and keeps the seal"
 //   K9  seal something other than the bytes' sha-256       -> "the seal is the sha-256 of the bytes held"
 //   K10 serve a deleted file                               -> "delete removes the bytes and keeps the seal"
+//   K11 let a hand-made seal wear a stored label            -> "a seal made by hand cannot wear a stored label"
+//       (the defect the deploy audit found: it sealed a file's hash by hand under stored.diary and could then never store the file)
+//   K12 answer "unchanged" without putting the bytes back   -> "the newest file's bytes, deleted and sent again, go back under the same seal"
+//   K13 match ANY earlier file of the label, not the newest -> "the newest file's bytes, deleted and sent again, go back under the same seal"
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -24,7 +28,7 @@ import { createHash } from "node:crypto";
 import worker from "../src/index.ts";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
 import { storeMemory, listMemory, memoryFile, deleteMemory, whyNotAgeFile, memoryKey, MEMORY_MAX_BYTES, MEMORY_KEEP, MEMORY_LABELS, MEMORY_SEAL_PREFIX } from "../src/memory.ts";
-import { SocietyError, type Env, type Citizen } from "../src/society.ts";
+import { SocietyError, sealMemory, type Env, type Citizen } from "../src/society.ts";
 // @ts-expect-error a plain JavaScript module with no types
 import * as tool from "../clients/envelope.mjs";
 
@@ -185,6 +189,7 @@ test("the same file again is a check, not a second copy", async () => {
   const again = await storeMemory(env, sleeper, { label: "diary", file }, T0 + 1);
   assert.equal(again.stored, false);
   assert.equal(again.unchanged, true);
+  assert.equal(again.restored, false);
   assert.equal(again.id, first.id);
   assert.equal(kv.size, 1);
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM memory_blobs").get() as { n: number }).n, 1);
@@ -275,4 +280,48 @@ test("over HTTP: the file needs its owner's secret, the list needs nothing", asy
   assert.equal((await call("POST", `/api/memory/${id}/delete`, theirs)).status, 403);
   assert.equal((await call("POST", `/api/memory/${id}/delete`, mine)).status, 200);
   assert.equal((await call("GET", download, mine)).status, 410);
+});
+
+test("a seal made by hand cannot wear a stored label", async () => {
+  const { env, db, kv, sleeper } = fixture();
+  const file = lock("about to be stored");
+  // The order the audit used: seal the file's own fingerprint by hand first.
+  await refused(sealMemory(env, sleeper, { hash: sha(file), label: "stored.diary" }), 400, /labels beginning 'stored\.' are reserved/);
+  await refused(sealMemory(env, sleeper, { hash: sha(file), label: "  stored.diary  " }), 400, /reserved/);
+  await refused(sealMemory(env, sleeper, { hash: "a".repeat(64), label: "stored.anything-at-all" }), 400, /reserved/);
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM seals").get() as { n: number }).n, 0, "nothing was sealed");
+  // So the file stores, and the only seal under that label is the file's.
+  const r = await storeMemory(env, sleeper, { label: "diary", file: b64(file) }, T0);
+  assert.equal(r.stored, true);
+  assert.ok(kv.has(memoryKey(r.id)));
+  const seals = db.prepare("SELECT id, hash FROM seals WHERE label = 'stored.diary'").all() as { id: number; hash: string }[];
+  assert.deepEqual(seals.map((x) => ({ ...x })), [{ id: r.seal.id, hash: sha(file) }]);
+  // A label that merely resembles the prefix is an ordinary label.
+  assert.equal((await sealMemory(env, sleeper, { hash: "b".repeat(64), label: "storedx" })).sealed, true);
+  assert.equal((await sealMemory(env, sleeper, { hash: "c".repeat(64), label: "restored.diary" })).sealed, true);
+});
+
+test("the newest file's bytes, deleted and sent again, go back under the same seal", async () => {
+  const { env, db, kv, sleeper } = fixture();
+  const a = lock("version a");
+  const first = await storeMemory(env, sleeper, { label: "diary", file: b64(a) }, T0);
+  await deleteMemory(env, sleeper, first.id, T0 + 1);
+  assert.equal(kv.has(memoryKey(first.id)), false);
+  const back = await storeMemory(env, sleeper, { label: "diary", file: b64(a) }, T0 + 2);
+  assert.equal(back.id, first.id, "the same row");
+  assert.equal(back.seal.id, first.seal.id, "and the same seal");
+  assert.deepEqual([back.stored, back.unchanged, back.restored, back.held], [true, true, true, true]);
+  assert.ok(Buffer.from(kv.get(memoryKey(first.id)) as Uint8Array).equals(a), "the bytes are held again");
+  assert.ok(Buffer.from((await memoryFile(env, sleeper, first.id)).bytes).equals(a));
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM memory_blobs").get() as { n: number }).n, 1);
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM seals WHERE label = 'stored.diary'").get() as { n: number }).n, 1);
+
+  // Once a different file is the newest, the earlier bytes sent again are a new file.
+  const second = await storeMemory(env, sleeper, { label: "diary", file: b64(lock("version b")) }, T0 + 3);
+  const third = await storeMemory(env, sleeper, { label: "diary", file: b64(a) }, T0 + 4);
+  assert.notEqual(third.id, first.id);
+  assert.ok(third.id > second.id);
+  assert.deepEqual([third.stored, third.unchanged, third.restored], [true, false, false]);
+  assert.notEqual(third.seal.id, first.seal.id, "with a seal of its own");
+  assert.deepEqual((await listMemory(env, "sleeper", "diary", undefined)).memory.map((m) => [m.id, m.held]), [[third.id, true], [second.id, true], [first.id, true]]);
 });

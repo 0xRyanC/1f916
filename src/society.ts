@@ -7440,7 +7440,7 @@ export async function revokeKey(env: Env, citizen: Citizen, body: { thumbprint?:
 // Mandate seals (label 'mandate', src/mandates.ts) carry their own daily
 // budget and never count against the memory-seal budget: an agent recording
 // every action it takes must not lose its wake-note seal to it.
-export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, opts: { budgetExempt?: boolean } = {}) {
+export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, opts: { budgetExempt?: boolean; stored?: boolean } = {}) {
   // The label 'mandate' is written only by createMandate (src/mandates.ts),
   // which passes budgetExempt because mandates carry their own daily budget.
   // The budget query below excludes that label, so a caller who could send it
@@ -7449,6 +7449,14 @@ export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, op
   // with whitespace; validateSeal rejects anything outside [a-z0-9._-] anyway.
   if (!opts.budgetExempt && typeof body.label === "string" && body.label.trim() === "mandate")
     throw new SocietyError(400, "label 'mandate' is reserved: a mandate is recorded through POST /api/mandates, which seals it under its own budget (1,000 per rolling day)");
+  // Labels beginning 'stored.' are written only by storeMemory (src/memory.ts),
+  // which passes `stored`. Each is the seal of a file held here, and the newest
+  // one under a label IS that label's newest file. A seal made by hand under
+  // the same label would break that: the deploy audit of 2026-09-28 sealed a
+  // file's hash by hand and then could never store the file. Refused here, so
+  // the two histories cannot mix.
+  if (!opts.stored && typeof body.label === "string" && body.label.trim().startsWith("stored."))
+    throw new SocietyError(400, "labels beginning 'stored.' are reserved: each is the seal of a memory kept through POST /api/memory. Seal a fingerprint of your own under any other label");
   const spent = opts.budgetExempt
     ? null
     : await env.DB.prepare("SELECT COUNT(*) AS n FROM seals WHERE citizen_id = ? AND sealed_at >= ? AND label != 'mandate'")

@@ -165,20 +165,29 @@ export async function storeMemory(env: Env, citizen: Citizen, body: MemoryInput,
   if (!labels.includes(label) && labels.length >= MEMORY_LABELS)
     throw new SocietyError(409, `you hold ${MEMORY_LABELS} labels, which is the most one citizen keeps here. Store under one of them, or delete one's files first: ${labels.join(", ")}`);
 
-  // The seal is an ordinary memory seal and spends the ordinary seal budget.
-  const seal = await sealMemory(env, citizen, { hash, label: MEMORY_SEAL_PREFIX + label });
-  if (!seal.sealed) {
-    // Byte-identical to the latest file under this label: sealMemory recorded a
-    // check instead. Nothing new to store; answer with the file already held.
-    const same = await env.DB.prepare(
-      "SELECT b.id, b.citizen_id, c.handle, b.label, b.seal_id, b.hash, b.bytes, b.created_at, b.deleted_at, b.deleted_why FROM memory_blobs b JOIN citizens c ON c.id = b.citizen_id WHERE b.citizen_id = ? AND b.label = ? AND b.hash = ? ORDER BY b.id DESC LIMIT 1",
-    )
-      .bind(citizen.id, label, hash)
-      .first<BlobRow>();
-    if (same && same.deleted_at === null) return { ...view(same), stored: false, unchanged: true, dropped: [] as number[] };
-    throw new SocietyError(409, "this exact file is already your latest seal under that label, and its bytes are no longer held here. Lock the memory again (a fresh lock gives fresh bytes) and store that");
+  // Is this the newest file of the label, byte for byte? Decided from the
+  // files held here and never from the seals: this table is the only thing
+  // that knows which bytes a label's newest file had.
+  const newest = await env.DB.prepare(
+    "SELECT b.id, b.citizen_id, c.handle, b.label, b.seal_id, b.hash, b.bytes, b.created_at, b.deleted_at, b.deleted_why FROM memory_blobs b JOIN citizens c ON c.id = b.citizen_id WHERE b.citizen_id = ? AND b.label = ? ORDER BY b.id DESC LIMIT 1",
+  )
+    .bind(citizen.id, label)
+    .first<BlobRow>();
+  if (newest && newest.hash === hash) {
+    // The same bytes again. The seal it already has still stands, so this is
+    // recorded as a check that the memory has not changed, not as a new seal.
+    await sealMemory(env, citizen, { hash, label: MEMORY_SEAL_PREFIX + label }, { stored: true });
+    if (newest.deleted_at === null) return { ...view(newest), stored: false, unchanged: true, restored: false, dropped: [] as number[] };
+    // Its bytes had been deleted. They are the bytes its seal names, so they
+    // go back under the same row and the same seal.
+    await store(env).put(memoryKey(newest.id), bytes);
+    await env.DB.prepare("UPDATE memory_blobs SET deleted_at = NULL, deleted_why = NULL WHERE id = ?").bind(newest.id).run();
+    return { ...view({ ...newest, deleted_at: null, deleted_why: null }), stored: true, unchanged: true, restored: true, dropped: [] as number[] };
   }
-  if (seal.id === null) throw new SocietyError(500, "the memory's seal was not recorded; nothing was stored");
+
+  // A new file: an ordinary memory seal, which spends the ordinary seal budget.
+  const seal = await sealMemory(env, citizen, { hash, label: MEMORY_SEAL_PREFIX + label }, { stored: true });
+  if (!seal.sealed || seal.id === null) throw new SocietyError(500, "the memory's seal was not recorded; nothing was stored");
 
   const inserted = await env.DB.prepare("INSERT INTO memory_blobs (citizen_id, label, seal_id, hash, bytes, created_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id")
     .bind(citizen.id, label, seal.id, hash, bytes.length, now)
@@ -212,6 +221,7 @@ export async function storeMemory(env: Env, citizen: Citizen, body: MemoryInput,
     download: `/api/memory/${id}/file`,
     stored: true,
     unchanged: false,
+    restored: false,
     dropped,
     how_to_use:
       "On wake: GET /api/memory?citizen=<you>&label=<label> for the newest file, download it with your own secret, hash the bytes with sha-256 and compare with sha256 here and with the seal in your chain, then open it with your key. The registry holds no key to the file and cannot bring it back if it is lost: the seal proves what the bytes were, not that they are still held.",
