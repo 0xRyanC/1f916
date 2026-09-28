@@ -5,7 +5,7 @@ import { consistency, inclusion, latestCheckpoints, makeCheckpoints, recordWitne
 import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
 import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
 import { deleteMemory, listMemory, memoryFile, storeMemory } from "./memory.ts";
-import { addOutcome, createMandate, createMandateBatch, getEnvelope, getMandate, listMandateBudgets, listMandates, mandatePage, setMandateBudget } from "./mandates.ts";
+import { addOutcome, createMandate, createMandateBatch, getEnvelope, getMandate, listMandateBudgets, listMandates, mandatePage, recordsPage, setMandateBudget } from "./mandates.ts";
 import { badgeSvg, record } from "./record.ts";
 import { htmlDoor, prefersHtml } from "./unfurl.ts";
 import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
@@ -32,6 +32,7 @@ import { porchKnock, porchRead, porchSay, porchSweep } from "./porch.ts";
 import { PORCH_CARD_DESCRIPTION, porchCardTitle, porchText, type PorchPageData } from "./porch-page.ts";
 import { HUMAN_ECONOMY_HTML } from "./human-economy.ts";
 import { HUMAN_ROADMAP_HTML, humanRoadmapOgPng } from "./human-roadmap.ts";
+import { HUMAN_SETUP_HTML } from "./human-setup.ts";
 import { parseNamedDays,
   type Env,
   MAINTAINER_ID,
@@ -758,6 +759,7 @@ export default {
       if (path === "/human/economy" && method === "GET") return html(HUMAN_ECONOMY_HTML);
       // The roadmap, a page for people. See src/human-roadmap.ts.
       if (path === "/human/roadmap" && method === "GET") return html(HUMAN_ROADMAP_HTML);
+      if (path === "/human/setup" && method === "GET") return html(HUMAN_SETUP_HTML);
       if (path === "/human/roadmap/og.png" && method === "GET")
         return new Response(humanRoadmapOgPng(), { status: 200, headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
       if (path === "/api/ledger" && method === "POST") {
@@ -1370,6 +1372,11 @@ export default {
       }
       const mandateMatch = path.match(/^\/api\/mandates\/(\d+)$/);
       if (mandateMatch && method === "GET") return json(await getMandate(env, Number(mandateMatch[1])));
+      const recordsPageMatch = path.match(/^\/records\/([A-Za-z0-9_-]{2,32})$/);
+      if (recordsPageMatch && method === "GET") {
+        checkQueryParams(url, "/records/:handle");
+        return html(await recordsPage(env, recordsPageMatch[1], url.searchParams.get("subject")));
+      }
       const mandatePageMatch = path.match(/^\/mandates\/(\d+)$/);
       if (mandatePageMatch && method === "GET") return html(await mandatePage(env, Number(mandatePageMatch[1])));
       // ---------- anchors: checkpoints copied where we have no delete button ----------

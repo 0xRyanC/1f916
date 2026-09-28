@@ -638,6 +638,64 @@ function envelopeBlock(m: Record<string, unknown>): string {
   return `<h2>Sealed envelope</h2><p class="dim">${envelopeSentence(m.envelope_format, m.envelope_bytes)} <a href="${esc(m.envelope as string)}">Download</a>.</p>`;
 }
 
+export const RECORDS_PAGE = 50;
+
+// The newest records of one citizen, for the page a person reads. The list
+// endpoint runs oldest-first because a reader catching up needs that order; a
+// person opening a page wants to see what happened last.
+export async function recentMandates(env: Env, citizenHandle: string, subjectRaw: string | null = null) {
+  const c = await env.DB.prepare("SELECT id, handle FROM citizens WHERE handle = ?").bind(citizenHandle).first<{ id: number; handle: string }>();
+  if (!c) throw new SocietyError(404, `no citizen '${citizenHandle}'`);
+  const subject = readSubject(subjectRaw);
+  const rows =
+    subject === null
+      ? (await env.DB.prepare("SELECT m.id, m.citizen_id, c.handle, m.seal_id, m.commit_hash, m.chained, m.instruction_hash, m.action_hash, m.outcome_hash, m.public, m.stored, m.envelope_bytes, m.label, m.subject, m.signature, m.key_thumbprint, m.created_at, o.seal_id AS o_seal_id, o.commit_hash AS o_commit_hash, o.chained AS o_chained, o.outcome_hash AS o_outcome_hash, o.stored AS o_stored, o.created_at AS o_created_at FROM mandates m JOIN citizens c ON c.id = m.citizen_id LEFT JOIN mandate_outcomes o ON o.mandate_id = m.id WHERE m.citizen_id = ? ORDER BY m.id DESC LIMIT ?").bind(c.id, RECORDS_PAGE + 1).all<MandateRow>()).results
+      : (await env.DB.prepare("SELECT m.id, m.citizen_id, c.handle, m.seal_id, m.commit_hash, m.chained, m.instruction_hash, m.action_hash, m.outcome_hash, m.public, m.stored, m.envelope_bytes, m.label, m.subject, m.signature, m.key_thumbprint, m.created_at, o.seal_id AS o_seal_id, o.commit_hash AS o_commit_hash, o.chained AS o_chained, o.outcome_hash AS o_outcome_hash, o.stored AS o_stored, o.created_at AS o_created_at FROM mandates m JOIN citizens c ON c.id = m.citizen_id LEFT JOIN mandate_outcomes o ON o.mandate_id = m.id WHERE m.citizen_id = ? AND m.subject = ? ORDER BY m.id DESC LIMIT ?").bind(c.id, subject, RECORDS_PAGE + 1).all<MandateRow>()).results;
+  const more = rows.length > RECORDS_PAGE;
+  return { handle: c.handle, subject, more, rows: more ? rows.slice(0, RECORDS_PAGE) : rows };
+}
+
+// One whole sentence per case, as everywhere on these pages.
+export function recordsCountSentence(shown: number, more: boolean, subject: string | null): string {
+  const whose = subject === null ? "" : ` made for ${subject}`;
+  if (shown === 0) return subject === null ? "This agent has kept no records yet." : `This agent has kept no records${whose}.`;
+  if (more) return `The ${shown} newest records${whose}, newest first. There are older ones; the full list is in the data below.`;
+  if (shown === 1) return `The one record${whose} this agent has kept.`;
+  return `All ${shown} records${whose} this agent has kept, newest first.`;
+}
+
+// The page a person opens to see what an agent has written down.
+export async function recordsPage(env: Env, citizenHandle: string, subjectRaw: string | null = null): Promise<string> {
+  const r = await recentMandates(env, citizenHandle, subjectRaw);
+  const day = (t: number) => new Date(t).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+  const line = (m: MandateRow) => {
+    const hasOutcome = m.outcome_hash !== null || m.o_outcome_hash !== null;
+    const kept = m.public === 1 ? "public, readable by anyone" : m.stored & STORED_ENVELOPE ? "private, text locked beside it" : "private, fingerprints only";
+    return (
+      `<tr><td class="n"><a href="/mandates/${m.id}">${m.id}</a></td><td>${esc(day(m.created_at))}</td>` +
+      `<td>${m.subject === null ? "" : esc(m.subject)}</td><td>${esc(m.label)}</td>` +
+      `<td>${hasOutcome ? "recorded" : "not yet"}</td><td>${esc(kept)}</td><td>${m.signature === null ? "" : "signed"}</td></tr>`
+    );
+  };
+  const data = `/api/mandates?citizen=${encodeURIComponent(r.handle)}${r.subject === null ? "" : `&subject=${encodeURIComponent(r.subject)}`}`;
+  return (
+    `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Records kept by ${esc(r.handle)} · 1F916</title>` +
+    `<style>:root{--bg:#fbfaf7;--ink:#1a1a1a;--muted:#5b5b5b;--line:#dcd8cf;--soft:#f0ede6;--accent:#0e5c3f}@media(prefers-color-scheme:dark){:root{--bg:#141412;--ink:#ebe8e1;--muted:#a8a49b;--line:#33312c;--soft:#1e1d1a;--accent:#7fcfa6}}` +
+    `body{margin:0;background:var(--bg);color:var(--ink);font-family:Georgia,serif;font-size:18px;line-height:1.6}main{max-width:860px;margin:0 auto;padding:36px 16px 80px}h1{font-weight:400;font-size:30px;margin:0 0 4px}` +
+    `.sub{color:var(--muted);font-size:15px;margin:0 0 20px;font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif}a{color:var(--ink)}` +
+    `.wrap{overflow-x:auto}table{width:100%;border-collapse:collapse;font-size:15px;font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif}th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);vertical-align:top;white-space:nowrap}` +
+    `th{font-weight:700;color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.06em}td.n{font-variant-numeric:tabular-nums}</style></head><body><main>` +
+    `<h1>Records kept by ${esc(r.handle)}</h1>` +
+    `<p class="sub">${esc(recordsCountSentence(r.rows.length, r.more, r.subject))}</p>` +
+    (r.rows.length
+      ? `<div class="wrap"><table><thead><tr><th>Record</th><th>When</th><th>For</th><th>Label</th><th>Result</th><th>Text</th><th>Signature</th></tr></thead><tbody>${r.rows.map(line).join("")}</tbody></table></div>`
+      : "") +
+    `<p class="sub">Each record opens to what the agent was told, what it did and what came of it, with the proof that none of it was changed. The same list as data: <a href="${esc(data)}">${esc(data)}</a>. The agent's whole record: <a href="/api/record/${esc(encodeURIComponent(r.handle))}">/api/record/${esc(r.handle)}</a>.</p>` +
+    `<p class="sub">To give your own agent a record: <a href="/human/setup">1f916.ai/human/setup</a>.</p>` +
+    `</main></body></html>`
+  );
+}
+
 // The human page: the plain reading of one mandate, for a dispute, a hire or
 // a story. No script, no external dependency; everything on it is also in
 // the JSON at /api/mandates/<id>.
