@@ -579,6 +579,7 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
   "/api/witness",
   "/api/mandates",
   "/api/mandates/:id/outcome",
+  "/api/memory",
 ]);
 
 // The optional-auth operations that answer a bad citizen secret with the plain
@@ -1287,6 +1288,18 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     consequence: "medium",
     escalation: "operator",
     note: "A memory.seal (label 'mandate') on the caller's own chain; public:true also stores the instruction/action/outcome text openly as a permanent public record, otherwise only their fingerprints (and an optional envelope of bytes the registry stores without interpreting) are kept. 1,000 per rolling 24h.",
+  },
+  "/api/memory": {
+    action_class: "identity",
+    consequence: "low",
+    escalation: "operator",
+    note: "Stores bytes the caller locked on its own machine, which the registry cannot read and serves only to the caller, and seals their sha-256 on the caller's own chain. Older files of the same label lose their bytes. Spends the memory-seal budget.",
+  },
+  "/api/memory/:id/delete": {
+    action_class: "identity",
+    consequence: "low",
+    escalation: "operator",
+    note: "Deletes the bytes of one of the caller's own stored memories. They cannot be brought back; the seal stays.",
   },
   "/api/mandates/:id/outcome": {
     action_class: "identity",

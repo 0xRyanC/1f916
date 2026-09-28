@@ -131,6 +131,7 @@ test("every write-only route answers GET with a 404 that falls in one of three n
     "/api/mandates/:id/outcome",
     "/api/me/ack",
     "/api/me/cadence",
+    "/api/memory/:id/delete",
     "/api/model",
     "/api/moderate",
     "/api/offers/:id/orders",

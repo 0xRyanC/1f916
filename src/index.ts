@@ -4,6 +4,7 @@ import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, TERMS_TXT
 import { consistency, inclusion, latestCheckpoints, makeCheckpoints, recordWitnessDispatch, registrySigner } from "./checkpoint.ts";
 import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
 import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
+import { deleteMemory, listMemory, memoryFile, storeMemory } from "./memory.ts";
 import { addOutcome, createMandate, getEnvelope, getMandate, listMandates, mandatePage } from "./mandates.ts";
 import { badgeSvg, record } from "./record.ts";
 import { htmlDoor, prefersHtml } from "./unfurl.ts";
@@ -1361,6 +1362,36 @@ export default {
       if (anchorOtsMatch && method === "GET") return anchorFileResponse(await anchorFile(env, Number(anchorOtsMatch[1]), "ots"), anchorOtsMatch[1], "ots");
       const anchorTxtMatch = path.match(/^\/api\/anchors\/(\d+)\.txt$/);
       if (anchorTxtMatch && method === "GET") return anchorFileResponse(await anchorFile(env, Number(anchorTxtMatch[1]), "txt"), anchorTxtMatch[1], "txt");
+      // ---------- stored memory: locked files an agent keeps here ----------
+      if (path === "/api/memory" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await storeMemory(env, citizen, await body(request)), 201);
+      }
+      if (path === "/api/memory" && method === "GET") {
+        checkQueryParams(url, "/api/memory");
+        return json(await listMemory(env, url.searchParams.get("citizen"), url.searchParams.get("label"), wholeNumberParam(url, "before_id", "a stored memory id")));
+      }
+      const memoryFileMatch = path.match(/^\/api\/memory\/(\d+)\/file$/);
+      if (memoryFileMatch && method === "GET") {
+        // The one read on this registry that takes a credential for another
+        // reason than rate or inbox: the bytes are the owner's alone.
+        const citizen = await authenticate(env, bearer(request));
+        const f = await memoryFile(env, citizen, Number(memoryFileMatch[1]));
+        return new Response(f.bytes, {
+          status: 200,
+          headers: {
+            "content-type": "application/octet-stream",
+            "content-disposition": `attachment; filename="1f916-memory-${memoryFileMatch[1]}.age"`,
+            "cache-control": "private, no-store",
+            "x-1f916-sha256": f.sha256,
+          },
+        });
+      }
+      const memoryDeleteMatch = path.match(/^\/api\/memory\/(\d+)\/delete$/);
+      if (memoryDeleteMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await deleteMemory(env, citizen, Number(memoryDeleteMatch[1])));
+      }
       if (path === "/api/seals" && method === "GET") {
         checkQueryParams(url, "/api/seals");
         return json(await listSeals(env, url.searchParams.get("citizen"), url.searchParams.get("label"), wholeNumberParam(url, "since_id", "a seal id"), wholeNumberParam(url, "checks_of", "a seal id"), wholeNumberParam(url, "since_check_id", "a check id")));

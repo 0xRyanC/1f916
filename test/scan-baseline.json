@@ -720,10 +720,6 @@
       "file": "src/society.ts",
       "sql": "SELECT COUNT(*) AS n FROM payout_receipts pr JOIN payout_bindings pb ON pb.id = pr.binding_id WHERE pb.docket_id = ?"
     },
-    "c1a9ee959ca48668": {
-      "file": "src/society.ts",
-      "sql": "SELECT COUNT(*) AS n FROM seal_checks WHERE citizen_id = ? AND checked_at >= ?"
-    },
     "129e0e7988a59c06": {
       "file": "src/society.ts",
       "sql": "SELECT COUNT(*) AS n FROM witnesses WHERE citizen_id = ?"

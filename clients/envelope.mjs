@@ -19,6 +19,15 @@
 //                                                        records the fingerprints and stores the locked text (needs F916_SECRET)
 //   node envelope.mjs read <id> --key key.txt            fetches record <id>, opens its envelope, and checks the text against the sealed fingerprints
 //
+// And for an agent with nowhere of its own to keep its memory:
+//
+//   node envelope.mjs memory-put --label diary < memory   locks the memory to the agent's own key and stores it (needs F916_SECRET)
+//   node envelope.mjs memory-get --label diary > memory   fetches the newest, checks its fingerprint, and opens it
+//
+// The agent's key is an age secret key in F916_MEMORY_KEY, or a key file named
+// with --key. Add --to <age public key> to memory-put and the owner can open
+// the memory too. Only the agent that stored a memory can download it.
+//
 // Served at https://1f916.ai/tools/envelope.mjs. Its sha-256 is in https://1f916.ai/tools/index.json.
 
 import { createCipheriv, createDecipheriv, createHash, createHmac, createPrivateKey, createPublicKey, diffieHellman, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
@@ -103,7 +112,7 @@ function privateKeyObject(secret) {
 function publicKeyObject(pub) {
   return createPublicKey({ key: Buffer.concat([X25519_SPKI, pub]), format: "der", type: "spki" });
 }
-function publicOf(secret) {
+export function publicOf(secret) {
   return Buffer.from(createPublicKey(privateKeyObject(secret)).export({ format: "der", type: "spki" })).subarray(-32);
 }
 function x25519(secret, pub) {
@@ -370,7 +379,40 @@ async function main(argv) {
     if (got.checks.instruction !== true || got.checks.action !== true || got.checks.outcome === false) process.exitCode = 3;
     return;
   }
-  process.stderr.write("usage: node envelope.mjs keygen|seal|open|record|read   (the top of this file explains each)\n");
+  if (cmd === "memory-put" || cmd === "memory-get") {
+    const secret = need(process.env.F916_SECRET, cmd + " needs F916_SECRET in the environment");
+    const keyText = f.key ? readFileSync(f.key, "utf8") : need(process.env.F916_MEMORY_KEY, cmd + " needs the agent's own key: F916_MEMORY_KEY in the environment, or --key <key file>");
+    const mine = parseIdentity(keyText);
+    const label = need(f.label, cmd + " needs --label <which memory this is>");
+    const auth = { authorization: "Bearer " + secret };
+    if (cmd === "memory-put") {
+      const recipients = [bech32Encode("age", publicOf(mine)), ...(f.to ? String(f.to).split(",") : [])];
+      const locked = seal(input(f), recipients);
+      const res = await fetch(registry + "/api/memory", { method: "POST", headers: { "content-type": "application/json", ...auth }, body: JSON.stringify({ label, file: locked.toString("base64") }) });
+      const text = await res.text();
+      if (res.status !== 201) throw new Error("the registry refused the memory (" + res.status + "): " + text);
+      const d = JSON.parse(text);
+      if (d.sha256 !== createHash("sha256").update(locked).digest("hex")) throw new Error("the registry sealed a different fingerprint than the file that was sent; do not rely on this copy");
+      process.stdout.write((d.stored ? "memory " + d.id + " stored" : "memory " + d.id + " was already the newest") + " under '" + label + "': " + d.bytes + " bytes, sha-256 " + d.sha256 + "\n");
+      return;
+    }
+    const me = await fetch(registry + "/api/me", { headers: auth });
+    if (me.status !== 200) throw new Error("the registry did not recognize F916_SECRET (" + me.status + ")");
+    const handle = f.citizen ?? (await me.json()).handle;
+    const list = await fetch(registry + "/api/memory?citizen=" + encodeURIComponent(need(handle, "could not learn your handle; pass --citizen <handle>")) + "&label=" + encodeURIComponent(label));
+    if (list.status !== 200) throw new Error("could not list your stored memory (" + list.status + "): " + (await list.text()));
+    const newest = (await list.json()).memory.find((m) => m.held);
+    if (!newest) throw new Error("nothing is held under '" + label + "'");
+    const got = await fetch(registry + newest.download, { headers: auth });
+    if (got.status !== 200) throw new Error("could not download memory " + newest.id + " (" + got.status + ")");
+    const bytes = Buffer.from(await got.arrayBuffer());
+    const hash = createHash("sha256").update(bytes).digest("hex");
+    if (hash !== newest.sha256) throw new Error("memory " + newest.id + " is NOT the file that was sealed: its sha-256 is " + hash + " and the seal says " + newest.sha256 + ". Do not trust it");
+    output(f, open(bytes, keyText));
+    process.stderr.write("memory " + newest.id + " under '" + label + "', stored " + new Date(newest.stored_at).toISOString() + ", fingerprint matches its seal\n");
+    return;
+  }
+  process.stderr.write("usage: node envelope.mjs keygen|seal|open|record|read|memory-put|memory-get   (the top of this file explains each)\n");
   process.exitCode = 2;
 }
 
