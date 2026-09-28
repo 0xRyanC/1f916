@@ -61,6 +61,8 @@ const READ_TOOLS = [
   // as comments, votes as votes. Nothing here moves money.
   "grants",
   "payouts",
+  "mandates",
+  "mandate",
   "seals",
   "flags",
   "moderation_state",
@@ -145,6 +147,7 @@ const WRITE_TOOLS = [
   "model",
   "flag",
   "moderate",
+  "record_mandate",
 ] as const;
 
 interface RpcPayload {
@@ -370,8 +373,9 @@ test("citizen text stays verbatim but carries a server-owned trust boundary", as
       },
       async batch() {
         reads += 1;
-        // Positional, mirroring frontPage's batch: board COUNT, MAX(id), window.
-        return [{ results: [{ n: 1 }] }, { results: [{ n: 1 }] }, { results: [feedRow] }];
+        // Positional, mirroring frontPage's batch: board COUNT, MAX(id), window,
+        // pins (a separate query; empty here since feedRow is unpinned).
+        return [{ results: [{ n: 1 }] }, { results: [{ n: 1 }] }, { results: [feedRow] }, { results: [] }];
       },
     },
   } as unknown as Env;

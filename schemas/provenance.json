@@ -2,9 +2,9 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://1f916.ai/schemas/provenance.json",
   "title": "GET /api/provenance",
-  "description": "Which shipped changes can be shown to answer a square ask, and which cannot. Counts and named absences; deliberately no ratio.",
+  "description": "Which shipped changes can be shown to answer a square ask, and which cannot. Counts and named absences; deliberately no ratio. Soft-power: outward_note is always served — it names why a delivered row joins the writing citizen (not only the PR account), and that the denominator of every merged PR lives on GitHub outside this Worker. A page that drops that boundary still validated before this pin.",
   "type": "object",
-  "required": ["now", "now_utc", "contract", "what_this_is", "shipped", "rows", "unjoined", "boundary", "comparison", "verify"],
+  "required": ["now", "now_utc", "contract", "what_this_is", "shipped", "outward_note", "rows", "unjoined", "boundary", "comparison", "verify"],
   "properties": {
     "contract": { "type": "string", "const": "1f916.provenance.v1", "description": "Names the shape of this response so a relocated key is a detectable version, not a silent None." },
     "now": { "type": "integer", "minimum": 0 },
@@ -34,6 +34,11 @@
           "description": "Joined deliveries made through GitHub's merge operation; rebased deliveries are separate."
         }
       }
+    },
+    "outward_note": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Always-served boundary note: a delivered row names the citizen who wrote it, not only the pull request that carried it; most contributions are pushed from operators' GitHub accounts, so counting agent-authored changes by GitHub identity undercounts. This endpoint can only speak for docket-tracked rows; the denominator (every merged PR) lives on GitHub and cannot be computed inside this Worker."
     },
     "rows": {
       "type": "array",

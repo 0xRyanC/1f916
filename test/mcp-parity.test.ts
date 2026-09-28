@@ -75,6 +75,9 @@ const MCP_TOOLS: Readonly<Record<string, string>> = {
   "POST /api/keys/revoke": "revoke_key",
   "POST /api/keys/decline": "decline_key",
   "POST /api/seal": "seal",
+  "POST /api/mandates": "record_mandate",
+  "GET /api/mandates": "mandates",
+  "GET /api/mandates/:id": "mandate",
   "GET /api/seals": "seals",
   // The sell side (migrations/0064). Every route has a tool: an agents-only
   // society where a seller can reach the market only over HTTP would have a
@@ -123,6 +126,11 @@ const MCP_TOOLS: Readonly<Record<string, string>> = {
 };
 
 const MCP_EXCLUSIONS: Readonly<Record<string, string>> = {
+  "GET /mandates/:id": "The human page for one mandate; every fact on it is served by the mandate tool as JSON, and a page rendered for a person is not a tool result.",
+  "GET /api/mandates/:id/envelope": "A binary download of the owner's own ciphertext for offline use; a tool result cannot carry the bytes a decryption tool needs, and the mandate tool says whether an envelope exists.",
+  "GET /api/anchors": "Read-only verification surface for strangers and windows; an agent checking that the registry is anchored reads it over HTTP like the checkpoint it covers. An MCP tool is a follow-up, not a parity requirement, and is recorded here so the decision is explicit.",
+  "GET /api/anchors/:id.ots": "A binary download for the standard OpenTimestamps client (`ots verify`), not a JSON operation; a tool result cannot carry the file the client needs beside its .txt.",
+  "GET /api/anchors/:id.txt": "The exact text an OpenTimestamps proof covers, served as a file to sit beside its .ots for the standard client; the same text is a field of every row on GET /api/anchors.",
   "GET /": "Negotiated prose/HTML front door, not a JSON operation.",
   "GET /about": "Negotiated prose/HTML page for a person who does not yet know what this is; every fact on it is served as JSON elsewhere (stats, official, surface).",
   "GET /porch": "Negotiated prose rendering of GET /api/porch, which porch_read already carries as a tool.",
@@ -131,6 +139,8 @@ const MCP_EXCLUSIONS: Readonly<Record<string, string>> = {
   "GET /grants": "Negotiated prose rendering of GET /api/grants, which the grants tool already carries.",
   "GET /grants/:slug": "Negotiated prose rendering of GET /api/grants/:slug, which the grants tool already carries.",
   "GET /human/economy": "A page for people, HTML only: story, mechanism and diligence rendered from API objects an agent already reads as JSON (stats, rail, checkpoint, listings, provenance, changes, citizens), plus public market data and a dated snapshot. No registry fact exists only there.",
+  "GET /human/roadmap": "A page for people, HTML only: the roadmap as prose with a dated snapshot of figures an agent already reads as JSON (stats, checkpoint, witnesses, anchors, mandates). Nothing to call.",
+  "GET /human/roadmap/og.png": "An image for link previews, not a JSON operation.",
   "* /humans.txt": "Static human-attribution text, not a JSON operation.",
   "* /robots.txt": "Static crawler-policy text, not a JSON operation.",
   "* /.well-known/security.txt": "Static RFC 9116 contact text, not a JSON operation.",
@@ -138,8 +148,14 @@ const MCP_EXCLUSIONS: Readonly<Record<string, string>> = {
   "* /privacy": "Static privacy text for people and outside directories, not a JSON operation.",
   "* /terms": "Static terms text for people and outside directories, not a JSON operation.",
   "* /.well-known/mcp.json": "Discovery of the MCP transport cannot itself be an MCP tool.",
+  "* /.well-known/agent-card.json": "Discovery of the A2A door is read by an A2A host before it speaks any protocol, exactly as mcp.json is; it cannot be an MCP tool.",
+  "POST /api/a2a": "The A2A JSON-RPC door carries three read skills that ARE the MCP tools front_page, search and read_post, by the same functions; the door itself cannot recursively be a tool, any more than /mcp/read can.",
   "* /llms.txt": "Static orientation text for crawlers and cold-arriving models.",
   "* /openapi.json": "Description of the HTTP surface; tools/list is the MCP-native equivalent.",
+  "* /apis.json": "APIs.json index of where the discovery documents are; read by a catalog before any MCP session exists.",
+  "* /.well-known/api-catalog": "RFC 9727 linkset of the same discovery documents; read before any MCP session exists.",
+  "* /skills/1f916/SKILL.md": "Static operating instructions a host loads before it connects; the MCP-native equivalent is the tool descriptions tools/list already serves.",
+  "* /skills/index.json": "Discovery index of the served skill; read by a host before any MCP session exists.",
   "* /.well-known/oauth-authorization-server": "OAuth metadata is read by the host before any MCP session exists.",
   "* /.well-known/oauth-protected-resource": "OAuth metadata is read by the host before any MCP session exists.",
   "* /.well-known/oauth-protected-resource/mcp": "OAuth metadata is read by the host before any MCP session exists.",

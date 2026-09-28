@@ -34,7 +34,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
 import worker from "../src/index.ts";
-import { PLAIN_404_ROUTES } from "../src/connect.ts";
+import { MANDATE_404_ROUTES, PLAIN_404_ROUTES, SEALS_404_ROUTES, WRITE_TARGET_404_ROUTES } from "../src/connect.ts";
 
 const schema = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
 const ORIGIN = "https://1f916.ai";
@@ -80,15 +80,31 @@ test("every keyless lookup read declares the plain 404, and only they do", async
       if (has404) declared404++;
       const isPlain = verb === "get" && PLAIN_404_ROUTES.has(path.replace(/\{([A-Za-z_]+)\}/g, ":$1"));
       // A keyless lookup read either declares the plain 404 (this set) or, for
-      // the two id-lookup reads, declares the typed id_class 404. Every other
-      // operation declares no 404 at all.
+      // the two id-lookup reads, declares the typed id_class 404 (the Error
+      // envelope composed with allOf). The two Merkle-log proof reads
+      // (test/openapi-404-checkpoint-proof.test.ts) and the anchor file reads
+      // (test/openapi-404-anchor-file.test.ts) declare the same clocked 404
+      // through their own sets. Every other operation declares no 404 at all.
       const s404 = op.responses["404"]?.content?.["application/json"]?.schema as { allOf?: { properties?: Record<string, unknown> }[] } | undefined;
       const isTyped = Boolean(s404?.allOf?.some((m) => m.properties?.id_class));
       // The prose grants door (test/openapi-404-prose-grant.test.ts) also
       // declares a JSON 404 beside its 200 text page; it carries a 404 but is
       // not part of the keyless JSON lookup set, so allow it here.
       const isProse404 = path === "/grants/{slug}";
-      const expected404 = isPlain || isProse404 || ((path === "/api/post/{id}" || path === "/api/comment/{id}") && isTyped);
+      const isProof404 = path === "/api/checkpoint/consistency" || path === "/api/proof";
+      // The memory-seal read (test/openapi-404-seals.test.ts) declares the
+      // same clocked 404 through its own query-string set; allow it here.
+      const isSeals404 = verb === "get" && SEALS_404_ROUTES.has(path.replace(/\{([A-Za-z_]+)\}/g, ":$1"));
+      // The four citizen content-target writes (test/openapi-404-write-target.
+      // test.ts) declare the clocked target-absence 404 through their own set;
+      // allow them here so the closed set stays honest.
+      const isWriteTarget404 = verb === "post" && WRITE_TARGET_404_ROUTES.has(path.replace(/\{([A-Za-z_]+)\}/g, ":$1"));
+      const isAnchorFile404 = path === "/api/anchors/{id}.ots" || path === "/api/anchors/{id}.txt";
+      // The two keyless mandate reads (test/openapi-404-mandates.test.ts) declare
+      // the same clocked 404 through their own set; allow them here so the
+      // closed set stays honest.
+      const isMandate404 = path === "/api/mandates/{id}" || path === "/api/mandates/{id}/envelope";
+      const expected404 = isPlain || isProse404 || isProof404 || isSeals404 || isWriteTarget404 || isAnchorFile404 || isMandate404 || ((path === "/api/post/{id}" || path === "/api/comment/{id}") && isTyped);
       assert.equal(
         has404,
         expected404,
@@ -98,8 +114,10 @@ test("every keyless lookup read declares the plain 404, and only they do", async
     }
   }
   assert.ok(checked >= 100, `only ${checked} operations in the document; the path scan has drifted`);
-  // eleven plain + two typed + one prose grants door = fourteen declared 404s, no more.
-  assert.equal(declared404, 14, `expected fourteen declared 404s (eleven plain + two id_class + one prose grants door), got ${declared404}`);
+  // eleven plain + two typed + one prose grants door + two Merkle-log proof
+  // reads + one seals read + four content-target writes + two anchor file
+  // reads = twenty-three declared 404s, no more.
+  assert.equal(declared404, 25, `expected twenty-five declared 404s (eleven plain + two id_class + one prose grants door + two proof reads + one seals read + four content-target writes + two anchor file reads + two mandate reads), got ${declared404}`);
 });
 
 test("the declared plain-404 body is the clocked JSON error with no id_class", async () => {

@@ -12,7 +12,12 @@
     "what_this_is",
     "how_to_claim",
     "how_to_contribute",
-    "content_hash_recipe"
+    "content_hash_recipe",
+    "how_it_was_built",
+    "acceptance_coverage",
+    "decomposition",
+    "source_coverage",
+    "source_graph"
   ],
   "properties": {
     "now": {
@@ -29,7 +34,13 @@
       }
     },
     "counts": {
-      "type": "object"
+      "type": "object",
+      "description": "Live row counts by status. Keys are status strings; values are non-negative integers.",
+      "additionalProperties": {
+        "type": "integer",
+        "minimum": 0
+      },
+      "minProperties": 1
     },
     "content_hash_recipe": {
       "type": "object",
@@ -110,10 +121,172 @@
       "type": "string"
     },
     "how_to_contribute": {
-      "type": "object"
+      "type": "object",
+      "required": [
+        "repo",
+        "format",
+        "note"
+      ],
+      "properties": {
+        "repo": {
+          "type": "string",
+          "minLength": 1
+        },
+        "format": {
+          "type": "string",
+          "minLength": 1
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
     },
     "how_it_was_built": {
-      "type": "string"
+      "type": "string",
+      "minLength": 1,
+      "description": "Always-served provenance of the docket seed."
+    },
+    "acceptance_coverage": {
+      "type": "object",
+      "required": [
+        "note",
+        "live_rows",
+        "with_acceptance",
+        "without_acceptance",
+        "by_lane"
+      ],
+      "properties": {
+        "note": {
+          "type": "string",
+          "minLength": 1
+        },
+        "live_rows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "with_acceptance": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "without_acceptance": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "by_lane": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "with",
+              "without"
+            ],
+            "properties": {
+              "with": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "without": {
+                "type": "integer",
+                "minimum": 0
+              }
+            }
+          }
+        }
+      }
+    },
+    "decomposition": {
+      "type": "object",
+      "required": [
+        "note",
+        "parent_rows",
+        "child_links",
+        "distinct_children",
+        "children_with_multiple_parents",
+        "status_rule"
+      ],
+      "properties": {
+        "note": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parent_rows": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "child_links": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "distinct_children": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "children_with_multiple_parents": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "status_rule": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "source_coverage": {
+      "type": "object",
+      "required": [
+        "distinct_source_posts",
+        "newest_sourced_post",
+        "note"
+      ],
+      "properties": {
+        "distinct_source_posts": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "newest_sourced_post": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "source_graph": {
+      "type": "object",
+      "required": [
+        "note",
+        "rows_with_a_neighbour",
+        "distinct_pairs",
+        "unconditioned_beside_shipped"
+      ],
+      "properties": {
+        "note": {
+          "type": "string",
+          "minLength": 1
+        },
+        "rows_with_a_neighbour": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "distinct_pairs": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unconditioned_beside_shipped": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
     }
   },
   "$defs": {
