@@ -1331,7 +1331,7 @@ export default {
       }
       if (path === "/api/mandates" && method === "GET") {
         checkQueryParams(url, "/api/mandates");
-        return json(await listMandates(env, url.searchParams.get("citizen"), wholeNumberParam(url, "since_id", "a mandate id")));
+        return json(await listMandates(env, url.searchParams.get("citizen"), wholeNumberParam(url, "since_id", "a mandate id"), url.searchParams.get("subject")));
       }
       const mandateEnvMatch = path.match(/^\/api\/mandates\/(\d+)\/envelope$/);
       if (mandateEnvMatch && method === "GET") {

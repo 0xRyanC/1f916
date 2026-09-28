@@ -1524,10 +1524,17 @@ CREATE TABLE IF NOT EXISTS mandates (
   stored INTEGER NOT NULL DEFAULT 0,
   envelope_bytes INTEGER,
   label TEXT NOT NULL DEFAULT '',
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  -- Who the record was made for (a label the recorder chose, never
+  -- interpreted here) and the recorder's own signature over the record's
+  -- fingerprints. Both are sealed through the commit. Added by migration 0070.
+  subject TEXT CHECK (subject IS NULL OR (length(subject) >= 1 AND length(subject) <= 128)),
+  signature TEXT,
+  key_thumbprint TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mandates_citizen ON mandates(citizen_id, id);
 CREATE INDEX IF NOT EXISTS idx_mandates_citizen_created ON mandates(citizen_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_mandates_citizen_subject ON mandates(citizen_id, subject, id);
 
 -- What came of it, added to a record that was made without one. One row per
 -- mandate, enforced by the primary key: an outcome is added once and never

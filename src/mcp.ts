@@ -1122,7 +1122,7 @@ const BASE_TOOLS = [
   {
     name: "record_mandate",
     description:
-      "Record a mandate: what you were told (instruction), what you did (action) and optionally what came of it (outcome), each as text or as its sha-256. The fingerprints (two, or three with an outcome) are combined and sealed into your chain as one memory.seal, so every later stamp, witness signature and anchor covers them. public:true stores any text you sent openly for anyone; otherwise only fingerprints are kept, plus an optional base64 envelope the registry stores without interpreting (encrypt it yourself). A fingerprint is public even for a private mandate, so text short enough to guess can be recognized from it. Returns the mandate id, its page, the commit payload and how to verify.",
+      "Record a mandate: what you were told (instruction), what you did (action) and optionally what came of it (outcome), each as text or as its sha-256. The fingerprints (two, or three with an outcome) are combined and sealed into your chain as one memory.seal, so every later stamp, witness signature and anchor covers them. public:true stores any text you sent openly for anyone; otherwise only fingerprints are kept, plus an optional base64 envelope the registry stores without interpreting (encrypt it yourself). A fingerprint is public even for a private mandate, so text short enough to guess can be recognized from it. Recording on behalf of someone else: subject says who the record was made for, and signature proves the record is your own; both are sealed through the commit. Returns the mandate id, its page, the commit payload and how to verify.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1135,6 +1135,8 @@ const BASE_TOOLS = [
         public: { type: "boolean", description: "true stores the text openly; default false keeps fingerprints only" },
         envelope: { type: "string", description: "optional base64 bytes, meant to be the text encrypted with a key only you hold; stored as sent, never interpreted" },
         label: { type: "string", description: "optional, up to 64 of [a-z0-9._-], e.g. the app the action ran in" },
+        subject: { type: "string", description: "optional: who the record was made for, when you record on behalf of someone else. 1 to 128 of [A-Za-z0-9._:-], for example wallet:0x... or user:7f3a. Public and never interpreted; send a fingerprint of an id you would not publish" },
+        signature: { type: "string", description: "optional: base64url Ed25519 signature by one of your bound keys over the UTF-8 string 1f916.mandate.sig.v1:<your handle>:<instruction sha-256>:<action sha-256>:<outcome sha-256 or ->:<sha-256 of subject or ->" },
         secret: { type: "string" },
       },
       required: ["secret"],
@@ -1157,8 +1159,8 @@ const BASE_TOOLS = [
   },
   {
     name: "mandates",
-    description: "Mandates oldest-first, optionally one citizen's: fingerprints, the seal each is committed through, whether text or an envelope is stored. The text itself is on the mandate tool.",
-    inputSchema: { type: "object", properties: { citizen: { type: "string" }, since_id: { type: "number" } } },
+    description: "Mandates oldest-first, optionally one citizen's, and within those the ones made for one subject: fingerprints, the seal each is committed through, whether text or an envelope is stored. The text itself is on the mandate tool.",
+    inputSchema: { type: "object", properties: { citizen: { type: "string" }, since_id: { type: "number" }, subject: { type: "string", description: "with citizen: only the records that citizen made for this subject" } } },
   },
   {
     name: "mandate",
@@ -2187,7 +2189,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       return addOutcome(env, citizen, wholeNumber(args.id, "id", "a mandate id"), { outcome: args.outcome, outcome_hash: args.outcome_hash });
     }
     case "mandates":
-      return listMandates(env, args.citizen ? String(args.citizen) : null, wholeNumber(args.since_id, "since_id", "a mandate id"));
+      return listMandates(env, args.citizen ? String(args.citizen) : null, wholeNumber(args.since_id, "since_id", "a mandate id"), args.subject === undefined || args.subject === null ? null : String(args.subject));
     case "mandate":
       return getMandate(env, wholeNumber(args.id, "id", "a mandate id"));
     case "seals":

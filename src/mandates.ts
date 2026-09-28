@@ -15,12 +15,22 @@
 
 import type { Env, Citizen } from "./society.ts";
 import { SocietyError, sealMemory } from "./society.ts";
+import { b64urlDecode, verifyEd25519 } from "./keys.ts";
 
 export const MANDATES_PER_DAY = 1000;
 export const TEXT_MAX = 16_000;
 export const ENVELOPE_MAX = 65_536;
 export const MANDATE_PAGE = 100;
 export const COMMIT_PREFIX = "1f916.mandate.v1";
+// A record made FOR somebody, or signed by the recorder's own key. A company
+// that records on behalf of its users says which user with `subject`, and
+// proves the record is its own with `signature`. Both are sealed: the commit
+// carries the fingerprint of each. A record with neither keeps the v1 payload,
+// so every record made before this existed reads exactly as it did.
+export const COMMIT_PREFIX_V2 = "1f916.mandate.v2";
+export const MANDATE_SIG_PREFIX = "1f916.mandate.sig.v1";
+export const SUBJECT_MAX = 128;
+const SUBJECT_RE = /^[A-Za-z0-9._:-]{1,128}$/;
 // What came of it, added after the fact. It is its own sealed commit and it
 // names the record's commit, so an outcome cannot be moved to another record
 // and the record it was added to is left byte for byte as it was sealed.
@@ -48,6 +58,42 @@ export function commitPayload(handle: string, createdAt: number, ih: string, ah:
   return `${COMMIT_PREFIX}:${handle}:${createdAt}:${ih}:${ah}:${oh ?? "-"}`;
 }
 
+export function commitPayloadV2(handle: string, createdAt: number, ih: string, ah: string, oh: string | null, subjectHash: string | null, signatureHash: string | null): string {
+  return `${COMMIT_PREFIX_V2}:${handle}:${createdAt}:${ih}:${ah}:${oh ?? "-"}:${subjectHash ?? "-"}:${signatureHash ?? "-"}`;
+}
+
+// What the recorder's key signs. Every part of it is known to the signer before
+// the request is sent, which the commit is not: the commit carries the
+// registry's clock. The subject is signed by its fingerprint, so the message
+// has no field a subject's own characters could be mistaken for.
+export function mandateSigMessage(handle: string, ih: string, ah: string, oh: string | null, subjectHash: string | null): string {
+  return `${MANDATE_SIG_PREFIX}:${handle}:${ih}:${ah}:${oh ?? "-"}:${subjectHash ?? "-"}`;
+}
+
+export function readSubject(raw: unknown): string | null {
+  if (raw === undefined || raw === null || raw === "") return null;
+  if (typeof raw !== "string" || !SUBJECT_RE.test(raw))
+    throw new SocietyError(400, `subject is optional: who the record was made for, 1 to ${SUBJECT_MAX} of [A-Za-z0-9._:-], for example wallet:0x... or user:7f3a. The registry never interprets it, and it is public: send a fingerprint of an id you would not publish`);
+  return raw;
+}
+
+async function readSignature(env: Env, citizen: Citizen, raw: unknown, message: string): Promise<{ signature: string; thumbprint: string } | null> {
+  if (raw === undefined || raw === null) return null;
+  const sigB64u = typeof raw === "string" ? raw : "";
+  if (!/^[A-Za-z0-9_-]+$/.test(sigB64u)) throw new SocietyError(400, "signature must be base64url (unpadded)");
+  const sig = b64urlDecode(sigB64u);
+  if (sig.length !== 64) throw new SocietyError(400, "signature must be 64 Ed25519 bytes, base64url");
+  const { results: keys } = await env.DB.prepare("SELECT public_key, thumbprint FROM keys WHERE citizen_id = ? AND status = 'active'")
+    .bind(citizen.id)
+    .all<{ public_key: string; thumbprint: string }>();
+  if (keys.length === 0) throw new SocietyError(400, "no active bound key to verify against: bind one at POST /api/keys first, or omit signature");
+  const bytes = new TextEncoder().encode(message);
+  for (const k of keys) {
+    if (await verifyEd25519(b64urlDecode(k.public_key), bytes, sig)) return { signature: sigB64u, thumbprint: k.thumbprint };
+  }
+  throw new SocietyError(400, `signature does not verify against any of your active keys. Sign the UTF-8 string "${message}"`);
+}
+
 export function outcomeCommitPayload(handle: string, createdAt: number, mandateId: number, mandateCommit: string, oh: string): string {
   return `${OUTCOME_COMMIT_PREFIX}:${handle}:${createdAt}:${mandateId}:${mandateCommit}:${oh}`;
 }
@@ -67,6 +113,8 @@ export interface MandateInput {
   public?: unknown;
   envelope?: unknown;
   label?: unknown;
+  subject?: unknown;
+  signature?: unknown;
 }
 
 interface Field {
@@ -133,15 +181,19 @@ export async function createMandate(env: Env, citizen: Citizen, body: MandateInp
   const label = typeof body.label === "string" ? body.label.trim() : "";
   if (!/^[a-z0-9._-]{0,64}$/.test(label)) throw new SocietyError(400, "label is optional: up to 64 of [a-z0-9._-]");
   if (isPublic && envelope) throw new SocietyError(400, "a public mandate stores its text openly; an envelope is for private ones");
+  const subject = readSubject(body.subject);
+  const subjectHash = subject === null ? null : await sha256Hex(subject);
+  const signed = await readSignature(env, citizen, body.signature, mandateSigMessage(citizen.handle, instruction.hash, action.hash, outcome?.hash ?? null, subjectHash));
 
-  const commit = await sha256Hex(commitPayload(citizen.handle, now, instruction.hash, action.hash, outcome?.hash ?? null));
+  const payload = payloadFor(citizen.handle, now, instruction.hash, action.hash, outcome?.hash ?? null, subjectHash, signed ? await sha256Hex(signed.signature) : null);
+  const commit = await sha256Hex(payload);
   const seal = await sealMemory(env, citizen, { hash: commit, label: "mandate" }, { budgetExempt: true });
   if (!seal.sealed || seal.id === null) throw new SocietyError(500, "the mandate's seal was not recorded; nothing was stored");
 
   const inserted = await env.DB.prepare(
-    "INSERT INTO mandates (citizen_id, seal_id, commit_hash, chained, instruction_hash, action_hash, outcome_hash, public, stored, envelope_bytes, label, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?) RETURNING id",
+    "INSERT INTO mandates (citizen_id, seal_id, commit_hash, chained, instruction_hash, action_hash, outcome_hash, public, stored, envelope_bytes, label, subject, signature, key_thumbprint, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?, ?) RETURNING id",
   )
-    .bind(citizen.id, seal.id, commit, seal.chained, instruction.hash, action.hash, outcome?.hash ?? null, isPublic ? 1 : 0, envelope ? envelope.length : null, label, now)
+    .bind(citizen.id, seal.id, commit, seal.chained, instruction.hash, action.hash, outcome?.hash ?? null, isPublic ? 1 : 0, envelope ? envelope.length : null, label, subject, signed?.signature ?? null, signed?.thumbprint ?? null, now)
     .first<{ id: number }>();
   const id = inserted!.id;
 
@@ -168,10 +220,14 @@ export async function createMandate(env: Env, citizen: Citizen, body: MandateInp
     url: `/api/mandates/${id}`,
     page: `/mandates/${id}`,
     commit,
-    commit_payload: commitPayload(citizen.handle, now, instruction.hash, action.hash, outcome?.hash ?? null),
+    commit_payload: payload,
     instruction_hash: instruction.hash,
     action_hash: action.hash,
     outcome_hash: outcome?.hash ?? null,
+    subject,
+    signed: signed !== null,
+    signature: signed?.signature ?? null,
+    key_thumbprint: signed?.thumbprint ?? null,
     public: isPublic,
     stored: { instruction: Boolean(stored & STORED_INSTRUCTION), action: Boolean(stored & STORED_ACTION), outcome: Boolean(stored & STORED_OUTCOME), envelope: Boolean(stored & STORED_ENVELOPE) },
     seal: { id: seal.id, label: "mandate", chained: seal.chained, sealed_at: "sealed_at" in seal ? seal.sealed_at : now },
@@ -179,6 +235,13 @@ export async function createMandate(env: Env, citizen: Citizen, body: MandateInp
     how_to_verify:
       "The seal's hash is sha-256 of commit_payload. That seal is a memory.seal event in this citizen's chain. Once a checkpoint lands after it (checkpoints are attempted every five minutes with an hourly backstop), GET /api/record/<handle> carries the event with an inclusion proof under that signed checkpoint; independent witnesses countersign the checkpoints they see, GET /api/anchors lists the checkpoints copied into Bitcoin, Base and the Internet Archive with each copy's status, and a later checkpoint covers every earlier one (GET /api/checkpoint/consistency?log=identity_events&from=<older tree size>&to=<newer tree size>). For public text, hash it yourself and compare with instruction_hash / action_hash; for private text the owner reveals it in a dispute and anyone does the same.",
   };
+}
+
+// One place decides which payload a record has, for writing it and for every
+// later reading of it, so the two cannot disagree: v1 when the record has
+// neither a subject nor a signature, v2 when it has either.
+function payloadFor(handle: string, createdAt: number, ih: string, ah: string, oh: string | null, subjectHash: string | null, signatureHash: string | null): string {
+  return subjectHash === null && signatureHash === null ? commitPayload(handle, createdAt, ih, ah, oh) : commitPayloadV2(handle, createdAt, ih, ah, oh, subjectHash, signatureHash);
 }
 
 // Add what came of it to a record that was made without one. Once, by the
@@ -261,6 +324,9 @@ interface MandateRow {
   stored: number;
   envelope_bytes: number | null;
   label: string;
+  subject: string | null;
+  signature: string | null;
+  key_thumbprint: string | null;
   created_at: number;
   // What came of it, when it was added after the record was made (LEFT JOIN).
   o_seal_id: number | null;
@@ -280,17 +346,24 @@ async function eventIdFor(env: Env, chained: string): Promise<number | null> {
 }
 
 async function view(env: Env, r: MandateRow, withContent: boolean) {
+  const subjectHash = r.subject === null ? null : await sha256Hex(r.subject);
+  const signatureHash = r.signature === null ? null : await sha256Hex(r.signature);
   const out: Record<string, unknown> = {
     id: r.id,
     citizen: r.handle,
     label: r.label,
+    subject: r.subject,
+    signed: r.signature !== null,
+    signature: r.signature,
+    key_thumbprint: r.key_thumbprint,
+    signed_message: r.signature === null ? null : mandateSigMessage(r.handle, r.instruction_hash, r.action_hash, r.outcome_hash, subjectHash),
     created_at: r.created_at,
     public: r.public === 1,
     instruction_hash: r.instruction_hash,
     action_hash: r.action_hash,
     outcome_hash: r.outcome_hash,
     commit: r.commit_hash,
-    commit_payload: commitPayload(r.handle, r.created_at, r.instruction_hash, r.action_hash, r.outcome_hash),
+    commit_payload: payloadFor(r.handle, r.created_at, r.instruction_hash, r.action_hash, r.outcome_hash, subjectHash, signatureHash),
     seal: { id: r.seal_id, label: "mandate", chained: r.chained },
     stored: { instruction: Boolean(r.stored & STORED_INSTRUCTION), action: Boolean(r.stored & STORED_ACTION), outcome: Boolean(r.stored & STORED_OUTCOME), envelope: Boolean(r.stored & STORED_ENVELOPE) },
     envelope_bytes: r.envelope_bytes,
@@ -337,7 +410,7 @@ async function view(env: Env, r: MandateRow, withContent: boolean) {
 }
 
 export async function getMandate(env: Env, id: number) {
-  const r = await env.DB.prepare("SELECT m.id, m.citizen_id, c.handle, m.seal_id, m.commit_hash, m.chained, m.instruction_hash, m.action_hash, m.outcome_hash, m.public, m.stored, m.envelope_bytes, m.label, m.created_at, o.seal_id AS o_seal_id, o.commit_hash AS o_commit_hash, o.chained AS o_chained, o.outcome_hash AS o_outcome_hash, o.stored AS o_stored, o.created_at AS o_created_at FROM mandates m JOIN citizens c ON c.id = m.citizen_id LEFT JOIN mandate_outcomes o ON o.mandate_id = m.id WHERE m.id = ?").bind(id).first<MandateRow>();
+  const r = await env.DB.prepare("SELECT m.id, m.citizen_id, c.handle, m.seal_id, m.commit_hash, m.chained, m.instruction_hash, m.action_hash, m.outcome_hash, m.public, m.stored, m.envelope_bytes, m.label, m.subject, m.signature, m.key_thumbprint, m.created_at, o.seal_id AS o_seal_id, o.commit_hash AS o_commit_hash, o.chained AS o_chained, o.outcome_hash AS o_outcome_hash, o.stored AS o_stored, o.created_at AS o_created_at FROM mandates m JOIN citizens c ON c.id = m.citizen_id LEFT JOIN mandate_outcomes o ON o.mandate_id = m.id WHERE m.id = ?").bind(id).first<MandateRow>();
   if (!r) throw new SocietyError(404, `no mandate ${id}`);
   return view(env, r, true);
 }
@@ -350,15 +423,23 @@ export async function getEnvelope(env: Env, id: number): Promise<Uint8Array> {
   return new Uint8Array(bytes);
 }
 
-export async function listMandates(env: Env, citizenHandle: string | null, sinceId: number | undefined) {
+export async function listMandates(env: Env, citizenHandle: string | null, sinceId: number | undefined, subjectRaw: string | null = null) {
   const since = typeof sinceId === "number" && Number.isFinite(sinceId) ? sinceId : 0;
+  const subject = readSubject(subjectRaw);
+  // A subject is only a label the recorder chose, so it means something only
+  // beside the recorder's name: two recorders can use the same one.
+  if (subject !== null && !citizenHandle) throw new SocietyError(400, "subject filters one citizen's records: send citizen= with it");
   let rows: MandateRow[];
-  if (citizenHandle) {
+  if (citizenHandle && subject !== null) {
     const c = await env.DB.prepare("SELECT id FROM citizens WHERE handle = ?").bind(citizenHandle).first<{ id: number }>();
     if (!c) throw new SocietyError(404, `no citizen '${citizenHandle}'`);
-    rows = (await env.DB.prepare("SELECT m.id, m.citizen_id, c.handle, m.seal_id, m.commit_hash, m.chained, m.instruction_hash, m.action_hash, m.outcome_hash, m.public, m.stored, m.envelope_bytes, m.label, m.created_at, o.seal_id AS o_seal_id, o.commit_hash AS o_commit_hash, o.chained AS o_chained, o.outcome_hash AS o_outcome_hash, o.stored AS o_stored, o.created_at AS o_created_at FROM mandates m JOIN citizens c ON c.id = m.citizen_id LEFT JOIN mandate_outcomes o ON o.mandate_id = m.id WHERE m.citizen_id = ? AND m.id > ? ORDER BY m.id ASC LIMIT ?").bind(c.id, since, MANDATE_PAGE + 1).all<MandateRow>()).results;
+    rows = (await env.DB.prepare("SELECT m.id, m.citizen_id, c.handle, m.seal_id, m.commit_hash, m.chained, m.instruction_hash, m.action_hash, m.outcome_hash, m.public, m.stored, m.envelope_bytes, m.label, m.subject, m.signature, m.key_thumbprint, m.created_at, o.seal_id AS o_seal_id, o.commit_hash AS o_commit_hash, o.chained AS o_chained, o.outcome_hash AS o_outcome_hash, o.stored AS o_stored, o.created_at AS o_created_at FROM mandates m JOIN citizens c ON c.id = m.citizen_id LEFT JOIN mandate_outcomes o ON o.mandate_id = m.id WHERE m.citizen_id = ? AND m.subject = ? AND m.id > ? ORDER BY m.id ASC LIMIT ?").bind(c.id, subject, since, MANDATE_PAGE + 1).all<MandateRow>()).results;
+  } else if (citizenHandle) {
+    const c = await env.DB.prepare("SELECT id FROM citizens WHERE handle = ?").bind(citizenHandle).first<{ id: number }>();
+    if (!c) throw new SocietyError(404, `no citizen '${citizenHandle}'`);
+    rows = (await env.DB.prepare("SELECT m.id, m.citizen_id, c.handle, m.seal_id, m.commit_hash, m.chained, m.instruction_hash, m.action_hash, m.outcome_hash, m.public, m.stored, m.envelope_bytes, m.label, m.subject, m.signature, m.key_thumbprint, m.created_at, o.seal_id AS o_seal_id, o.commit_hash AS o_commit_hash, o.chained AS o_chained, o.outcome_hash AS o_outcome_hash, o.stored AS o_stored, o.created_at AS o_created_at FROM mandates m JOIN citizens c ON c.id = m.citizen_id LEFT JOIN mandate_outcomes o ON o.mandate_id = m.id WHERE m.citizen_id = ? AND m.id > ? ORDER BY m.id ASC LIMIT ?").bind(c.id, since, MANDATE_PAGE + 1).all<MandateRow>()).results;
   } else {
-    rows = (await env.DB.prepare("SELECT m.id, m.citizen_id, c.handle, m.seal_id, m.commit_hash, m.chained, m.instruction_hash, m.action_hash, m.outcome_hash, m.public, m.stored, m.envelope_bytes, m.label, m.created_at, o.seal_id AS o_seal_id, o.commit_hash AS o_commit_hash, o.chained AS o_chained, o.outcome_hash AS o_outcome_hash, o.stored AS o_stored, o.created_at AS o_created_at FROM mandates m JOIN citizens c ON c.id = m.citizen_id LEFT JOIN mandate_outcomes o ON o.mandate_id = m.id WHERE m.id > ? ORDER BY m.id ASC LIMIT ?").bind(since, MANDATE_PAGE + 1).all<MandateRow>()).results;
+    rows = (await env.DB.prepare("SELECT m.id, m.citizen_id, c.handle, m.seal_id, m.commit_hash, m.chained, m.instruction_hash, m.action_hash, m.outcome_hash, m.public, m.stored, m.envelope_bytes, m.label, m.subject, m.signature, m.key_thumbprint, m.created_at, o.seal_id AS o_seal_id, o.commit_hash AS o_commit_hash, o.chained AS o_chained, o.outcome_hash AS o_outcome_hash, o.stored AS o_stored, o.created_at AS o_created_at FROM mandates m JOIN citizens c ON c.id = m.citizen_id LEFT JOIN mandate_outcomes o ON o.mandate_id = m.id WHERE m.id > ? ORDER BY m.id ASC LIMIT ?").bind(since, MANDATE_PAGE + 1).all<MandateRow>()).results;
   }
   const hasMore = rows.length > MANDATE_PAGE;
   const page = hasMore ? rows.slice(0, MANDATE_PAGE) : rows;
@@ -399,6 +480,8 @@ export async function mandatePage(env: Env, id: number): Promise<string> {
     `.sub{color:var(--muted);font-size:15px;margin:0 0 20px;font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif}pre{white-space:pre-wrap;word-break:break-word;background:var(--soft);padding:14px 16px;font-family:ui-monospace,Menlo,monospace;font-size:14px;margin:0 0 8px}.fp{font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;font-size:13px;color:var(--muted)}code{font-family:ui-monospace,Menlo,monospace;font-size:12px;word-break:break-all}.dim{color:var(--muted)}a{color:var(--ink)}` +
     `.chain{font-family:-apple-system,"Segoe UI",Helvetica,Arial,sans-serif;font-size:15px}.chain li{margin:0 0 8px}</style></head><body><main>` +
     `<h1>Mandate ${id}</h1><p class="sub">Recorded by <a href="https://1f916.ai/api/record/${esc(encodeURIComponent(m.citizen as string))}">${esc(m.citizen)}</a> on ${esc(when)}${m.label ? " · " + esc(m.label) : ""} · ${m.public ? "public" : "private"}</p>` +
+    (m.subject ? `<p class="sub">Recorded for <code>${esc(m.subject)}</code>, a label the recorder chose. The registry does not check who that is.</p>` : "") +
+    (m.signed ? `<p class="sub">Signed by the recorder's key <code>${esc(m.key_thumbprint)}</code>. The signature is over <code>${esc(m.signed_message)}</code>.</p>` : "") +
     block("What the agent was told", m.instruction, m.instruction_hash as string, Boolean((m.stored as Record<string, boolean>).instruction)) +
     block("What the agent did", m.action, m.action_hash as string, Boolean((m.stored as Record<string, boolean>).action)) +
     (m.outcome_hash ? block("What came of it", m.outcome, m.outcome_hash as string, Boolean((m.stored as Record<string, boolean>).outcome)) : "") +
@@ -408,7 +491,9 @@ export async function mandatePage(env: Env, id: number): Promise<string> {
       : "") +
     (m.envelope ? `<h2>Sealed envelope</h2><p class="dim">${esc(m.envelope_bytes)} bytes stored here exactly as the owner sent them; the registry does not interpret them, so they stay private only if the owner encrypted them. <a href="${esc(m.envelope as string)}">Download</a>.</p>` : "") +
     `<h2>Why this cannot have been changed</h2><ol class="chain">` +
-    `<li>The ${m.outcome_hash ? "three" : added ? "first two" : "two"} fingerprints above were combined into one: sha-256 of <code>${esc(m.commit_payload)}</code> = <code>${esc(m.commit)}</code>.</li>` +
+    `<li>The ${m.outcome_hash ? "three" : added ? "first two" : "two"} fingerprints above were combined into one: sha-256 of <code>${esc(m.commit_payload)}</code> = <code>${esc(m.commit)}</code>.` +
+    (m.subject || m.signed ? ` The same line carries ${m.subject ? "the fingerprint of the label it was recorded for" : ""}${m.subject && m.signed ? " and " : ""}${m.signed ? "the fingerprint of the recorder's signature" : ""}, so ${m.subject && m.signed ? "neither" : "it"} can be changed afterwards either.` : "") +
+    `</li>` +
     `<li>That fingerprint was sealed into the agent's chain as seal ${esc((m.seal as Record<string, unknown>).id)}` + (m.event_id ? `, chain event ${esc(m.event_id)}` : "") + `, at the time above. The chain only grows; each entry carries the fingerprint of the one before it.</li>` +
     (added
       ? `<li>What came of it was added afterwards and sealed on its own: sha-256 of <code>${esc(added.commit_payload)}</code> = <code>${esc(added.commit)}</code>, seal ${esc((added.seal as Record<string, unknown>).id)}` +
