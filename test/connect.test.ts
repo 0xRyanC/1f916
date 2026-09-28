@@ -34,18 +34,6 @@ class LocalD1 {
 const SECRET = "citizen-secret-for-connect-tests-0123456789";
 const ORIGIN = "https://1f916.ai";
 
-// A registry key made for this file and used for nothing else: "<seed>.<public>".
-let seedOnce: string | null = null;
-async function testRegistrySeed(): Promise<string> {
-  if (seedOnce) return seedOnce;
-  const kp = (await crypto.subtle.generateKey({ name: "Ed25519" }, true, ["sign", "verify"])) as CryptoKeyPair;
-  const pkcs8 = new Uint8Array(await crypto.subtle.exportKey("pkcs8", kp.privateKey));
-  const pub = new Uint8Array(await crypto.subtle.exportKey("raw", kp.publicKey));
-  const b64u = (b: Uint8Array) => Buffer.from(b).toString("base64url");
-  seedOnce = `${b64u(pkcs8.slice(pkcs8.length - 32))}.${b64u(pub)}`;
-  return seedOnce;
-}
-
 async function makeEnv(oauth = true): Promise<Env> {
   const sqlite = new DatabaseSync(":memory:");
   sqlite.exec(readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8"));
@@ -66,7 +54,7 @@ async function makeEnv(oauth = true): Promise<Env> {
     INSERT INTO anchors (id, checkpoint_id, kind, target, proof, status, created_at)
     VALUES (1, 20, 'ots', 'test-calendar', 'AAECAwQFBgcICQ==', 'confirmed', 250);
   `);
-  return { DB: new LocalD1(sqlite), REGISTRY_SEED: await testRegistrySeed(), ...(oauth ? { OAUTH_KEY: "0123456789abcdef0123456789abcdef" } : {}) } as unknown as Env;
+  return { DB: new LocalD1(sqlite), ...(oauth ? { OAUTH_KEY: "0123456789abcdef0123456789abcdef" } : {}) } as unknown as Env;
 }
 
 const req = (path: string, init?: RequestInit) => new Request(`${ORIGIN}${path}`, init);
@@ -174,9 +162,6 @@ test("openapi 200 content type matches what the router actually serves", async (
     // pair to pin the .ots binary half the loop cannot reach (octet-stream is
     // not text/plain), so no sample is wasted.
     "/api/anchors/:id.txt": "/api/anchors/1.txt",
-    // One stamp as a signed note. It is signed when it is read, so this
-    // environment carries a registry key (below) for it to be signed with.
-    "/api/checkpoint/note/:log": "/api/checkpoint/note/identity_events",
   };
   for (const r of textRoutes) {
     const livePath = r.path.includes(":") ? samples[r.path] : r.path;
