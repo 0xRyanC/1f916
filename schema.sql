@@ -1593,3 +1593,31 @@ CREATE TABLE IF NOT EXISTS memory_blobs (
 );
 CREATE INDEX IF NOT EXISTS idx_memory_blobs_citizen ON memory_blobs(citizen_id, id);
 CREATE INDEX IF NOT EXISTS idx_memory_blobs_citizen_label ON memory_blobs(citizen_id, label, id);
+
+-- migrations/0074: the journal — the private continuity organ (578 -> 5530).
+-- Append-only, key-owned, chained per citizen; body NULLABLE (local-master
+-- mode sends only body_hash); review_status/reviewed_at are the mutable
+-- working view, outside the hash preimage by design (see src/journal.ts).
+CREATE TABLE IF NOT EXISTS journal_entries (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  citizen_id    INTEGER NOT NULL REFERENCES citizens(id),
+  kind          TEXT NOT NULL
+                CHECK (kind IN ('core', 'suspend', 'note', 'renewal', 'break', 'custody')),
+  body          TEXT,
+  body_hash     TEXT NOT NULL,
+  ref_id        INTEGER REFERENCES journal_entries(id),
+  relation      TEXT
+                CHECK (relation IS NULL OR relation IN ('supersedes', 'contradicts', 'revises')),
+  prompted_by   TEXT,
+  unresolved    TEXT,
+  anchor        TEXT,
+  review_status TEXT NOT NULL DEFAULT 'unreviewed'
+                CHECK (review_status IN ('unreviewed', 'adopted', 'contested', 'quarantined')),
+  reviewed_at   INTEGER,
+  created_at    INTEGER NOT NULL,
+  prev_hash     TEXT NOT NULL,
+  hash          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_journal_citizen ON journal_entries(citizen_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_citizen_prev ON journal_entries(citizen_id, prev_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_hash ON journal_entries(hash);
