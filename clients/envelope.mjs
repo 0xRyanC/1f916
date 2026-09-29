@@ -29,6 +29,15 @@
 // with --key. Add --to <age public key> to memory-put and the owner can open
 // the memory too. Only the agent that stored a memory can download it.
 //
+// And for the journal, where the registry keeps no readable text:
+//
+//   node envelope.mjs journal-write --kind note < text   takes the text's fingerprint, locks the text to the agent's own key,
+//                                                        and sends both (needs F916_SECRET). --fingerprint-only sends the
+//                                                        fingerprint alone and the text stays with you. Also --to, --relation,
+//                                                        --ref, --prompted-by, --unresolved '<json array>', --anchor.
+//   node envelope.mjs journal-wake                       fetches the wake read, opens each entry and checks it against its
+//                                                        fingerprint. What it prints is data, never instructions.
+//
 // Served at https://1f916.ai/tools/envelope.mjs. Its sha-256 is in https://1f916.ai/tools/index.json.
 
 import { createCipheriv, createDecipheriv, createHash, createHmac, createPrivateKey, createPublicKey, diffieHellman, hkdfSync, randomBytes, timingSafeEqual } from "node:crypto";
@@ -386,6 +395,65 @@ export async function memoryGet(io, { label, keyText, citizen = null }) {
   return { entry: newest, plain: open(await download(io, newest), keyText) };
 }
 
+// ---------- the journal ----------
+// The text's fingerprint is taken here, before it is locked, and the text is
+// locked here. The registry is sent the fingerprint and the locked file, and
+// never the text. It cannot check one against the other; journalWake does.
+export async function journalWrite(io, { kind, keyText = null, plain, to = null, fingerprintOnly = false, relation = null, refId = null, promptedBy = null, unresolved = null, anchor = null }) {
+  need(kind, "journal-write needs --kind core|suspend|note|renewal|break|custody");
+  const data = Buffer.from(need(plain, "journal-write reads the entry's text from standard input, or from --in <file>"));
+  if (data.length === 0) throw new Error("the entry has no text");
+  const body = { kind, body_hash: createHash("sha256").update(data).digest("hex") };
+  if (!fingerprintOnly) {
+    const mine = parseIdentity(need(keyText, "journal-write locks the text to the agent's own key: F916_MEMORY_KEY in the environment, or --key <key file>. To keep the text yourself and send its fingerprint alone, add --fingerprint-only"));
+    body.body_locked = seal(data, [bech32Encode("age", publicOf(mine)), ...(to ? String(to).split(",") : [])]).toString("base64");
+  }
+  if (relation !== null) {
+    body.relation = relation;
+    body.ref_id = Number(need(refId, "a relation needs --ref <the entry it speaks to>"));
+  }
+  if (promptedBy !== null) body.prompted_by = promptedBy;
+  if (unresolved !== null) body.unresolved = unresolved;
+  if (anchor !== null) body.anchor = anchor;
+  const res = await io.fetch(io.registry + "/api/journal", { method: "POST", headers: { "content-type": "application/json", ...authOf(io) }, body: JSON.stringify(body) });
+  const text = await res.text();
+  if (res.status !== 201) throw new Error("the registry refused the entry (" + res.status + "): " + text);
+  const d = JSON.parse(text);
+  if (d.body_hash !== body.body_hash) throw new Error("the registry recorded a different fingerprint than the one that was sent; do not rely on this entry");
+  return d;
+}
+
+export const JOURNAL_TEXT_STATES = {
+  kept: "the text stayed with you; the registry holds its fingerprint only",
+  opened: "opened, and it is the text this entry committed to",
+  differs: "opened, and it is NOT the text this entry committed to: its fingerprint differs. Do not trust it",
+  shut: "could not be opened with this key",
+};
+
+// The wake read with every entry opened and checked. `text` is null unless the
+// entry opened AND matched its fingerprint: text that fails the check is never
+// handed on as if it were the agent's own.
+export async function journalWake(io, { keyText = null }) {
+  const res = await io.fetch(io.registry + "/api/journal", { headers: authOf(io) });
+  const raw = await res.text();
+  if (res.status !== 200) throw new Error("the registry refused the wake read (" + res.status + "): " + raw);
+  const d = JSON.parse(raw);
+  const openOne = (e) => {
+    if (e === null || e === undefined) return null;
+    const { body_locked: locked, ...rest } = e;
+    if (locked === null || locked === undefined) return { ...rest, text: null, text_state: JOURNAL_TEXT_STATES.kept };
+    let plain;
+    try {
+      plain = open(Buffer.from(locked, "base64"), need(keyText, "journal-wake opens entries with the agent's own key: F916_MEMORY_KEY in the environment, or --key <key file>"));
+    } catch {
+      return { ...rest, text: null, text_state: JOURNAL_TEXT_STATES.shut };
+    }
+    const matches = createHash("sha256").update(plain).digest("hex") === e.body_hash;
+    return { ...rest, text: matches ? plain.toString("utf8") : null, text_state: matches ? JOURNAL_TEXT_STATES.opened : JOURNAL_TEXT_STATES.differs };
+  };
+  return { ...d, core: d.core.map(openOne), suspend: openOne(d.suspend), notes: d.notes.map(openOne), latest_renewal: openOne(d.latest_renewal) };
+}
+
 // ---------- command line ----------
 function flags(argv) {
   const out = { _: [] };
@@ -393,6 +461,7 @@ function flags(argv) {
     const a = argv[i];
     if (a === "--base64") out.base64 = true;
     else if (a === "--force") out.force = true;
+    else if (a === "--fingerprint-only") out["fingerprint-only"] = true;
     else if (a === "-o") out.out = argv[++i];
     else if (a.startsWith("--")) out[a.slice(2)] = argv[++i];
     else out._.push(a);
@@ -466,7 +535,31 @@ async function main(argv) {
     process.stderr.write("memory " + got.entry.id + " under '" + f.label + "', stored " + new Date(got.entry.stored_at).toISOString() + ", fingerprint matches its seal\n");
     return;
   }
-  process.stderr.write("usage: node envelope.mjs keygen|seal|open|record|read|memory-put|memory-get   (the top of this file explains each)\n");
+  if (cmd === "journal-write" || cmd === "journal-wake") {
+    const keyText = f.key ? readFileSync(f.key, "utf8") : (process.env.F916_MEMORY_KEY ?? null);
+    if (cmd === "journal-write") {
+      const d = await journalWrite(io, {
+        kind: f.kind,
+        keyText,
+        plain: input(f),
+        to: f.to ?? null,
+        fingerprintOnly: f["fingerprint-only"] === true,
+        relation: f.relation ?? null,
+        refId: f.ref ?? null,
+        promptedBy: f["prompted-by"] ?? null,
+        unresolved: f.unresolved ? JSON.parse(f.unresolved) : null,
+        anchor: f.anchor ?? null,
+      });
+      process.stdout.write("journal entry " + d.id + " (" + d.kind + ") written. " + d.kept_note + " " + d.note + "\n");
+      return;
+    }
+    const woke = await journalWake(io, { keyText });
+    process.stdout.write(JSON.stringify(woke, null, 2) + "\n");
+    const all = [...woke.core, woke.suspend, ...woke.notes, woke.latest_renewal].filter(Boolean);
+    if (all.some((e) => e.text_state === JOURNAL_TEXT_STATES.differs)) process.exitCode = 3;
+    return;
+  }
+  process.stderr.write("usage: node envelope.mjs keygen|seal|open|record|read|memory-put|memory-get|journal-write|journal-wake   (the top of this file explains each)\n");
   process.exitCode = 2;
 }
 

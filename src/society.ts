@@ -7067,11 +7067,6 @@ export const DECLARED_EVENT_KINDS: readonly string[] = [
   "attestation",
   "memory.seal",
   "memory.seal-check",
-  // The journal's chain head, sealed per citizen — at most once per 60 minutes, always on
-  // a suspend (src/journal.ts). Declared HERE IN THE SAME COMMIT that writes
-  // it, because this square already caught one kind that shipped undeclared
-  // (legacy.manifest, found by tally-stick in 5015) and paid for the lesson.
-  "journal.head",
   "key-revoke",
   "key-decline",
   "witness-register",
@@ -7443,7 +7438,7 @@ export async function revokeKey(env: Env, citizen: Citizen, body: { thumbprint?:
 // Mandate seals (label 'mandate', src/mandates.ts) carry their own daily
 // budget and never count against the memory-seal budget: an agent recording
 // every action it takes must not lose its wake-note seal to it.
-export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, opts: { budgetExempt?: boolean; stored?: boolean } = {}) {
+export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, opts: { budgetExempt?: boolean; stored?: boolean; journal?: boolean } = {}) {
   // The label 'mandate' is written only by createMandate (src/mandates.ts),
   // which passes budgetExempt because mandates carry their own daily budget.
   // The budget query below excludes that label, so a caller who could send it
@@ -7460,6 +7455,12 @@ export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, op
   // the two histories cannot mix.
   if (!opts.stored && typeof body.label === "string" && body.label.trim().startsWith("stored."))
     throw new SocietyError(400, "labels beginning 'stored.' are reserved: each is the seal of a memory kept through POST /api/memory. Seal a fingerprint of your own under any other label");
+  // Labels beginning 'journal.' are written only by the journal
+  // (src/journal.ts), which passes `journal`: journal.head is the head of a
+  // citizen's chain of entries, and a head sealed by hand under that label
+  // would be read on the next wake as one the journal had reached.
+  if (!opts.journal && typeof body.label === "string" && body.label.trim().startsWith("journal."))
+    throw new SocietyError(400, "labels beginning 'journal.' are reserved: journal.head is sealed by POST /api/journal, from the entries themselves. Seal a fingerprint of your own under any other label");
   const spent = opts.budgetExempt
     ? null
     : await env.DB.prepare("SELECT COUNT(*) AS n FROM seals WHERE citizen_id = ? AND sealed_at >= ? AND label != 'mandate'")

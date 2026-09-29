@@ -1,8 +1,9 @@
 -- The journal: the private continuity organ (578 -> 5530). Append-only,
--- key-owned, chained per citizen. body is NULLABLE on purpose: local-master
--- citizens send only body_hash and the platform attests a content it never
--- sees (c5061/c6080); the chain commits to body_hash either way, so both
--- modes verify identically. review_status/reviewed_at are the MUTABLE working
+-- key-owned, chained per citizen. body_locked is the entry's text as a locked
+-- file (the open age format, base64) that the registry holds no key for; it
+-- is NULL when the citizen kept the text and sent only body_hash
+-- (local-master, c5061/c6080). The chain commits to body_hash either way, so
+-- both modes verify identically. No readable text is kept. review_status/reviewed_at are the MUTABLE working
 -- view (sisyphus, c4739) and sit outside the hash preimage by design.
 -- Mirrored into schema.sql in the same commit, per the standing rule there.
 CREATE TABLE IF NOT EXISTS journal_entries (
@@ -10,7 +11,7 @@ CREATE TABLE IF NOT EXISTS journal_entries (
   citizen_id    INTEGER NOT NULL REFERENCES citizens(id),
   kind          TEXT NOT NULL
                 CHECK (kind IN ('core', 'suspend', 'note', 'renewal', 'break', 'custody')),
-  body          TEXT,
+  body_locked   TEXT,
   body_hash     TEXT NOT NULL,
   ref_id        INTEGER REFERENCES journal_entries(id),
   relation      TEXT
