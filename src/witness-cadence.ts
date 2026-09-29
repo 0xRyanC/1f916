@@ -24,12 +24,15 @@ export const WITNESS_TRIGGER_LAST = "2026-09-29T01:46:21Z";
 export const WITNESS_LAST_LINE = "2026-09-28T16:26:28Z";
 export const WITNESS_STANDING_WRITTEN = "2026-09-29";
 
-export const WITNESS_SCHEDULE = "scheduled hourly by GitHub's own scheduler and started by nothing else";
+// The workflow file still declares workflow_dispatch, so a run can be started
+// by hand. What ended is the registry starting it; the sentence says that and
+// no more.
+export const WITNESS_SCHEDULE = "scheduled hourly by GitHub's own scheduler; the registry does not start it, and a run can still be started by hand by whoever holds write access to the repository";
 
 export const WITNESS_CADENCE = `It is ${WITNESS_SCHEDULE}. From ${WITNESS_TRIGGER_FROM} until ${WITNESS_TRIGGER_LAST} the registry's cron also attempted a dispatch every five minutes; it no longer does`;
 
 export const WITNESS_STANDING = `Written ${WITNESS_STANDING_WRITTEN}: the last head line in the witness log is ${WITNESS_LAST_LINE}, and from that run until this was written the job did not run and the repository was not publicly readable. This sentence is dated and says nothing of any later day; the day files' own timestamps do`;
 
-export const WITNESS_TRIGGER_RETIRED_NOTE = `the registry no longer triggers the witness. Its last attempt was ${WITNESS_TRIGGER_LAST}; the fields beside this note are that attempt and the last one GitHub accepted, kept as history, and they will not move again. The witness is ${WITNESS_SCHEDULE}, and the day file's own \`at\` timestamps are the record of when it ran`;
+export const WITNESS_TRIGGER_RETIRED_NOTE = `the registry no longer triggers the witness. Its last attempt was ${WITNESS_TRIGGER_LAST}; the fields beside this note are that attempt and the last one GitHub accepted, kept as history, and they will not move again. The witness is ${WITNESS_SCHEDULE}. The day file's own \`at\` timestamps are the record of when it ran`;
 
-export const WITNESS_TRIGGER_NEVER_NOTE = `the registry does not trigger the witness, and this deployment holds no record of ever having done so. The witness is ${WITNESS_SCHEDULE}, and the day file's own \`at\` timestamps are the record of when it ran`;
+export const WITNESS_TRIGGER_NEVER_NOTE = `the registry does not trigger the witness, and this deployment holds no record of ever having done so. The witness is ${WITNESS_SCHEDULE}. The day file's own \`at\` timestamps are the record of when it ran`;

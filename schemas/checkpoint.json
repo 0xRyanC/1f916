@@ -73,14 +73,18 @@
       "properties": {
         "recorded": {
           "type": "boolean",
-          "description": "Whether the latest dispatch was recorded"
+          "description": "Whether a dispatch attempt by the registry was ever recorded"
+        },
+        "retired": {
+          "type": "boolean",
+          "description": "True since 2026-09-29: the registry no longer triggers the witness, so the fields beside this one are history and will not move again"
         },
         "last_attempt_at": {
           "type": [
             "integer",
             "null"
           ],
-          "description": "Timestamp of last dispatch attempt"
+          "description": "Timestamp of the last dispatch the registry attempted"
         },
         "last_attempt_age_seconds": {
           "type": [

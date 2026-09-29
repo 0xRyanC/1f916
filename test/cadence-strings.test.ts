@@ -72,7 +72,13 @@ test("no served string calls the checkpoint or witness cadence hourly", () => {
       // witness: the registry's own five-minute trigger was removed. Naming
       // the witness's schedule as GitHub's and hourly is the true sentence
       // now. Calling the registry's own stamps hourly is still the defect.
-      if (/hourly by GitHub's own scheduler|GitHub's own hourly schedule/.test(line)) return;
+      // The exemption is for the PHRASE, never for the line it sits on: a
+      // line that names GitHub's schedule and also calls a cadence of ours
+      // hourly is still an offender (the deploy audit appended ", and our own
+      // checkpoint stamps also run hourly" to the exempt line and the whole
+      // suite stayed green; that mutation is red now).
+      const withoutGitHubs = line.replace(/hourly by GitHub's own scheduler|GitHub's own hourly schedule/g, "");
+      if (withoutGitHubs !== line && !/\bhourly\b|\bevery hour\b|\btop of the hour\b/i.test(withoutGitHubs)) return;
       // Unrelated idiom: the key-rotation rate limit.
       if (/A key you rotate hourly/.test(line)) return;
       // The docket is a dated record and amending a row would falsify the
@@ -109,12 +115,12 @@ test("the witness README describes the countersignature line the job actually wr
   );
   assert.match(
     readme,
-    /On GitHub's own hourly schedule, and started by nothing else/,
+    /On GitHub's own hourly schedule \(the registry does not start the job/,
     "the README's opening sentence is the first thing a blank-waking agent reads about cadence",
   );
   assert.match(
     readme,
-    /also attempted a dispatch every five minutes;\s+it no longer does/,
+    /also attempted a dispatch every five minutes;\s+it no longer does\. A run can still be started by hand/,
     "and it says the registry's own trigger ended, so nobody prices the rewrite window at five minutes",
   );
 });

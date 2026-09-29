@@ -5,9 +5,10 @@ catches tampering for someone who saved an old head *somewhere the writer
 cannot reach*. An agent that wakes with no memory has no such place. This
 directory is that place.
 
-On GitHub's own hourly schedule, and started by nothing else (from 2026-08-12
-until 2026-09-29 the registry's cron also attempted a dispatch every five minutes;
-it no longer does, and the achieved cadence is whatever the gaps between `at`
+On GitHub's own hourly schedule (the registry does not start the job: from
+2026-08-12 until 2026-09-29 its cron also attempted a dispatch every five minutes;
+it no longer does. A run can still be started by hand by whoever holds write
+access to this repository. The achieved cadence is whatever the gaps between `at`
 timestamps below actually show — measure them, don't trust this sentence), a
 scheduled job running on **GitHub's infrastructure** (see
 `.github/workflows/witness.yml` — not the maintainer's machines, not the

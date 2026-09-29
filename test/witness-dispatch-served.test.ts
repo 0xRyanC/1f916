@@ -24,6 +24,8 @@
 //   W5  let a missing table throw                               -> "a missing table reads as nothing recorded, never a throw"
 //   W6  write a cadence sentence by hand on one surface         -> "every surface says the same thing about the witness, from the one module"
 //   W7  date the standing sentence without its date             -> "the dated sentence carries its own date, and the dates are in order"
+//   W8  read the retired field as proof the handler ran         -> "a frozen sequence is not sorted by a field that no longer moves"
+//   W9  say the job is "started by nothing else"                -> "the dated sentence carries its own date, and the dates are in order"
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync, readdirSync } from "node:fs";
@@ -31,7 +33,7 @@ import { fileURLToPath } from "node:url";
 import { join } from "node:path";
 import { generateKeyPairSync, createPublicKey } from "node:crypto";
 import worker from "../src/index.ts";
-import { readWitnessDispatch, witnessDispatchView, type WitnessDispatchRow } from "../src/checkpoint.ts";
+import { makeCheckpoints, readWitnessDispatch, witnessDispatchView, type WitnessDispatchRow } from "../src/checkpoint.ts";
 import {
   WITNESS_CADENCE,
   WITNESS_LAST_LINE,
@@ -183,11 +185,19 @@ test("every surface says the same thing about the witness, from the one module",
 });
 
 test("the dated sentence carries its own date, and the dates are in order", () => {
-  assert.equal(WITNESS_SCHEDULE, "scheduled hourly by GitHub's own scheduler and started by nothing else");
+  assert.equal(WITNESS_SCHEDULE, "scheduled hourly by GitHub's own scheduler; the registry does not start it, and a run can still be started by hand by whoever holds write access to the repository");
   assert.equal(
     WITNESS_CADENCE,
-    "It is scheduled hourly by GitHub's own scheduler and started by nothing else. From 2026-08-12T03:41Z until 2026-09-29T01:46:21Z the registry's cron also attempted a dispatch every five minutes; it no longer does",
+    "It is scheduled hourly by GitHub's own scheduler; the registry does not start it, and a run can still be started by hand by whoever holds write access to the repository. From 2026-08-12T03:41Z until 2026-09-29T01:46:21Z the registry's cron also attempted a dispatch every five minutes; it no longer does",
   );
+  // The sentence may not claim more than the workflow file allows: while the
+  // file declares a manual trigger, nothing here says the job has no other start.
+  const workflow = readFileSync(join(root, ".github", "workflows", "witness.yml"), "utf8");
+  assert.match(workflow, /^\s*workflow_dispatch:\s*$/m, "the manual trigger is still declared");
+  assert.match(workflow, /cron: "7 \* \* \* \*"/, "and the schedule is hourly");
+  for (const s of [WITNESS_SCHEDULE, WITNESS_CADENCE, WITNESS_TRIGGER_RETIRED_NOTE, WITNESS_TRIGGER_NEVER_NOTE, readFileSync(join(root, "witness", "README.md"), "utf8")]) {
+    assert.doesNotMatch(s, /started by nothing else|nothing else starts/);
+  }
   assert.equal(
     WITNESS_STANDING,
     "Written 2026-09-29: the last head line in the witness log is 2026-09-28T16:26:28Z, and from that run until this was written the job did not run and the repository was not publicly readable. This sentence is dated and says nothing of any later day; the day files' own timestamps do",
@@ -207,4 +217,28 @@ test("the dated sentence carries its own date, and the dates are in order", () =
   // Whatever follows the last head belongs to the same run: its countersignatures, seconds later.
   const after = parsed.slice(parsed.lastIndexOf(heads[heads.length - 1]) + 1);
   assert.ok(after.every((l) => l.type === "witness-countersignature" && Date.parse(l.at) - Date.parse(WITNESS_LAST_LINE) < 60_000));
+});
+
+test("a frozen sequence is not sorted by a field that no longer moves", async () => {
+  const { env, db } = sqliteTestEnv(SCHEMA);
+  db.exec(`INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at) VALUES (1, 'keeper', 'test-model', 'h1', 0, 0)`);
+  db.exec("INSERT INTO witness_dispatch (id, last_attempt_at, last_status, last_error, last_ok_at) VALUES (1, 61000, 422, NULL, 1000)");
+  const e = { ...env, REGISTRY_SEED: registrySeed() } as unknown as Env;
+  await makeCheckpoints(e);
+  const body = (await (await worker.fetch(new Request("https://1f916.ai/api/checkpoint"), e)).json()) as {
+    checkpoint_sequence: { recorded: boolean; note: string };
+    witness_dispatch: { retired: boolean; last_attempt_at: number };
+  };
+  assert.equal(body.checkpoint_sequence.recorded, true, "the note under test is the one served beside a readable sequence");
+  const note = body.checkpoint_sequence.note;
+  // The recipe this note used to give would now read every pass as "the handler did not run".
+  assert.doesNotMatch(note, /Dispatch not advancing: the handler did not run/);
+  assert.doesNotMatch(note, /so it proves the handler ran/);
+  assert.doesNotMatch(note, /Dispatch advancing/);
+  assert.match(note, /Nothing served here proves the handler ran when this step did not\./);
+  assert.match(note, /that leg was removed \(witness_dispatch\.retired\) and the field will not move again/);
+  assert.match(note, /these cannot be told apart from here/);
+  // And the field it points at is there, saying so.
+  assert.equal(body.witness_dispatch.retired, true);
+  assert.equal(body.witness_dispatch.last_attempt_at, 61_000);
 });

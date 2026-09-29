@@ -184,7 +184,7 @@ const SEQUENCE_UNREAD_NOTE =
   "sqlite_sequence has no readable entry for the checkpoints table on this deployment (the read was refused, or nothing has ever been written); fall back to comparing checkpoints[].id across two reads, remembering that on a quiet log it does not move until the next written row";
 
 const SEQUENCE_NOTE =
-  "head is the checkpoints table's AUTOINCREMENT sequence. Every execution of the checkpoint step consumes attempts_per_pass values (one INSERT OR IGNORE per log), written or ignored, so head advances on a quiet log where checkpoints[].id and created_at do not. Δhead / attempts_per_pass is the number of executions between two reads, whoever ran them: the cron (attempted_pass_cron) or a manual crank (POST /api/checkpoint, maintainer only), which consumes the same values and is recorded nowhere a reader can see. So over one cron interval a Δhead of attempts_per_pass proves the step ran once, not that the cron ran it, and a crank inside the interval can stand in for a slot that never fired: measured against Δt / the cron interval, an excess is cranks, a shortfall is missed or failed passes, and only the shortfall is provable from here. witness_dispatch.last_attempt_at is written by a later leg of the same handler and survives this step throwing, so it proves the handler ran; read the two together to sort a frozen head. Dispatch not advancing: the handler did not run. Dispatch advancing with Δhead 0: the handler ran and this step consumed nothing, so its first leg threw before its insert or it was never entered (REGISTRY_SEED unset). Δhead of attempts_per_pass − 1: the first leg wrote or ignored and the next threw before its insert (there is no per-leg try, so the execution ends there).";
+  "head is the checkpoints table's AUTOINCREMENT sequence. Every execution of the checkpoint step consumes attempts_per_pass values (one INSERT OR IGNORE per log), written or ignored, so head advances on a quiet log where checkpoints[].id and created_at do not. Δhead / attempts_per_pass is the number of executions between two reads, whoever ran them: the cron (attempted_pass_cron) or a manual crank (POST /api/checkpoint, maintainer only), which consumes the same values and is recorded nowhere a reader can see. So over one cron interval a Δhead of attempts_per_pass proves the step ran once, not that the cron ran it, and a crank inside the interval can stand in for a slot that never fired: measured against Δt / the cron interval, an excess is cranks, a shortfall is missed or failed passes, and only the shortfall is provable from here. Nothing served here proves the handler ran when this step did not. Until 2026-09-29 witness_dispatch.last_attempt_at did, being written by a later leg of the same handler; that leg was removed (witness_dispatch.retired) and the field will not move again, so it says nothing about any pass after it. A frozen head therefore reads one way only. Δhead 0 over a cron interval: this step consumed nothing, because the handler did not run, or it ran and the step's first leg threw before its insert, or the step was never entered (REGISTRY_SEED unset), and these cannot be told apart from here. Δhead of attempts_per_pass − 1: the first leg wrote or ignored and the next threw before its insert (there is no per-leg try, so the execution ends there).";
 
 // wrangler.jsonc triggers.crons, the ATTEMPTED cadence of the checkpoint
 // step; test/checkpoint-sequence-head.test.ts refuses a drift between the two.
@@ -207,12 +207,12 @@ const SEQUENCE_SQL = "SELECT seq FROM sqlite_sequence WHERE name = 'checkpoints'
 // change shows it), so this number moves by LOGS.length per checkpointer pass
 // whether or not any tree grew, while the served checkpoints[].id and
 // created_at freeze on a quiet log (ORDER BY id DESC LIMIT 1 returns the last
-// WRITTEN row). It is the checkpointer's own liveness signal:
-// witness_dispatch.last_attempt_at is written by a later leg of the same cron
-// handler and survives a makeCheckpoints failure (index.ts scheduled(): the
-// try/catch around it logs and continues), so it proves the handler ran, not
-// that this step did. D1 may refuse a read of sqlite_sequence; degrade to null
-// rather than 500 the endpoint, as readWitnessDispatch does.
+// WRITTEN row). It is the checkpointer's own liveness signal, and since
+// 2026-09-29 the only one served: witness_dispatch.last_attempt_at used to
+// prove the handler ran even when this step threw, and the leg that wrote it
+// was removed with the witness trigger. D1 may refuse a read of
+// sqlite_sequence; degrade to null rather than 500 the endpoint, as
+// readWitnessDispatch does.
 export async function readCheckpointSequenceHead(env: Env): Promise<number | null> {
   try {
     const row = await env.DB.prepare(SEQUENCE_SQL).first<SequenceRow>();
