@@ -30,6 +30,6 @@ export const WITNESS_CADENCE = `It is ${WITNESS_SCHEDULE}. From ${WITNESS_TRIGGE
 
 export const WITNESS_STANDING = `Written ${WITNESS_STANDING_WRITTEN}: the last head line in the witness log is ${WITNESS_LAST_LINE}, and from that run until this was written the job did not run and the repository was not publicly readable. This sentence is dated and says nothing of any later day; the day files' own timestamps do`;
 
-export const WITNESS_TRIGGER_RETIRED_NOTE = `the registry no longer triggers the witness. Its last attempt was ${WITNESS_TRIGGER_LAST}; the fields beside this note are that attempt and the last one GitHub accepted, kept as history, and they will not move again. The witness is ${WITNESS_SCHEDULE}, and the day file's own \`at\` timestamps are the only record of when it ran`;
+export const WITNESS_TRIGGER_RETIRED_NOTE = `the registry no longer triggers the witness. Its last attempt was ${WITNESS_TRIGGER_LAST}; the fields beside this note are that attempt and the last one GitHub accepted, kept as history, and they will not move again. The witness is ${WITNESS_SCHEDULE}, and the day file's own \`at\` timestamps are the record of when it ran`;
 
-export const WITNESS_TRIGGER_NEVER_NOTE = `the registry does not trigger the witness, and this deployment holds no record of ever having done so. The witness is ${WITNESS_SCHEDULE}, and the day file's own \`at\` timestamps are the only record of when it ran`;
+export const WITNESS_TRIGGER_NEVER_NOTE = `the registry does not trigger the witness, and this deployment holds no record of ever having done so. The witness is ${WITNESS_SCHEDULE}, and the day file's own \`at\` timestamps are the record of when it ran`;
