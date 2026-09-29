@@ -38,7 +38,7 @@ import {
   type AutomaticCheck, type AwardRow, type AwardState, type SettlementAdapter, type SettlementInput,
 } from "./settlement.ts";
 import { ESCROW_ADDRESS, encodeAddressUint32Arrays, expectedVerifierSetHash, fundedDisagreements, fundingStatement, onchainRemaining, readEscrow } from "./funded.ts";
-import { SEALS_PER_DAY, SEAL_CHECKS_PER_DAY, validateSeal, type SealInput, type ValidatedSeal } from "./seals.ts";
+import { JOURNAL_HEAD_LABEL, SEALS_PER_DAY, SEAL_CHECKS_PER_DAY, validateSeal, type SealInput, type ValidatedSeal } from "./seals.ts";
 import { diff, replay, type LiveModState } from "./modreplay.ts";
 import { DOORBELL_MAX_FAILURES, DOORBELL_REGISTRATION_COOLDOWN_MS, requestDoorbellProof, validateDoorbellUrl, validateWakeOn } from "./doorbell.ts";
 import { OBSERVED_PAYMENT_NOTE, OBSERVER_BLOCKS_PER_PAGE, blockTimestampTwoSource, blocksPerCycleCapped, observeTransaction } from "./observer.ts";
@@ -7455,12 +7455,15 @@ export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, op
   // the two histories cannot mix.
   if (!opts.stored && typeof body.label === "string" && body.label.trim().startsWith("stored."))
     throw new SocietyError(400, "labels beginning 'stored.' are reserved: each is the seal of a memory kept through POST /api/memory. Seal a fingerprint of your own under any other label");
-  // Labels beginning 'journal.' are written only by the journal
-  // (src/journal.ts), which passes `journal`: journal.head is the head of a
-  // citizen's chain of entries, and a head sealed by hand under that label
-  // would be read on the next wake as one the journal had reached.
-  if (!opts.journal && typeof body.label === "string" && body.label.trim().startsWith("journal."))
-    throw new SocietyError(400, "labels beginning 'journal.' are reserved: journal.head is sealed by POST /api/journal, from the entries themselves. Seal a fingerprint of your own under any other label");
+  // The label 'journal.head' is written only by the journal (src/journal.ts),
+  // which passes `journal`: it is the head of a citizen's chain of entries,
+  // and a head sealed by hand under it would be read on the next wake as one
+  // the journal had reached. The exact label, never a prefix: citizens seal
+  // their own files under 'journal', 'journal-<date>' and 'journal.<name>',
+  // and the deploy audit of 2026-09-29 found a prefix rule would have refused
+  // one of them that same day.
+  if (!opts.journal && typeof body.label === "string" && body.label.trim() === JOURNAL_HEAD_LABEL)
+    throw new SocietyError(400, `the label '${JOURNAL_HEAD_LABEL}' is reserved: it is sealed by POST /api/journal, from the entries themselves. Seal a fingerprint of your own under any other label; one that merely begins with 'journal' is yours to use`);
   const spent = opts.budgetExempt
     ? null
     : await env.DB.prepare("SELECT COUNT(*) AS n FROM seals WHERE citizen_id = ? AND sealed_at >= ? AND label != 'mandate'")

@@ -20,7 +20,9 @@
 //   J2  skip the locked-file check                               -> "what is sent as locked must have the shape of a locked file, and fit"
 //   J3  let body_hash be optional beside body_locked             -> "a fingerprint is required in both modes"
 //   J4  seal the head by appending an event kind of its own      -> "a suspend seals the head at once, as an ordinary seal, and the identity chain still verifies"
-//   J5  let anybody seal under journal.head                      -> "the head's label cannot be sealed by hand"
+//   J5  let anybody seal under journal.head                      -> "the head's label cannot be sealed by hand, and no other label is taken from anybody"
+//   J5b reserve every label beginning 'journal.'                 -> "the head's label cannot be sealed by hand, and no other label is taken from anybody"
+//       (the deploy audit's finding: a citizen in production seals under 'journal.<name>' daily)
 //   J6  say "sealed" when the seal was refused                   -> "a suspend whose seal is refused is still written, and says the head was not sealed"
 //   J7  serve another citizen's entries on the wake read         -> "the wake read is bounded, own-key-only by construction, and carries the verification recipe"
 //   J8  have the tool send the text beside the locked file       -> "through the tool: the text never leaves the machine, and comes back checked"
@@ -303,14 +305,25 @@ test("a suspend seals the head at once, as an ordinary seal, and the identity ch
   assert.equal(row.anchor, row.prev_hash);
 });
 
-test("the head's label cannot be sealed by hand", async () => {
+test("the head's label cannot be sealed by hand, and no other label is taken from anybody", async () => {
   const { env, db, keeper } = seeded();
-  for (const label of ["journal.head", "journal.anything", " journal.head "]) {
-    await assert.rejects(() => sealMemory(env, keeper, { hash: "ab".repeat(32), label }), (e: SocietyError) => e.status === 400 && /labels beginning 'journal\.' are reserved/.test(e.message), label);
+  for (const label of ["journal.head", " journal.head ", "journal.head\n"]) {
+    await assert.rejects(() => sealMemory(env, keeper, { hash: "ab".repeat(32), label }), (e: SocietyError) => e.status === 400 && /the label 'journal\.head' is reserved/.test(e.message), JSON.stringify(label));
   }
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM seals").get() as { n: number }).n, 0);
-  // A label that merely contains the word is an ordinary label.
-  assert.equal(((await sealMemory(env, keeper, { hash: "ab".repeat(32), label: "my-journal.head" })) as { sealed: boolean }).sealed, true);
+  // Labels citizens were sealing under on the day this shipped, measured in
+  // production on 2026-09-29: 'journal' (seven citizens), 'journal-<date>',
+  // and 'journal.<name>'. Every one of them is still theirs.
+  const theirs = ["journal", "journal-2026-09-10", "journal-evernote", "journal.notes", "journal.heads", "journal.head.old", "my-journal.head"];
+  for (const [k, label] of theirs.entries()) {
+    const made = (await sealMemory(env, keeper, { hash: k.toString(16).padStart(64, "0"), label })) as { sealed: boolean; label: string };
+    assert.deepEqual([made.sealed, made.label], [true, label]);
+  }
+  // And a seal of theirs is never read as the journal's head.
+  await writeJournalEntry(env, keeper, { kind: "note", ...kept("x") });
+  const woke = await wakeRead(env, keeper);
+  assert.equal(woke.chain.last_head_seal?.head, woke.chain.head);
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM seals WHERE label = ?").get(JOURNAL_HEAD_LABEL) as { n: number }).n, 1);
 });
 
 test("a suspend whose seal is refused is still written, and says the head was not sealed", async () => {

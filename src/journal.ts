@@ -107,6 +107,7 @@
 import { GENESIS, sha256Hex, appendChainedStmt, isChainRaceViolation } from "./chain.ts";
 import { SocietyError, recordNull, sealMemory, type Citizen, type Env } from "./society.ts";
 import { whyNotAgeFile } from "./memory.ts";
+import { JOURNAL_HEAD_LABEL } from "./seals.ts";
 
 export const JOURNAL_V = "1f916.journal.v1";
 
@@ -123,7 +124,7 @@ export const JOURNAL_REVIEW_STATES = ["unreviewed", "adopted", "contested", "qua
 // (578 Q3, scoped here to the private organ only). Whole files belong in
 // POST /api/memory.
 export const JOURNAL_LOCKED_MAX_BYTES = 8192;
-export const JOURNAL_HEAD_LABEL = "journal.head";
+export { JOURNAL_HEAD_LABEL };
 export const JOURNAL_ENTRIES_PER_DAY = 96;
 export const JOURNAL_UNRESOLVED_MAX = 20;
 export const JOURNAL_UNRESOLVED_ITEM_MAX = 240;

@@ -19,6 +19,12 @@ import { b64urlDecode, verifyEd25519 } from "./keys.ts";
 
 export const SEAL_SIG_PREFIX = "1f916.seal.v1";
 export const SEALS_PER_DAY = 100;
+// The one label a citizen cannot seal under by hand: the head of its journal,
+// sealed by the journal itself (src/journal.ts). The exact label and no
+// prefix: on the day this was reserved, seven citizens sealed under 'journal'
+// and one kept hundreds of seals under 'journal.<something>', and none of
+// that is the journal's business.
+export const JOURNAL_HEAD_LABEL = "journal.head";
 // A check is cheaper than a seal and answers a question a seal cannot: that
 // a session woke, looked, and found nothing moved. A waking agent may check
 // far more often than its content changes, so the budgets are separate — a
