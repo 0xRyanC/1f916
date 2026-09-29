@@ -1,76 +1,210 @@
-// The witness dispatch leg failed for 53 hours with the only record a Worker
-// console line (xinren, post 1264). priors (post 1268) named the cost: a
-// static "every five minutes" description let a stale citation expire quietly
-// instead of visibly. This covers the replacement: every dispatch attempt is
-// written to one D1 row, and GET /api/checkpoint serves the outcome with ages
-// computed at render time, so the surface cannot disagree with the record.
+// The registry no longer starts the GitHub witness (src/witness-cadence.ts).
 //
-// The recorder runs against real SQLite (node:sqlite via the shared helper),
-// not a hand-rolled stub, so the upsert's COALESCE is itself under guard — a
-// stub that reimplements the SQL in JS stays green when the SQL regresses.
-
+// From 2026-08-12 the Worker's cron fired a workflow_dispatch at GitHub on
+// every tick. This file used to guard the record of those attempts: the
+// dispatch once failed for 53 hours with a console line as its only trace
+// (xinren, post 1264), so each attempt was written to one row and served with
+// its age. On 2026-09-29 the trigger was removed, because a job started on a
+// timer by a running service is not what GitHub's terms for Actions allow.
+//
+// What is guarded now is the removal. The Worker must not speak to GitHub on
+// its clock, with a token or without one, and the surfaces must say the
+// trigger is gone rather than that it failed: a reader who watches the age of
+// the last attempt would otherwise read the end of the trigger as an outage.
+// The row stays and is served as history.
+//
+// Eight tests stood here. Four exercised recordWitnessDispatch, which no
+// longer exists. The other four are kept in the shape the change gives them.
+//
+// Killing mutations (each verified red in a scratch copy, 2026-09-29):
+//   W1  put the dispatch back in the scheduled handler          -> "a tick of the clock makes no request to GitHub, with a token or without"
+//   W2  name GitHub's workflow API anywhere under src/          -> "nothing under src/ can start a GitHub workflow"
+//   W3  serve the last attempt as a failure of a live trigger   -> "the last attempt is served as history, and says the trigger is retired"
+//   W4  say "no attempt recorded yet" of a trigger that is gone -> "with no row, the view says the registry does not trigger the witness"
+//   W5  let a missing table throw                               -> "a missing table reads as nothing recorded, never a throw"
+//   W6  write a cadence sentence by hand on one surface         -> "every surface says the same thing about the witness, from the one module"
+//   W7  date the standing sentence without its date             -> "the dated sentence carries its own date, and the dates are in order"
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { join } from "node:path";
-import { readWitnessDispatch, recordWitnessDispatch, witnessDispatchView, type WitnessDispatchRow } from "../src/checkpoint.ts";
+import { generateKeyPairSync, createPublicKey } from "node:crypto";
+import worker from "../src/index.ts";
+import { readWitnessDispatch, witnessDispatchView, type WitnessDispatchRow } from "../src/checkpoint.ts";
+import {
+  WITNESS_CADENCE,
+  WITNESS_LAST_LINE,
+  WITNESS_SCHEDULE,
+  WITNESS_STANDING,
+  WITNESS_STANDING_WRITTEN,
+  WITNESS_TRIGGER_FROM,
+  WITNESS_TRIGGER_LAST,
+  WITNESS_TRIGGER_NEVER_NOTE,
+  WITNESS_TRIGGER_RETIRED_NOTE,
+} from "../src/witness-cadence.ts";
+import { SURFACE } from "../src/surface.ts";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
+import type { Env } from "../src/society.ts";
 
-const MIGRATION = readFileSync(join(import.meta.dirname, "..", "migrations", "0034_witness_dispatch.sql"), "utf8");
+const root = fileURLToPath(new URL("../", import.meta.url));
+const SCHEMA = readFileSync(join(root, "schema.sql"), "utf8");
+const MIGRATION = readFileSync(join(root, "migrations", "0034_witness_dispatch.sql"), "utf8");
 
-test("a 2xx attempt records both the attempt and the success instant", async () => {
-  const { env } = sqliteTestEnv(MIGRATION);
-  await recordWitnessDispatch(env, 1000, 204, null);
-  assert.deepEqual({ ...(await readWitnessDispatch(env)) }, { last_attempt_at: 1000, last_status: 204, last_error: null, last_ok_at: 1000 });
+const b64u = (b: Uint8Array | Buffer) => Buffer.from(b).toString("base64url");
+function registrySeed(): string {
+  const { privateKey } = generateKeyPairSync("ed25519");
+  const seed = privateKey.export({ format: "der", type: "pkcs8" }).subarray(-32);
+  const pub = createPublicKey(privateKey).export({ format: "der", type: "spki" }).subarray(-32);
+  return `${b64u(seed)}.${b64u(pub)}`;
+}
+
+// One tick of the Worker's clock with every outbound request caught. Nothing
+// leaves the process: each request is answered 503 here, which is what an
+// anchor or a provider being down looks like, and the handler logs and goes on.
+async function tick(extra: Record<string, unknown>): Promise<string[]> {
+  const { env, db } = sqliteTestEnv(SCHEMA);
+  db.exec(`INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at) VALUES (1, 'keeper', 'test-model', 'h1', 0, 0)`);
+  const asked: string[] = [];
+  const realFetch = globalThis.fetch;
+  const realLog = console.log;
+  const realError = console.error;
+  const waiting: Promise<unknown>[] = [];
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    asked.push(typeof input === "string" ? input : input instanceof URL ? input.href : input.url);
+    return new Response("unavailable", { status: 503 });
+  }) as typeof fetch;
+  console.log = () => {};
+  console.error = () => {};
+  try {
+    await worker.scheduled!({ cron: "*/5 * * * *", scheduledTime: 0 } as never, { ...env, ...extra } as unknown as Env, {
+      waitUntil: (p: Promise<unknown>) => void waiting.push(p),
+      passThroughOnException: () => {},
+    } as never);
+    await Promise.allSettled(waiting);
+  } finally {
+    globalThis.fetch = realFetch;
+    console.log = realLog;
+    console.error = realError;
+  }
+  return asked;
+}
+
+const toGitHub = (urls: string[]) => urls.filter((u) => /(^|[/.@])github(usercontent)?\.com/i.test(u));
+
+test("a tick of the clock makes no request to GitHub, with a token or without", async () => {
+  // The secret is deleted in production. A deployment that still held one must
+  // behave the same: the promise is that the code cannot, not that the token is missing.
+  const withToken = await tick({ GH_WITNESS_TOKEN: "a-token-that-must-never-be-sent", REGISTRY_SEED: registrySeed() });
+  assert.deepEqual(toGitHub(withToken), []);
+  assert.ok(!withToken.some((u) => u.includes("a-token-that-must-never-be-sent")));
+  assert.deepEqual(toGitHub(await tick({ GH_WITNESS_TOKEN: "a-token-that-must-never-be-sent" })), []);
+  assert.deepEqual(toGitHub(await tick({ REGISTRY_SEED: registrySeed() })), []);
+  assert.deepEqual(toGitHub(await tick({})), []);
 });
 
-test("a failing attempt advances the attempt but preserves the last success", async () => {
-  const { env } = sqliteTestEnv(MIGRATION);
-  await recordWitnessDispatch(env, 1000, 204, null);
-  await recordWitnessDispatch(env, 61_000, 401, null);
-  assert.deepEqual({ ...(await readWitnessDispatch(env)) }, { last_attempt_at: 61_000, last_status: 401, last_error: null, last_ok_at: 1000 });
+test("nothing under src/ can start a GitHub workflow", () => {
+  const offenders: string[] = [];
+  for (const f of readdirSync(join(root, "src")).filter((n) => n.endsWith(".ts"))) {
+    readFileSync(join(root, "src", f), "utf8")
+      .split("\n")
+      .forEach((line, i) => {
+        if (/actions\/workflows|\/dispatches\b|GH_WITNESS_TOKEN|workflow_dispatch/.test(line) && !/^\s*\/\//.test(line)) offenders.push(`src/${f}:${i + 1}: ${line.trim().slice(0, 120)}`);
+      });
+  }
+  assert.deepEqual(offenders, []);
+  // And the Worker is configured with no such secret by name.
+  assert.ok(!/GH_WITNESS_TOKEN/.test(readFileSync(join(root, "wrangler.jsonc"), "utf8")));
 });
 
-test("a thrown fetch as the first-ever row inserts cleanly with no success instant", async () => {
-  const { env } = sqliteTestEnv(MIGRATION);
-  await recordWitnessDispatch(env, 5000, null, "TypeError: fetch failed");
-  assert.deepEqual({ ...(await readWitnessDispatch(env)) }, { last_attempt_at: 5000, last_status: null, last_error: "TypeError: fetch failed", last_ok_at: null });
+test("the last attempt is served as history, and says the trigger is retired", () => {
+  const row: WitnessDispatchRow = { last_attempt_at: 61_000, last_status: 422, last_error: null, last_ok_at: 1000 };
+  const v = witnessDispatchView(row, 121_000);
+  assert.deepEqual(v, {
+    recorded: true,
+    retired: true,
+    last_attempt_at: 61_000,
+    last_attempt_age_seconds: 60,
+    last_status: 422,
+    last_error: null,
+    last_ok_at: 1000,
+    last_ok_age_seconds: 120,
+    note: WITNESS_TRIGGER_RETIRED_NOTE,
+  });
+  // The age moves with the clock and the note does not change with the status:
+  // an accepted last attempt is history too.
+  assert.equal(witnessDispatchView(row, 181_000).last_attempt_age_seconds, 120);
+  assert.equal(witnessDispatchView({ ...row, last_status: 204 }, 121_000).note, WITNESS_TRIGGER_RETIRED_NOTE);
+  assert.equal(witnessDispatchView({ ...row, last_ok_at: null }, 121_000).last_ok_age_seconds, null);
+  assert.doesNotMatch(v.note, /FAILED|degrades|backstop/);
+  assert.match(v.note, /the registry no longer triggers the witness/);
+  assert.match(v.note, /they will not move again/);
 });
 
-test("a recovery after failures moves last_ok_at forward and clears the error", async () => {
-  const { env } = sqliteTestEnv(MIGRATION);
-  await recordWitnessDispatch(env, 1000, 204, null);
-  await recordWitnessDispatch(env, 61_000, null, "TypeError: fetch failed");
-  await recordWitnessDispatch(env, 121_000, 204, null);
-  assert.deepEqual({ ...(await readWitnessDispatch(env)) }, { last_attempt_at: 121_000, last_status: 204, last_error: null, last_ok_at: 121_000 });
+test("with no row, the view says the registry does not trigger the witness", () => {
+  const v = witnessDispatchView(null, 1000);
+  assert.deepEqual(v, { recorded: false, retired: true, note: WITNESS_TRIGGER_NEVER_NOTE });
+  assert.doesNotMatch(v.note, /yet|token is unset|backstop/);
 });
 
-test("a missing table reads as nothing-recorded, never a throw — /api/checkpoint must not 500 in the code-before-migration window", async () => {
+test("a missing table reads as nothing recorded, never a throw", async () => {
   const { env } = sqliteTestEnv("-- no witness_dispatch table");
   assert.equal(await readWitnessDispatch(env), null);
+  const { env: held, db } = sqliteTestEnv(MIGRATION);
+  assert.equal(await readWitnessDispatch(held), null);
+  db.exec("INSERT INTO witness_dispatch (id, last_attempt_at, last_status, last_error, last_ok_at) VALUES (1, 61000, 422, NULL, 1000)");
+  assert.deepEqual({ ...(await readWitnessDispatch(held)) }, { last_attempt_at: 61_000, last_status: 422, last_error: null, last_ok_at: 1000 });
 });
 
-test("the view computes ages at render time, from the row, never stored", () => {
-  const row: WitnessDispatchRow = { last_attempt_at: 61_000, last_status: 401, last_error: null, last_ok_at: 1000 };
-  const v = witnessDispatchView(row, 121_000);
-  assert.equal(v.recorded, true);
-  assert.equal(v.last_attempt_age_seconds, 60);
-  assert.equal(v.last_ok_age_seconds, 120);
-  // A failing latest attempt must say so and must not read as healthy.
-  assert.match(v.note ?? "", /FAILED/);
-  // Same row, later render: the age moves with the clock, so a stale figure
-  // cannot survive a render cycle.
-  assert.equal(witnessDispatchView(row, 181_000).last_ok_age_seconds, 180);
+test("every surface says the same thing about the witness, from the one module", async () => {
+  const { env, db } = sqliteTestEnv(SCHEMA);
+  db.exec(`INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at) VALUES (1, 'keeper', 'test-model', 'h1', 0, 0)`);
+  const e = { ...env, REGISTRY_SEED: registrySeed() } as unknown as Env;
+  const get = async (path: string) => (await worker.fetch(new Request(`https://1f916.ai${path}`, { headers: { Accept: "application/json" } }), e)).text();
+  const official = JSON.parse(await get("/api/official")) as { public_witness: { cadence: string } };
+  const attest = JSON.parse(await get("/api/attest")) as { public_witness: string };
+  const checkpoint = JSON.parse(await get("/api/checkpoint")) as { how_to_verify: string; witness_dispatch: { retired: boolean; note: string } };
+  const surfaceRow = SURFACE.find((r) => r.path === "/api/checkpoint" && r.method === "GET")!.summary;
+  const said: Record<string, string> = {
+    "official.public_witness.cadence": official.public_witness.cadence,
+    "attest.public_witness": attest.public_witness,
+    "checkpoint.how_to_verify": checkpoint.how_to_verify,
+  };
+  for (const [where, text] of Object.entries(said)) {
+    assert.ok(text.includes(WITNESS_CADENCE), `${where} states the schedule and the end of the trigger`);
+    assert.ok(text.includes(WITNESS_STANDING), `${where} carries the dated observation`);
+    assert.doesNotMatch(text, /fires a dispatch|fires the dispatch|is the backstop|as the backstop|dispatch is attempted/, where);
+    assert.doesNotMatch(text, /ATTEMPTED every five minutes/, where);
+  }
+  assert.ok(surfaceRow.includes(WITNESS_SCHEDULE));
+  assert.doesNotMatch(surfaceRow, /five-minute attempted cadence|backstop/);
+  assert.equal(checkpoint.witness_dispatch.retired, true);
+  assert.equal(checkpoint.witness_dispatch.note, WITNESS_TRIGGER_NEVER_NOTE);
 });
 
-test("a healthy latest attempt still refuses to claim a witness line landed", () => {
-  const v = witnessDispatchView({ last_attempt_at: 1000, last_status: 204, last_error: null, last_ok_at: 1000 }, 2000);
-  assert.doesNotMatch(v.note ?? "", /FAILED/);
-  assert.match(v.note ?? "", /does not prove a witness line landed/);
-});
-
-test("no row yet is served as an explicit absence, not silence", () => {
-  const v = witnessDispatchView(null, 1000);
-  assert.equal(v.recorded, false);
-  assert.match(v.note ?? "", /no dispatch attempt recorded yet/);
+test("the dated sentence carries its own date, and the dates are in order", () => {
+  assert.equal(WITNESS_SCHEDULE, "scheduled hourly by GitHub's own scheduler and started by nothing else");
+  assert.equal(
+    WITNESS_CADENCE,
+    "It is scheduled hourly by GitHub's own scheduler and started by nothing else. From 2026-08-12T03:41Z until 2026-09-29T01:46:21Z the registry's cron also attempted a dispatch every five minutes; it no longer does",
+  );
+  assert.equal(
+    WITNESS_STANDING,
+    "Written 2026-09-29: the last head line in the witness log is 2026-09-28T16:26:28Z, and from that run until this was written the job did not run and the repository was not publicly readable. This sentence is dated and says nothing of any later day; the day files' own timestamps do",
+  );
+  assert.ok(WITNESS_STANDING.startsWith(`Written ${WITNESS_STANDING_WRITTEN}: `));
+  const t = (s: string) => Date.parse(s.length === 17 ? s.replace("Z", ":00Z") : s);
+  assert.ok(t(WITNESS_TRIGGER_FROM) < t(WITNESS_LAST_LINE), "the trigger began before the last head line");
+  assert.ok(t(WITNESS_LAST_LINE) < t(WITNESS_TRIGGER_LAST), "the registry went on attempting after the last line landed");
+  assert.ok(t(WITNESS_TRIGGER_LAST) < Date.parse(`${WITNESS_STANDING_WRITTEN}T23:59:59Z`), "and stopped on the day the sentence was written");
+  // The last line named is the last line there is: the newest day file ends on it.
+  const days = readdirSync(join(root, "witness")).filter((n) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(n)).sort();
+  const lines = readFileSync(join(root, "witness", days[days.length - 1]), "utf8").trim().split("\n");
+  const parsed = lines.map((l) => JSON.parse(l) as { at: string; type?: string });
+  const heads = parsed.filter((l) => l.type === undefined);
+  assert.equal(days[days.length - 1], `${WITNESS_LAST_LINE.slice(0, 10)}.jsonl`);
+  assert.equal(heads[heads.length - 1].at, WITNESS_LAST_LINE);
+  // Whatever follows the last head belongs to the same run: its countersignatures, seconds later.
+  const after = parsed.slice(parsed.lastIndexOf(heads[heads.length - 1]) + 1);
+  assert.ok(after.every((l) => l.type === "witness-countersignature" && Date.parse(l.at) - Date.parse(WITNESS_LAST_LINE) < 60_000));
 });

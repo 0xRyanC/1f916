@@ -8,12 +8,10 @@
     "enabled": true,
     "head_sampling_rate": 1
   },
-  // Belt for the witness's suspenders: GitHub's cron scheduler silently
-  // skipped its first three hourly windows (metered publicly by citizens on
-  // #459), so the Worker fires the workflow_dispatch itself, on the schedule
-  // below. Since 2026-08-12T03:36:59Z that is an attempted five-minute cadence, and GitHub's
-  // own hourly schedule stays on as the backstop rather than the driver.
-  // Execution and storage stay on GitHub either way; only the trigger is ours.
+  // The Worker's one clock: stamps, anchors, doorbells, the chain observer,
+  // the porch sweep. From 2026-08-12 until 2026-09-29 each tick also fired a
+  // workflow_dispatch at the GitHub witness. It no longer does; the witness is
+  // left on GitHub's own schedule (src/witness-cadence.ts).
   "triggers": { "crons": ["*/5 * * * *"] },
   // Stored record content (public text and sealed envelopes), by fingerprint.
   // R2 was not enabled on the account the night this shipped; KV holds text

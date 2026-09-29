@@ -21,6 +21,7 @@ import { consistencyProof, inclusionProof, merkleRoot } from "./merkle.ts";
 import { SocietyError, type Env } from "./society.ts";
 import { WITNESS_COUNTERSIGNATURE_NOTE, WITNESS_COUNTERSIGNATURE_PAYLOAD_FORMAT } from "./chain.ts";
 import { NOTE_KEY_NAME, checkpointBody, noteFromField, noteKeyId, originOf, signatureField, verifierKey } from "./note.ts";
+import { WITNESS_CADENCE, WITNESS_STANDING, WITNESS_TRIGGER_NEVER_NOTE, WITNESS_TRIGGER_RETIRED_NOTE } from "./witness-cadence.ts";
 
 export const CHECKPOINT_PAYLOAD_PREFIX = "1f916.checkpoint.v1";
 const LOGS = ["identity_events", "ledger"] as const;
@@ -143,19 +144,9 @@ export interface WitnessDispatchRow {
   last_ok_at: number | null;
 }
 
-// Cron entry: write down how the witness dispatch went, success or not. The
-// 53-hour silent failure (#1264) happened because the only record of a failed
-// dispatch was a console line; this row is what GET /api/checkpoint serves.
-export async function recordWitnessDispatch(env: Env, at: number, status: number | null, error: string | null): Promise<void> {
-  const ok = status !== null && status >= 200 && status < 300;
-  await env.DB.prepare(
-    "INSERT INTO witness_dispatch (id, last_attempt_at, last_status, last_error, last_ok_at) VALUES (1, ?1, ?2, ?3, ?4) " +
-      "ON CONFLICT(id) DO UPDATE SET last_attempt_at = ?1, last_status = ?2, last_error = ?3, last_ok_at = COALESCE(?4, last_ok_at)",
-  )
-    .bind(at, status, error, ok ? at : null)
-    .run();
-}
-
+// The row the registry's own trigger wrote, one attempt over the last. The
+// trigger was removed on 2026-09-29 (src/witness-cadence.ts), so nothing
+// writes this row any more; it is read as history.
 // Read the single dispatch row. A deploy can serve this code before migration
 // 0034 has been applied; a missing table degrades to "nothing recorded" so the
 // surface external witnesses poll never 500s over its own telemetry.
@@ -171,35 +162,23 @@ export async function readWitnessDispatch(env: Env): Promise<WitnessDispatchRow 
 
 // Pure view over the row, ages computed at render time so the surface cannot
 // hold a stale figure (hemei, c12182: make the surface a function of the
-// record). No instants in prose — the numbers ARE the observation.
+// record). The row no longer moves, so the ages only grow, and `retired` says
+// why: a reader who alarms on a growing age is told in a field, not in prose,
+// that this is the end of the trigger and not an outage of it.
 export function witnessDispatchView(row: WitnessDispatchRow | null, now: number) {
-  if (!row) {
-    return {
-      recorded: false,
-      note: "no dispatch attempt recorded yet — either the cron has not fired since this surface shipped or the dispatch token is unset; GitHub's hourly schedule is the backstop either way, and the witness day files record what actually landed",
-    };
-  }
-  const ok = row.last_status !== null && row.last_status >= 200 && row.last_status < 300;
+  if (!row) return { recorded: false, retired: true, note: WITNESS_TRIGGER_NEVER_NOTE };
   return {
     recorded: true,
+    retired: true,
     last_attempt_at: row.last_attempt_at,
     last_attempt_age_seconds: Math.max(0, Math.round((now - row.last_attempt_at) / 1000)),
     last_status: row.last_status,
     last_error: row.last_error,
     last_ok_at: row.last_ok_at,
     last_ok_age_seconds: row.last_ok_at === null ? null : Math.max(0, Math.round((now - row.last_ok_at) / 1000)),
-    note: ok ? DISPATCH_OK_NOTE : DISPATCH_FAILED_NOTE,
+    note: WITNESS_TRIGGER_RETIRED_NOTE,
   };
 }
-
-// The served notes about liveness, kept together so they are edited together:
-// each one says what its number proves and points at the number that proves
-// the next thing.
-const DISPATCH_OK_NOTE =
-  "the latest dispatch attempt was accepted; acceptance queues a workflow run, it does not prove a witness line landed — the day file's own `at` timestamps are the record. Nor does it prove the checkpoint step ran: the dispatch leg runs after makeCheckpoints in the same scheduled handler and survives its failure, so checkpoint_sequence is that step's own record";
-
-const DISPATCH_FAILED_NOTE =
-  "the latest dispatch attempt FAILED (status/error above); GitHub's hourly schedule is the backstop, so the witness degrades to hourly rather than stopping — the day file's own `at` timestamps are the record";
 
 const SEQUENCE_UNREAD_NOTE =
   "sqlite_sequence has no readable entry for the checkpoints table on this deployment (the read was refused, or nothing has ever been written); fall back to comparing checkpoints[].id across two reads, remembering that on a quiet log it does not move until the next written row";
@@ -297,7 +276,9 @@ export async function latestCheckpoints(env: Env) {
     leaves_are: "the sealed rows' `hash` column values (lowercase hex, as UTF-8 bytes), in id order — the same hashes the linear chain and GET /api/attest already publish",
     tree: "RFC 6962: leaf = SHA-256(0x00 || leaf), node = SHA-256(0x01 || l || r)",
     how_to_verify:
-      "Check sig over the payload format above with registry_public_key. Then GET /api/proof?log=&event= for inclusion, /api/checkpoint/consistency?log=&from=&to= for append-only-ness. The witness records checkpoints at github.com/1f916-ai/1f916 under witness/ — dispatch is attempted every five minutes since 2026-08-12T03:41Z with GitHub's hourly schedule as the backstop, hourly-only before that, and the achieved cadence is whatever the day file's own `at` timestamps show (the five-minute leg has failed for days at a stretch while the backstop held, #1264). Compare roots there before believing ours.",
+      "Check sig over the payload format above with registry_public_key. Then GET /api/proof?log=&event= for inclusion, /api/checkpoint/consistency?log=&from=&to= for append-only-ness. The witness records checkpoints at github.com/1f916-ai/1f916 under witness/. " +
+      `${WITNESS_CADENCE}. ${WITNESS_STANDING}. ` +
+      "The achieved cadence is whatever the day file's own `at` timestamps show (the dispatch attempt failed for days at a stretch while GitHub's own schedule held, #1264). Compare roots there before believing ours.",
   };
 }
 

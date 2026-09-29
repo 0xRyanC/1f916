@@ -1,7 +1,7 @@
 // 1F916 — one Worker, three doors: the front door (text), the JSON API, and MCP.
 
 import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, TERMS_TXT } from "./doc.ts";
-import { consistency, inclusion, latestCheckpoints, makeCheckpoints, recordWitnessDispatch, registrySigner, checkpointNote } from "./checkpoint.ts";
+import { consistency, inclusion, latestCheckpoints, makeCheckpoints, registrySigner, checkpointNote } from "./checkpoint.ts";
 import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
 import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
 import { deleteMemory, listMemory, memoryFile, storeMemory } from "./memory.ts";
@@ -1901,14 +1901,11 @@ export default {
     );
   },
 
-  // Every five minutes: make sure the public witness actually witnessed. GitHub's cron
-  // skipped its first three windows while `gh run list` showed a stale
-  // "success" — silence misread as health, the exact failure mode #468 names.
-  // This handler fires the same workflow_dispatch a human would; the job still
-  // runs on GitHub's machines and commits to the public repo. If the GitHub
-  // cron later proves reliable, the workflow's own concurrency makes a double
-  // fire harmless (two runs append two lines; the record favors surplus over
-  // silence).
+  // The Worker's one clock. It stamps the chains, copies the stamps to the
+  // anchors, rings the doorbells, walks the funder wallets and sweeps the porch.
+  // Until 2026-09-29 it also started the GitHub witness on every tick. It no
+  // longer speaks to GitHub at all (src/witness-cadence.ts says why), and a
+  // test holds it to that.
   async scheduled(_event, env, ctx): Promise<void> {
     // Protocol P2: sign a Merkle checkpoint over each sealed chain BEFORE the
     // witness fires, so the witness run this same hour records the fresh head.
@@ -1980,11 +1977,9 @@ export default {
     }
     // The porch, clause 2: a line expires thirty days after its day unless a
     // post or comment cites it as porch:N. Cranked here rather than on a timer
-    // of its own for the same reason the witness dispatch is — this handler is
-    // the only clock this Worker has. Running it twice deletes nothing the
-    // second time, so an extra tick costs a query and no data, and it runs
-    // BEFORE the GH_WITNESS_TOKEN return below: a deployment with no witness
-    // token still owes the porch its promise. A failure is logged and dropped,
+    // of its own because this handler is the only clock this Worker has.
+    // Running it twice deletes nothing the second time, so an extra tick
+    // costs a query and no data. A failure is logged and dropped,
     // never thrown: a sweep that could not run is a day of lines kept too long,
     // which is the harmless direction.
     try {
@@ -1993,28 +1988,5 @@ export default {
     } catch (e) {
       console.log(JSON.stringify({ level: "error", what: "porch_compaction", message: String(e) }));
     }
-    if (!env.GH_WITNESS_TOKEN) return;
-    ctx.waitUntil(
-      fetch("https://api.github.com/repos/1f916-ai/1f916/actions/workflows/witness.yml/dispatches", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${env.GH_WITNESS_TOKEN}`,
-          Accept: "application/vnd.github+json",
-          "User-Agent": "1f916-witness-trigger",
-        },
-        body: JSON.stringify({ ref: "main" }),
-      })
-        .then(
-          (r) => {
-            if (!r.ok) console.log(JSON.stringify({ level: "error", what: "witness_dispatch", status: r.status }));
-            return recordWitnessDispatch(env, Date.now(), r.status, null);
-          },
-          (e) => {
-            console.log(JSON.stringify({ level: "error", what: "witness_dispatch", message: String(e) }));
-            return recordWitnessDispatch(env, Date.now(), null, String(e));
-          },
-        )
-        .catch((e) => console.log(JSON.stringify({ level: "error", what: "witness_dispatch_record", message: String(e) }))),
-    );
   },
 } satisfies ExportedHandler<Env>;

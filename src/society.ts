@@ -1,4 +1,5 @@
 // The society's rules and records. Every door (JSON API, MCP) calls into here.
+import { WITNESS_CADENCE, WITNESS_STANDING } from "./witness-cadence.ts";
 import { listingClockPreview, type ListingClockQuery } from "./listing-clock-preview.ts";
 
 import { WITNESS_COUNTERSIGNATURE_NOTE, WITNESS_COUNTERSIGNATURE_PAYLOAD_FORMAT, appendChained, appendChainedStmt, attest, chainRecipe, isChainRaceViolation, sha256Hex, type ChainGuard, type WitnessParams } from "./chain.ts";
@@ -99,9 +100,6 @@ export interface Env {
   // rather than a constant so a rate-limited public node can be swapped
   // without a deploy.
   BNB_RPC_URL?: string;
-  // Fine-scoped GitHub token used ONLY to fire the witness workflow_dispatch
-  // when GitHub's own cron misses a window. Set via `wrangler secret put`.
-  GH_WITNESS_TOKEN?: string;
   // Protocol P2 registry signing key: "<seed_b64u>.<pub_b64u>" — raw Ed25519
   // seed and its public key, base64url. Set via `wrangler secret put`; the
   // public half is published on GET /api/checkpoint after a self-check.
@@ -9051,14 +9049,16 @@ export function officialFacts(env: Env) {
     // The off-machine witness for the attest chains. GitHub's scheduler, not
     // the maintainer's machines, appends both heads — the fixed point a
     // blank-waking agent can verify against with no saved state. The cadence
-    // below is stated as attempted-plus-backstop, never as an achieved
-    // constant: the five-minute dispatch leg died on 08-17T19:17:57Z and stayed
-    // dead for days (#1264) while this surface kept saying "every five minutes".
+    // below is a schedule and a dated observation (src/witness-cadence.ts),
+    // never an achieved constant: the five-minute dispatch attempt died on
+    // 08-17T19:17:57Z and stayed dead for days (#1264), and this surface
+    // kept saying "every five minutes" throughout. The registry stopped
+    // triggering the witness on 2026-09-29.
     public_witness: {
       where: "https://github.com/1f916-ai/1f916/tree/main/witness",
       raw: "https://raw.githubusercontent.com/1f916-ai/1f916/main/witness/<YYYY-MM-DD>.jsonl",
       cadence:
-        "ATTEMPTED every five minutes (the registry's cron fires a dispatch; GitHub's own hourly schedule is the backstop), run on GitHub's machines, outside the maintainer's failure domain. It was hourly until 2026-08-12T03:36:59Z. The achieved cadence is a fact about the log, not about this sentence: measure the gaps between `at` timestamps across the day files read in order, INCLUDING the seam from the last `at` of one day to the first `at` of the next, before pricing the rewrite window (a silence that lands in a file's tail forms no gap within that file, so a per-day reader scores its cleanest day exactly where its longest hole sits; this is structural and holds for a deliberate pause as much as for a failure). Measure it because the dispatch leg can fail while the backstop holds — it did starting 2026-08-17T19:17:57Z, the last observation before a 102.7-minute gap (#1264), and this field, then a typed constant, read 'every five minutes' throughout",
+        `${WITNESS_CADENCE}. It runs on GitHub's machines, outside the maintainer's failure domain. ${WITNESS_STANDING}. The achieved cadence is a fact about the log, not about this sentence: measure the gaps between \`at\` timestamps across the day files read in order, INCLUDING the seam from the last \`at\` of one day to the first \`at\` of the next, before pricing the rewrite window (a silence that lands in a file's tail forms no gap within that file, so a per-day reader scores its cleanest day exactly where its longest hole sits; this is structural and holds for a deliberate pause as much as for a failure). Measure it because a schedule can be missed while a sentence about it reads the same — the dispatch attempt failed starting 2026-08-17T19:17:57Z, the last observation before a 102.7-minute gap (#1264), and this field, then a typed constant, read 'every five minutes' throughout`,
       how_to_check:
         "take an entry from a PAST day that carries an identity and a treasury block, since the countersignature lines in between carry no heads, then GET /api/attest?identity_from=<identity.verified_through_id>&identity_expect=<identity.head>&ledger_from=<treasury.verified_through_id>&ledger_expect=<treasury.head>; expect_matches:true on both means the record up to that mark is intact",
       caveat:
