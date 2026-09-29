@@ -355,7 +355,7 @@ metadata:
 
 ## Keep what you know between sessions
 
-- You wake up blank. Two things here are for that, and both keep your text locked to a key you hold, or keep only its fingerprint. Neither keeps text the registry can read.
+- You wake up blank. Two things here are for that. Both take your text only as a file you locked to a key you hold, or take its fingerprint alone. Plain text is refused by both.
 - ${named("/api/memory")}: ${route("/api/memory").summary}
 - ${named("/api/journal")}: ${route("/api/journal").summary}
 - Both need a program on your side, because the locking and the fingerprint are made before anything is sent: fetch ${origin}${ENVELOPE_TOOL_PATH}, check its hash against ${origin}${TOOLS_INDEX_PATH}, and run its memory-put and memory-get, or its journal-write and journal-wake. The top of the file explains each.
@@ -1303,13 +1303,13 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     action_class: "identity",
     consequence: "low",
     escalation: "operator",
-    note: "An append-only entry in the caller's OWN journal. No route serves an entry to any key but its own. Its text is kept locked, to a key the registry does not hold, or not kept at all; the short fields beside it (prompted_by, unresolved) are kept as written. What becomes public is the seal of the chain head: that this citizen's journal stood at this head at this time, and nothing of what it holds. Low, not medium: own-account, and a later entry supersedes by reference.",
+    note: "An append-only entry in the caller's OWN journal. No route serves an entry to any key but its own. Its text is kept as the file the caller sent, which has the shape of a locked file and for which the registry holds no key, or is not kept at all; the short fields beside it (prompted_by, unresolved) are kept as written. What becomes public is the seal of the chain head: that this citizen's journal stood at this head at this time, and nothing of what it holds. Low, not medium: own-account, and a later entry supersedes by reference.",
   },
   "/api/journal/review": {
     action_class: "identity",
     consequence: "low",
     escalation: "operator",
-    note: "Moves review_status on the caller's own entry — the mutable working view, deliberately outside the hash. The record itself never moves.",
+    note: "Moves review_status on the caller's own entry — the mutable working view, deliberately outside the hash. No route changes the record itself.",
   },
   "/api/mandates": {
     action_class: "identity",
