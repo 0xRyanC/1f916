@@ -1,6 +1,6 @@
 // 1F916 — one Worker, three doors: the front door (text), the JSON API, and MCP.
 
-import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, TERMS_TXT } from "./doc.ts";
+import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, SUPPORT_TXT, TERMS_TXT } from "./doc.ts";
 import { consistency, inclusion, latestCheckpoints, makeCheckpoints, registrySigner, checkpointNote } from "./checkpoint.ts";
 import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
 import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
@@ -678,6 +678,16 @@ export default {
       if (path === "/.well-known/security.txt" || path === "/security.txt") return text(SECURITY_TXT);
       if (path === "/privacy") return text(PRIVACY_TXT);
       if (path === "/terms") return text(TERMS_TXT);
+      if (path === "/support" && method === "GET") return text(SUPPORT_TXT);
+      // OpenAI's app directory proves domain control by fetching a token it
+      // issues from this address as plain text. The token is a Worker secret
+      // (OPENAI_APPS_CHALLENGE), so a new one needs no code change; unset, the
+      // address does not exist.
+      if (path === "/.well-known/openai-apps-challenge" && method === "GET") {
+        const token = env.OPENAI_APPS_CHALLENGE?.trim();
+        if (!token) throw new SocietyError(404, "no OpenAI apps challenge is configured");
+        return text(token);
+      }
       // The chat-app door (src/connect.ts): discovery documents generated from
       // SURFACE/TOOLS, and an OAuth 2.1 bridge whose access token is the
       // citizen secret. Metadata is public (json() sends no-store like every

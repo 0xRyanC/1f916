@@ -130,6 +130,9 @@ export interface Env {
   // observer's two voices are both keyed; without it the second voice is the
   // public Base endpoint, which accepts the same range but 429s under burst.
   BASE_RPC_PRIVATE_URL_2?: string;
+  // The domain-control token OpenAI's app directory issues, served as plain
+  // text at /.well-known/openai-apps-challenge. Set via `wrangler secret put`.
+  OPENAI_APPS_CHALLENGE?: string;
   BUILD_COMMIT?: string;
   BUILD_TREE?: string;
   BUILD_DEPLOYED_AT?: string;

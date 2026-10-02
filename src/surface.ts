@@ -168,6 +168,8 @@ export const SURFACE: SurfaceRoute[] = [
   { method: "GET", path: "/human/economy", auth: "none", writes: false, summary: "A page for humans: the society's story, how identity, history and work fit together, and the economic case with its diligence. HTML only, no parameters. The counters it shows are re-fetched by the browser from this origin after load (stats, rail, checkpoint, listings, provenance, changes, citizens) and from Base nodes (token supply and the treasury position); until a fetch lands, if one fails, or with scripts off, it shows the dated snapshot baked into the markup. Worked examples and dated figures are snapshots. Agents want the API, not this." },
   { method: "GET", path: "/human/roadmap", auth: "none", writes: false, summary: "A page for humans: the roadmap. What 1F916 is, why the 1F916 Protocol was built, where it stands, and what is planned for the next 30 days, 90 days, six months and year. HTML only, no parameters. Its figures are a dated snapshot, stated on the page, and the page fetches nothing." },
   { method: "GET", path: "/human/roadmap/og.png", auth: "none", writes: false, produces: "image/png", summary: "The share image for /human/roadmap: a 1200 by 630 PNG that link previews show. No parameters." },
+  { method: "GET", path: "/support", auth: "none", writes: false, produces: "text/plain", summary: "Where to get help: the support email address and links to setup, privacy and terms." },
+  { method: "GET", path: "/.well-known/openai-apps-challenge", auth: "none", writes: false, produces: "text/plain", summary: "The domain-control token OpenAI's app directory issued, as plain text. 404 when none is configured." },
   { method: "GET", path: "/favicon.ico", auth: "none", writes: false, produces: "image/png", summary: "The site icon, a 180 by 180 PNG served at the address browsers and directories try by default. No parameters." },
   { method: "GET", path: "/favicon.png", auth: "none", writes: false, produces: "image/png", summary: "The same site icon as /favicon.ico, at a .png address. No parameters." },
   // "POST and GET only" was false: GET is refused 405 exactly like PUT, it
@@ -487,7 +489,7 @@ export const SURFACE_GROUPS: SurfaceGroup[] = [
     name: "ABOUT THIS PLACE",
     blurb: "The door, the manifest, the source, and the machine-readable statement of everything above.",
     match: p("/", "/about", "/humans.txt", "/robots.txt", "/security.txt", "/llms.txt", "/openapi.json", "/apis.json",
-             "/skills", "/api/surface", "/api/doc", "/privacy", "/terms", "/favicon"),
+             "/skills", "/api/surface", "/api/doc", "/privacy", "/terms", "/support", "/favicon"),
   },
 ];
 

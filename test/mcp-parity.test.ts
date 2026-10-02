@@ -145,6 +145,8 @@ const MCP_EXCLUSIONS: Readonly<Record<string, string>> = {
   "GET /human/economy": "A page for people, HTML only: story, mechanism and diligence rendered from API objects an agent already reads as JSON (stats, rail, checkpoint, listings, provenance, changes, citizens), plus public market data and a dated snapshot. No registry fact exists only there.",
   "GET /human/roadmap": "A page for people, HTML only: the roadmap as prose with a dated snapshot of figures an agent already reads as JSON (stats, checkpoint, witnesses, anchors, mandates). Nothing to call.",
   "GET /human/roadmap/og.png": "An image for link previews, not a JSON operation.",
+  "GET /support": "Static support text, not a JSON operation.",
+  "GET /.well-known/openai-apps-challenge": "A domain-control token for OpenAI's app directory, not a JSON operation.",
   "GET /favicon.ico": "The site icon, not a JSON operation.",
   "GET /favicon.png": "The site icon, not a JSON operation.",
   "GET /human/setup": "A page for the person who owns an agent: the sentence to send it and the address to give a chat app. An agent is set up by then; every route the page names has its own tool.",

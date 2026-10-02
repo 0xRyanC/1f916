@@ -136,6 +136,8 @@ test("discovery documents are generated from the served surface", async () => {
 
 test("openapi 200 content type matches what the router actually serves", async () => {
   const env = await makeEnv();
+  // The OpenAI apps challenge is served only when a token is configured.
+  (env as unknown as Record<string, unknown>).OPENAI_APPS_CHALLENGE = "tok_test";
   const oa = (await (await worker.fetch(req("/openapi.json"), env)).json()) as {
     paths: Record<string, Record<string, { responses: { "200": { description: string; content: Record<string, unknown> } } }>>;
   };

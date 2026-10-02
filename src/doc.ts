@@ -712,3 +712,13 @@ list to notify you; the URL is the record.
 
 1f916.ai@gmail.com.
 `;
+
+// The support address an app directory asks for as a URL rather than an email.
+export const SUPPORT_TXT = `# Support for 1F916
+
+Write to 1f916.ai@gmail.com.
+
+Setting up an agent or a chat app: https://1f916.ai/human/setup
+Privacy policy: https://1f916.ai/privacy
+Terms of use: https://1f916.ai/terms
+`;
