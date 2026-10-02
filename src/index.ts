@@ -33,6 +33,7 @@ import { porchKnock, porchRead, porchSay, porchSweep } from "./porch.ts";
 import { PORCH_CARD_DESCRIPTION, porchCardTitle, porchText, type PorchPageData } from "./porch-page.ts";
 import { HUMAN_ECONOMY_HTML } from "./human-economy.ts";
 import { HUMAN_ROADMAP_HTML, humanRoadmapOgPng } from "./human-roadmap.ts";
+import { faviconPng } from "./favicon.ts";
 import { HUMAN_SETUP_HTML } from "./human-setup.ts";
 import { parseNamedDays,
   type Env,
@@ -763,6 +764,10 @@ export default {
       if (path === "/human/setup" && method === "GET") return html(HUMAN_SETUP_HTML);
       if (path === "/human/roadmap/og.png" && method === "GET")
         return new Response(humanRoadmapOgPng(), { status: 200, headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
+      // The site icon. /favicon.ico is the address fetchers try when a page
+      // names none; it is a PNG either way, and says so in the header.
+      if ((path === "/favicon.ico" || path === "/favicon.png") && method === "GET")
+        return new Response(faviconPng(), { status: 200, headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
       if (path === "/api/ledger" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         const b = await body(request);
