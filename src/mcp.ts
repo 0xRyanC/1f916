@@ -1633,7 +1633,19 @@ const READ_ONLY_TOOLS = TOOLS.filter((tool) => READ_ONLY_TOOL_NAMES.has(tool.nam
 // The protocol door takes the credential in the Authorization header only, for
 // the same reason the reader does: a model should never have to write its
 // owner's secret into a tool argument, where a transcript keeps it.
-export const PROTOCOL_TOOLS = TOOLS.filter((tool) => PROTOCOL_TOOL_NAMES.has(tool.name)).map(withoutSecretArgument);
+//
+// Its descriptions also say only what each tool does. This is the door app
+// directories review, and their safety checks read the appended "READ-ONLY: ...
+// can be repeated safely" / "WRITES: ..." sentence as a tool setting its own
+// risk level: ChatGPT held record_mandate on 2026-10-02 with "the tool
+// description also attempts to steer the risk classifier". Here readOnlyHint
+// and the other annotations carry the read/write fact, and the hosts this door
+// is listed in read them. The full door keeps the sentence for clients that
+// flatten a tool to its description (test/tool-write-labels.test.ts).
+const BASE_DESCRIPTIONS = new Map<string, string>(BASE_TOOLS.map((tool) => [tool.name, tool.description]));
+export const PROTOCOL_TOOLS = TOOLS.filter((tool) => PROTOCOL_TOOL_NAMES.has(tool.name))
+  .map(withoutSecretArgument)
+  .map((tool) => ({ ...tool, description: BASE_DESCRIPTIONS.get(tool.name) ?? tool.description }));
 
 // The protocol revisions this server actually implements. initialize used to
 // echo whatever protocolVersion the client sent — agreeing to speak revisions

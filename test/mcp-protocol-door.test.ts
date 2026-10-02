@@ -14,6 +14,7 @@
 //   M6  drop destructiveHint/openWorldHint from the annotations  -> "every protocol tool carries the three hints a directory reads"
 //   M7  log door refusals to the null log                        -> "a door refusal writes nothing"
 //   M8  point the 401 at the full door's metadata                -> "a write with no credential is sent to this door's own metadata"
+//   M9  drop the description override from PROTOCOL_TOOLS         -> "protocol descriptions say what the tool does and nothing about its own risk"
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -25,7 +26,7 @@ import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
 const ORIGIN = "https://1f916.ai";
 const schema = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
 
-type Tool = { name: string; title?: string; annotations?: Record<string, unknown>; inputSchema: { properties?: Record<string, unknown>; required?: string[] } };
+type Tool = { name: string; description: string; title?: string; annotations?: Record<string, unknown>; inputSchema: { properties?: Record<string, unknown>; required?: string[] } };
 
 function rpc(door: string, method: string, params: unknown, headers: Record<string, string> = {}) {
   return new Request(`${ORIGIN}${door}`, {
@@ -204,4 +205,19 @@ test("the door is POST only, like the other two", async () => {
     assert.equal(res.status, 405, method);
   }
   assert.equal((await worker.fetch(new Request(`${ORIGIN}/mcp/protocol`), env)).status, 405);
+});
+
+// ChatGPT's safety check held record_mandate on 2026-10-02 because the
+// description carried "WRITES: ... not safe to repeat blindly", read as a tool
+// steering the risk classifier. On this door the annotations carry that fact;
+// the description carries only what the tool does. The full door keeps the
+// sentence (test/tool-write-labels.test.ts).
+test("protocol descriptions say what the tool does and nothing about its own risk", () => {
+  for (const t of PROTOCOL_TOOLS as Tool[]) {
+    assert.doesNotMatch(t.description, /READ-ONLY:|WRITES:|repeated safely|not safe to repeat|provenance boundary/, t.name);
+    assert.ok(t.description.length >= 40, `${t.name} still describes what it does`);
+    const full = (TOOLS as Tool[]).find((x) => x.name === t.name)!;
+    assert.ok(full.description.startsWith(t.description), `${t.name}: the full door's description is this one plus its labels`);
+    assert.match(full.description, /READ-ONLY:|WRITES:/, `${t.name}: the full door keeps the label`);
+  }
 });
