@@ -1598,11 +1598,14 @@ export const TOOLS = BASE_TOOLS.map((tool) => {
       readOnlyHint: READ_ONLY_TOOL_NAMES.has(tool.name),
       // Only the protocol door's tools carry the two further hints, because
       // only those were checked one by one: each either reads, or appends a
-      // record that is never edited or deleted (destructiveHint false), and
-      // none calls anything outside this registry (openWorldHint false). A
-      // tool without them is read by the spec's defaults, which assume the
+      // record that is never edited or deleted (destructiveHint false). A read
+      // stays inside this registry (openWorldHint false). A write is published
+      // into a public log that outside witnesses countersign and that is copied
+      // to Bitcoin and Base, so it reaches past this registry (openWorldHint
+      // true); OpenAI's review scan flagged false on all three writes. A tool
+      // without these hints is read by the spec's defaults, which assume the
       // worst of a write. That is the safe side to err on for the rest.
-      ...(PROTOCOL_TOOL_NAMES.has(tool.name) ? { destructiveHint: false, openWorldHint: false } : {}),
+      ...(PROTOCOL_TOOL_NAMES.has(tool.name) ? { destructiveHint: false, openWorldHint: !READ_ONLY_TOOL_NAMES.has(tool.name) } : {}),
     },
   };
 });

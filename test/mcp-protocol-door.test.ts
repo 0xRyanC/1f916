@@ -12,6 +12,7 @@
 //   M4  add "payout_binding" to PROTOCOL_TOOL_NAMES              -> "serves no tool that touches money or keys"
 //   M5  delete one TOOL_TITLES entry                             -> "every tool on every door has a title"
 //   M6  drop destructiveHint/openWorldHint from the annotations  -> "every protocol tool carries the three hints a directory reads"
+//   M10 set openWorldHint false for every protocol tool          -> "every protocol tool carries the three hints a directory reads"
 //   M7  log door refusals to the null log                        -> "a door refusal writes nothing"
 //   M8  point the 401 at the full door's metadata                -> "a write with no credential is sent to this door's own metadata"
 //   M9  drop the description override from PROTOCOL_TOOLS         -> "protocol descriptions say what the tool does and nothing about its own risk"
@@ -173,7 +174,9 @@ test("every protocol tool carries the three hints a directory reads", () => {
   for (const t of PROTOCOL_TOOLS as Tool[]) {
     assert.equal(t.annotations?.readOnlyHint, READ_ONLY_TOOL_NAMES.has(t.name), t.name);
     assert.equal(t.annotations?.destructiveHint, false, `${t.name}: a record is appended, never edited or deleted`);
-    assert.equal(t.annotations?.openWorldHint, false, `${t.name}: nothing here calls outside the registry`);
+    // A read stays inside this registry; a write is published into the public,
+    // externally witnessed and anchored log, so it reaches past it.
+    assert.equal(t.annotations?.openWorldHint, !READ_ONLY_TOOL_NAMES.has(t.name), `${t.name}: openWorldHint is false for a read and true for a write`);
   }
   // A tool off the door is left to the spec's defaults, which assume the worst of a write.
   const off = (TOOLS as Tool[]).find((t) => t.name === "payout_binding")!;
