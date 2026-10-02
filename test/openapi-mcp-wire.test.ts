@@ -187,6 +187,35 @@ test("the live router refuses an unsupported MCP-Protocol-Version with 400", asy
   }
 });
 
+// The request Claude's "Add custom connector" check sent on 2026-10-02 (seen in
+// wrangler tail): POST, python-httpx, MCP-Protocol-Version 2025-11-25. Every door
+// answered it 400 and Claude reported the server as unreachable.
+// Killing mutation: remove "2025-11-25" from SUPPORTED_PROTOCOL_VERSIONS in
+// src/mcp.ts (the revision is then counter-offered, not granted).
+test("every door answers Claude's connector check: initialize under MCP-Protocol-Version 2025-11-25", async () => {
+  for (const path of MCP_DOORS) {
+    const r = await postJsonRpc(
+      path,
+      {
+        jsonrpc: "2.0",
+        id: 1,
+        method: "initialize",
+        params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "claude-ai", version: "0.1.0" } },
+      },
+      {
+        headers: {
+          "content-type": "application/json",
+          accept: "application/json, text/event-stream",
+          "MCP-Protocol-Version": "2025-11-25",
+        },
+      },
+    );
+    assert.equal(r.status, 200, `${path}: Claude's connector check must not be refused at the transport`);
+    const b = (await r.json()) as { result?: { protocolVersion?: string } };
+    assert.equal(b.result?.protocolVersion, "2025-11-25", `${path}: the requested revision is spoken, so it is granted`);
+  }
+});
+
 test("an unknown method answers 200 with -32601: the door is up, the method is not", async () => {
   for (const path of MCP_DOORS) {
     const r = await postJsonRpc(path, { jsonrpc: "2.0", id: 1, method: "nope" });

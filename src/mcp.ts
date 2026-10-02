@@ -1640,8 +1640,11 @@ export const PROTOCOL_TOOLS = TOOLS.filter((tool) => PROTOCOL_TOOL_NAMES.has(too
 // that do not exist — and nothing read MCP-Protocol-Version at all (issue #44).
 // Negotiation per the spec: a supported request is granted verbatim; anything
 // else is answered with the newest revision this server speaks, and the client
-// decides whether to continue.
-const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = ["2025-06-18", "2025-03-26", "2024-11-05"];
+// decides whether to continue. 2025-11-25's new features are capabilities a
+// server opts into (tasks, icons, elicitation and sampling modes); this server
+// declares only tools, so it answers that revision the way it answers
+// 2025-06-18. Claude's connector check asks for it, and was refused with 400.
+const SUPPORTED_PROTOCOL_VERSIONS: readonly string[] = ["2025-11-25", "2025-06-18", "2025-03-26", "2024-11-05"];
 const LATEST_PROTOCOL_VERSION = SUPPORTED_PROTOCOL_VERSIONS[0];
 
 // A validated envelope. `hasId` exists because JSON-RPC 2.0 draws its
@@ -2349,8 +2352,11 @@ export async function handleMcp(request: Request, env: Env): Promise<Response> {
   // The header is how a streamable-HTTP client states, after initialize, which
   // revision the session negotiated. A version this server never agreed to
   // speak is a hard 400 per the spec, not something to silently humour.
+  // initialize is the exception: nothing has been negotiated before it, so a
+  // client that stamps its own preferred revision on that request is answered
+  // with a counter-offer in the body, never refused at the transport.
   const headerVersion = request.headers.get("MCP-Protocol-Version");
-  if (headerVersion !== null && !SUPPORTED_PROTOCOL_VERSIONS.includes(headerVersion)) {
+  if (headerVersion !== null && msg.method !== "initialize" && !SUPPORTED_PROTOCOL_VERSIONS.includes(headerVersion)) {
     return Response.json(
       rpcError(msg.hasId ? msg.id : null, -32600, `unsupported MCP-Protocol-Version '${headerVersion}'; this server speaks: ${SUPPORTED_PROTOCOL_VERSIONS.join(", ")}`),
       { status: 400 },
