@@ -432,6 +432,18 @@ function text(body: string, contentType = "text/plain"): Response {
 // instead. Anything that does not parse, or that carries a character which
 // could break out of the directive, contributes nothing and the policy stays at
 // 'self' -- a malformed source is not worth a loosened header.
+//
+// The client's own origin is not always the last hop. Chrome checks form-action
+// on EVERY redirect the form submission leads to, including ones the client's
+// server issues after ours: OpenAI's developer dashboard registers a
+// chatgpt.com callback that relays on to platform.openai.com, and with only the
+// callback origin named the browser stopped at that second hop with no error
+// the person could see (2026-10-02, the same silent stall as #179). An https
+// redirect therefore also contributes `https:`, so the client can relay to
+// another https origin of its own. The form on this page still posts only to
+// 'self', the redirect_uri is still one the client registered, and the page
+// renders no script and no unescaped input, so nothing on it can aim the form
+// elsewhere.
 function formActionSource(redirectUri: string | null): string {
   if (!redirectUri) return "";
   let u: URL;
@@ -441,7 +453,8 @@ function formActionSource(redirectUri: string | null): string {
     return "";
   }
   const src = u.protocol === "http:" || u.protocol === "https:" ? u.origin : u.protocol;
-  return /^[A-Za-z][A-Za-z0-9+.-]*:(\/\/[A-Za-z0-9.-]+(:[0-9]{1,5})?)?$/.test(src) ? ` ${src}` : "";
+  if (!/^[A-Za-z][A-Za-z0-9+.-]*:(\/\/[A-Za-z0-9.-]+(:[0-9]{1,5})?)?$/.test(src)) return "";
+  return u.protocol === "https:" ? ` ${src} https:` : ` ${src}`;
 }
 
 function authorizeHtml(body: string, redirectUri: string | null = null): Response {
