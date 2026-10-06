@@ -23,6 +23,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
@@ -61,8 +62,9 @@ function routerReads(path: string): Set<string> {
 // Handlers that hand the whole parsed body to a society function read their
 // fields there, not in index.ts. Named explicitly so the list is reviewed,
 // not inferred.
-const READS_WHOLE_BODY: Readonly<Record<string, string>> = {
-  "/api/me/cadence": "interval_seconds is read inside setCadence(env, citizen, body)",
+const READS_WHOLE_BODY: Readonly<Record<string, { files: string[]; fields: string[] }>> = {
+  "/api/me/cadence": { files: ["society.ts"], fields: ["interval_seconds"] },
+  "/api/seal": { files: ["society.ts", "seals.ts"], fields: ["hash", "text", "label", "signature", "check_only"] },
 };
 
 test("every citizen write route is a declared POST with an existing MCP tool", () => {
@@ -104,15 +106,15 @@ test("every published body field is one the router's handler reads", async () =>
   }
 });
 
-test("the whole-body handler reads exactly the field the document publishes", async () => {
-  // setCadence takes the parsed body and reads its one field in society.ts;
-  // check the field name there instead of the guard block.
-  const society = readFileSync(fileURLToPath(new URL("../src/society.ts", import.meta.url)), "utf8");
+test("the whole-body handlers read exactly the fields the document publishes", async () => {
+  // These handlers pass the parsed body onward; check the reviewed field
+  // set and its readers rather than looking for b.<field> in the router.
   const doc = await document();
-  for (const path of Object.keys(READS_WHOLE_BODY)) {
+  for (const [path, { files, fields }] of Object.entries(READS_WHOLE_BODY)) {
     const props = Object.keys(doc.paths[path].post.requestBody!.content!["application/json"].schema!.properties ?? {});
-    assert.equal(props.length, 1, `${path} is listed as whole-body because it takes one field; it now publishes ${JSON.stringify(props)}`);
-    assert.ok(society.includes(`body.${props[0]}`), `${path}: society.ts never reads body.${props[0]}`);
+    assert.deepEqual(props.sort(), [...fields].sort(), `${path}: review the field set when extending a whole-body handler`);
+    const source = files.map((f) => readFileSync(fileURLToPath(new URL(`../src/${f}`, import.meta.url)), "utf8")).join("\n");
+    for (const prop of props) assert.ok(source.includes(`body.${prop}`), `${path}: ${files.join(", ")} never reads body.${prop}`);
   }
 });
 
@@ -121,4 +123,39 @@ test("register keeps its hand-written body and is unchanged", async () => {
   const body = doc.paths["/api/register"].post.requestBody!.content!["application/json"].schema!;
   assert.deepEqual(Object.keys(body.properties ?? {}).sort(), ["handle", "model"]);
   assert.deepEqual(body.required, ["handle", "model"]);
+});
+
+test("seal publishes its hash-or-text and compare-only body from the MCP schema", async () => {
+  const doc = await document();
+  const op = doc.paths["/api/seal"].post;
+  const body = op.requestBody?.content?.["application/json"]?.schema;
+  assert.ok(body, "POST /api/seal publishes no request body, so generated clients cannot send a seal or check");
+  assert.equal(op.requestBody?.required, true);
+  assert.deepEqual(Object.keys(body.properties ?? {}).sort(), ["check_only", "hash", "label", "signature", "text"]);
+  const tool = TOOLS.find((t) => t.name === "seal")!;
+  const { secret, ...properties } = tool.inputSchema.properties;
+  assert.deepEqual(body.properties, properties, "one source for the HTTP body and MCP arguments");
+  assert.deepEqual(body.required ?? [], [], "hash must not be required: text is another accepted input");
+});
+
+test("the seal body fields reach the router: hash, text and check_only", async () => {
+  const { env, db } = sqliteTestEnv(schema);
+  const reg = await worker.fetch(new Request(`${ORIGIN}/api/register`, {
+    method: "POST", body: JSON.stringify({ handle: "seal-body-reader", model: "test-model" }),
+  }), env);
+  assert.equal(reg.status, 201);
+  const { secret } = await reg.json() as { secret: string };
+  const send = (body: Record<string, unknown>) => worker.fetch(new Request(`${ORIGIN}/api/seal`, {
+    method: "POST", headers: { Authorization: `Bearer ${secret}` }, body: JSON.stringify(body),
+  }), env);
+  const text = "the exact memory\n";
+  const hash = createHash("sha256").update(text, "utf8").digest("hex");
+  assert.equal((await send({ hash, label: "fingerprint" })).status, 201);
+  assert.equal((await send({ text, label: "content" })).status, 201);
+  assert.equal((await send({ text, label: "content", check_only: true })).status, 201);
+  assert.equal((await send({ text: "changed memory", label: "content", check_only: true })).status, 409);
+  const rows = db.prepare("SELECT label, hash FROM seals ORDER BY id").all();
+  assert.deepEqual(rows.map((r) => ({ ...r })), [
+    { label: "fingerprint", hash }, { label: "content", hash },
+  ], "a compare-only request must not seal over the memory it tests");
 });
