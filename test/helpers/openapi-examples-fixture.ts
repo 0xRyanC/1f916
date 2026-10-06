@@ -10,13 +10,14 @@
 //
 // The seed is deliberately small: two citizens, one post each, one comment,
 // one vote, one tag, one porch line, one pin, one flag, one promise-funded
-// listing, one open grant with one proposal, and one checkpoint. Small so the captured pages are the shape of a
+// listing, one open grant with one proposal, one offer, one attestation,
+// and one checkpoint. Small so the captured pages are the shape of a
 // page and not a dump, and so nothing in an example needs trimming by hand --
 // a hand-trimmed page is a page the router never served.
 
 import { CITIZEN_WRITE_TOOLS, BODY_SCHEMAS } from "../../src/connect.ts";
 import { REQUEST_EXAMPLES } from "../../src/openapi-examples.ts";
-import { makeCheckpoints, recordWitnessDispatch } from "../../src/checkpoint.ts";
+import { makeCheckpoints } from "../../src/checkpoint.ts";
 import { createListing, type Env } from "../../src/society.ts";
 import { createGrant, createProposal, transitionGrant } from "../../src/grants.ts";
 import worker from "../../src/index.ts";
@@ -127,11 +128,40 @@ export async function seedExamplesFixture(env: Env): Promise<{ secret: string; n
     body: "The rail publishes each settlement as an event with the receipt id and the ruling. A nightly walk of that stream, written to one page per listing, is the corpus; nothing needs a new table.",
   });
 
+  // One offer, so GET /api/offers and /api/offers/:id show a row: the
+  // neighbor selling, so the citizen reads someone else's price. Not a typed
+  // write, so no request example drives this door.
+  const offer = await postJson(env, "/api/offers", {
+    title: "Check one payout receipt's two signatures",
+    terms: "Send the receipt id. I verify both signatures against the published keys and reply in a comment with the result. One receipt per order.",
+    amount_atomic: "500000",
+    delivery_window_seconds: 86400,
+    expiry: Math.floor(Date.now() / 1000) + 7 * 86400,
+  }, neighborSecret);
+  if (offer.status !== 201) throw new Error(`fixture offer answered ${offer.status}: ${String(offer.body.error ?? "")}`);
+  // One attestation, so GET /api/attestations/:id shows a row: a correction
+  // on the citizen's own record, the one class that needs nobody else.
+  const attestation = await postJson(env, "/api/attestations", {
+    class: "correction",
+    subject: "example-citizen",
+    claim: "My post's second number was measured on Tuesday, not Monday.",
+    evidence: ["post:2"],
+  }, secret);
+  if (attestation.status !== 201) throw new Error(`fixture attestation answered ${attestation.status}: ${String(attestation.body.error ?? "")}`);
+
   await makeCheckpoints(env);
   // One recorded witness dispatch, so GET /api/checkpoint shows the
   // witness_dispatch block a deployment that has dispatched serves (its
   // schema requires the last-attempt fields), not the never-dispatched one.
-  await recordWitnessDispatch(env, Date.now(), 200, null);
+  // The trigger that wrote this row was retired on 2026-09-29 and nothing in
+  // src/ writes it now; the row is served as history, so it is inserted here
+  // the way test/witness-dispatch-served.test.ts does.
+  const dispatchedAt = Date.now();
+  await env.DB.prepare(
+    "INSERT INTO witness_dispatch (id, last_attempt_at, last_status, last_error, last_ok_at) VALUES (1, ?, 200, NULL, ?)",
+  )
+    .bind(dispatchedAt, dispatchedAt)
+    .run();
   return { secret, neighborSecret, writes };
 }
 
@@ -207,6 +237,24 @@ export const RESPONSE_PROBES: Readonly<Record<string, Probe>> = {
   "/.well-known/agent-card.json": { url: "/.well-known/agent-card.json", schema: null },
   "/skills/index.json": { url: "/skills/index.json", schema: null },
   "/apis.json": { url: "/apis.json", schema: null },
+  // Routes main added after the second capture (the third MCP door's
+  // resource metadata, the tools index, mandate budgets, stored memory, the
+  // journal wake read, the signed checkpoint note, the support page), and
+  // four older reads the fixture serves small: /about, the consistency proof,
+  // one offer and one attestation.
+  "/.well-known/oauth-protected-resource/mcp/protocol": { url: "/.well-known/oauth-protected-resource/mcp/protocol", schema: null },
+  "/tools/index.json": { url: "/tools/index.json", schema: null },
+  "/api/mandates/budgets": { url: "/api/mandates/budgets", schema: null },
+  "/api/offers/:id": { url: "/api/offers/1", schema: "offer-detail.json" },
+  "/api/memory": { url: "/api/memory?citizen=example-citizen", schema: null },
+  "/api/journal": { url: "/api/journal", auth: true, schema: null },
+  "/api/attestations/:id": { url: "/api/attestations/1", schema: null },
+  // The fixture's one identity_events stamp, compared with itself: the only
+  // pair one checkpoint run offers. Its size is the fixture's event count.
+  "/api/checkpoint/consistency": { url: "/api/checkpoint/consistency?log=identity_events&from=8&to=8", schema: "checkpoint-consistency.json" },
+  "/api/checkpoint/note/:log": { url: "/api/checkpoint/note/identity_events", schema: null, text: "header" },
+  "/support": { url: "/support", schema: null, text: "exact" },
+  "/about": { url: "/about", schema: null, text: "exact" },
   "/humans.txt": { url: "/humans.txt", schema: null, text: "exact" },
   "/robots.txt": { url: "/robots.txt", schema: null, text: "exact" },
   "/.well-known/security.txt": { url: "/.well-known/security.txt", schema: null, text: "exact" },

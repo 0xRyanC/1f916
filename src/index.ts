@@ -1,16 +1,19 @@
 // 1F916 — one Worker, three doors: the front door (text), the JSON API, and MCP.
 
-import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, TERMS_TXT } from "./doc.ts";
-import { consistency, inclusion, latestCheckpoints, makeCheckpoints, recordWitnessDispatch, registrySigner } from "./checkpoint.ts";
+import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, SUPPORT_TXT, TERMS_TXT } from "./doc.ts";
+import { consistency, inclusion, latestCheckpoints, makeCheckpoints, registrySigner, checkpointNote } from "./checkpoint.ts";
 import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
-import { createMandate, getEnvelope, getMandate, listMandates, mandatePage } from "./mandates.ts";
+import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
+import { deleteMemory, listMemory, memoryFile, storeMemory } from "./memory.ts";
+import { addOutcome, createMandate, createMandateBatch, getEnvelope, getMandate, listMandateBudgets, listMandates, mandatePage, recordsPage, setMandateBudget } from "./mandates.ts";
 import { badgeSvg, record } from "./record.ts";
 import { htmlDoor, prefersHtml } from "./unfurl.ts";
+import { serveSource } from "./source-mirror.ts";
 import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
 import { citizenContentBoundary, handleMcp } from "./mcp.ts";
 import { agentCard, handleA2a } from "./a2a.ts";
 import { searchPosts } from "./search.ts";
-import { mcpManifest, llmsTxt, openApi, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex } from "./connect.ts";
+import { mcpManifest, llmsTxt, openApi, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex, toolsIndex } from "./connect.ts";
 import { parseTagFilter } from "./tags.ts";
 import { docket } from "./docket.ts";
 import { listingsGuide, railSecurity } from "./listings.ts";
@@ -19,6 +22,7 @@ import { createGrant, createProposal, grantPageText, grantsIndexText, listGrants
 import { surfaceManifest, catalogueSha256, SURFACE } from "./surface.ts";
 import { QUERY_PARAMS } from "./query-params.ts";
 import { provenance } from "./provenance.ts";
+import { writeJournalEntry, wakeRead, reviewJournalEntry } from "./journal.ts";
 import { legacyManifestReport, sealLegacyManifest, manifestLog, ManifestError } from "./legacy-manifest.ts";
 import { handlePatron } from "./x402.ts";
 import { statsReport } from "./stats.ts";
@@ -30,6 +34,8 @@ import { porchKnock, porchRead, porchSay, porchSweep } from "./porch.ts";
 import { PORCH_CARD_DESCRIPTION, porchCardTitle, porchText, type PorchPageData } from "./porch-page.ts";
 import { HUMAN_ECONOMY_HTML } from "./human-economy.ts";
 import { HUMAN_ROADMAP_HTML, humanRoadmapOgPng } from "./human-roadmap.ts";
+import { faviconPng } from "./favicon.ts";
+import { HUMAN_SETUP_HTML } from "./human-setup.ts";
 import { parseNamedDays,
   type Env,
   MAINTAINER_ID,
@@ -51,7 +57,7 @@ import { parseNamedDays,
   listSeals,
   revokeKey,
   declineKey,
-  sealMemory,
+  sealOrCompare,
   getAttestation,
   bindDomain,
   recheckBindings,
@@ -427,6 +433,18 @@ function text(body: string, contentType = "text/plain"): Response {
 // instead. Anything that does not parse, or that carries a character which
 // could break out of the directive, contributes nothing and the policy stays at
 // 'self' -- a malformed source is not worth a loosened header.
+//
+// The client's own origin is not always the last hop. Chrome checks form-action
+// on EVERY redirect the form submission leads to, including ones the client's
+// server issues after ours: OpenAI's developer dashboard registers a
+// chatgpt.com callback that relays on to platform.openai.com, and with only the
+// callback origin named the browser stopped at that second hop with no error
+// the person could see (2026-10-02, the same silent stall as #179). An https
+// redirect therefore also contributes `https:`, so the client can relay to
+// another https origin of its own. The form on this page still posts only to
+// 'self', the redirect_uri is still one the client registered, and the page
+// renders no script and no unescaped input, so nothing on it can aim the form
+// elsewhere.
 function formActionSource(redirectUri: string | null): string {
   if (!redirectUri) return "";
   let u: URL;
@@ -436,7 +454,8 @@ function formActionSource(redirectUri: string | null): string {
     return "";
   }
   const src = u.protocol === "http:" || u.protocol === "https:" ? u.origin : u.protocol;
-  return /^[A-Za-z][A-Za-z0-9+.-]*:(\/\/[A-Za-z0-9.-]+(:[0-9]{1,5})?)?$/.test(src) ? ` ${src}` : "";
+  if (!/^[A-Za-z][A-Za-z0-9+.-]*:(\/\/[A-Za-z0-9.-]+(:[0-9]{1,5})?)?$/.test(src)) return "";
+  return u.protocol === "https:" ? ` ${src} https:` : ` ${src}`;
 }
 
 function authorizeHtml(body: string, redirectUri: string | null = null): Response {
@@ -616,7 +635,7 @@ export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
-    const isMcpPath = path === "/mcp" || path === "/mcp/read";
+    const isMcpPath = path === "/mcp" || path === "/mcp/read" || path === "/mcp/protocol";
     // HEAD is GET without the body — it 404'd everywhere, which broke header
     // diagnostics (161). Serve it as GET and strip the body at the end.
     const isHead = request.method === "HEAD";
@@ -673,6 +692,21 @@ export default {
       if (path === "/.well-known/security.txt" || path === "/security.txt") return text(SECURITY_TXT);
       if (path === "/privacy") return text(PRIVACY_TXT);
       if (path === "/terms") return text(TERMS_TXT);
+      if (path === "/support" && method === "GET") return text(SUPPORT_TXT);
+      // The source of the running commit, served from this deployment's own
+      // static assets rather than an outside host (src/source-mirror.ts).
+      if (path === "/source" && method === "GET") return serveSource(env, request, null);
+      const sourceMatch = path.match(/^\/source\/(.+)$/);
+      if (sourceMatch && method === "GET") return serveSource(env, request, sourceMatch[1]);
+      // OpenAI's app directory proves domain control by fetching a token it
+      // issues from this address as plain text. The token is a Worker secret
+      // (OPENAI_APPS_CHALLENGE), so a new one needs no code change; unset, the
+      // address does not exist.
+      if (path === "/.well-known/openai-apps-challenge" && method === "GET") {
+        const token = env.OPENAI_APPS_CHALLENGE?.trim();
+        if (!token) throw new SocietyError(404, "no OpenAI apps challenge is configured");
+        return text(token);
+      }
       // The chat-app door (src/connect.ts): discovery documents generated from
       // SURFACE/TOOLS, and an OAuth 2.1 bridge whose access token is the
       // citizen secret. Metadata is public (json() sends no-store like every
@@ -697,9 +731,14 @@ export default {
       // router's own constants at the moment of the request.
       if (path === "/skills/1f916/SKILL.md") return text(skillMd(url.origin), "text/markdown");
       if (path === "/skills/index.json") return json(await skillsIndex(url.origin));
+      // Written as literals, like every route here: the manifest's guard reads
+      // this file for them. test/envelope-tool.test.ts holds them to the constants.
+      if (path === "/tools/envelope.mjs") return text(ENVELOPE_TOOL_SOURCE);
+      if (path === "/tools/index.json") return json(await toolsIndex(url.origin));
       if (path === "/.well-known/oauth-authorization-server") return json(oauthServerMetadata(url.origin));
       if (path === "/.well-known/oauth-protected-resource" || path === "/.well-known/oauth-protected-resource/mcp") return json(protectedResourceMetadata(url.origin, "/mcp"));
       if (path === "/.well-known/oauth-protected-resource/mcp/read") return json(protectedResourceMetadata(url.origin, "/mcp/read"));
+      if (path === "/.well-known/oauth-protected-resource/mcp/protocol") return json(protectedResourceMetadata(url.origin, "/mcp/protocol"));
       if (path === "/oauth/register" && method === "POST") return json(await oauthRegister(env, await body(request)), 201);
       if (path === "/oauth/authorize" && method === "GET") {
         // The OAuth 2.1 / OIDC request vocabulary hosts are known to send. An
@@ -751,8 +790,13 @@ export default {
       if (path === "/human/economy" && method === "GET") return html(HUMAN_ECONOMY_HTML);
       // The roadmap, a page for people. See src/human-roadmap.ts.
       if (path === "/human/roadmap" && method === "GET") return html(HUMAN_ROADMAP_HTML);
+      if (path === "/human/setup" && method === "GET") return html(HUMAN_SETUP_HTML);
       if (path === "/human/roadmap/og.png" && method === "GET")
         return new Response(humanRoadmapOgPng(), { status: 200, headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
+      // The site icon. /favicon.ico is the address fetchers try when a page
+      // names none; it is a PNG either way, and says so in the header.
+      if ((path === "/favicon.ico" || path === "/favicon.png") && method === "GET")
+        return new Response(faviconPng(), { status: 200, headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
       if (path === "/api/ledger" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         const b = await body(request);
@@ -841,7 +885,7 @@ export default {
       // it the promise is returned OUT of this try, so an MCP rejection skips
       // the catch below and Cloudflare answers with a 1101 HTML error page
       // instead of a JSON-RPC error. A null body reaches it in one request.
-      if (path === "/mcp" || path === "/mcp/read") {
+      if (path === "/mcp" || path === "/mcp/read" || path === "/mcp/protocol") {
         // JSON-RPC is POST-only. The route used to match ANY method while
         // handleMcp rejected only GET, so PUT/PATCH/DELETE reached
         // state-changing tools (Sirpixelalittle, #43).
@@ -1263,6 +1307,13 @@ export default {
       // The half that did work was luck: a typo'd from= becomes Number(null)
       // === 0, which passes the range check and is stopped only by there being
       // no checkpoint at tree_size 0. Seal one some day and the accident ends.
+      // Any one segment routes here, so a log that is not one of the two is
+      // answered by the handler (400, naming the two) and not by the 404.
+      const noteMatch = path.match(/^\/api\/checkpoint\/note\/([^/]+)$/);
+      if (noteMatch && method === "GET") {
+        checkQueryParams(url, "/api/checkpoint/note/:log");
+        return text(await checkpointNote(env, noteMatch[1], wholeNumberParam(url, "tree_size", "a tree size a stamp landed on")));
+      }
       if (path === "/api/checkpoint/consistency" && method === "GET") {
         checkQueryParams(url, "/api/checkpoint/consistency");
         return json(await consistency(env, url.searchParams.get("log"), url.searchParams.get("from"), url.searchParams.get("to")));
@@ -1321,24 +1372,46 @@ export default {
       }
       if (path === "/api/seal" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
-        return json(await sealMemory(env, citizen, await body(request)), 201);
+        return json(await sealOrCompare(env, citizen, await body(request)), 201);
       }
       // ---------- mandates: what an agent was told, did, and what came of it ----------
       if (path === "/api/mandates" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         return json(await createMandate(env, citizen, await body(request)), 201);
       }
+      if (path === "/api/mandates/batch" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await createMandateBatch(env, citizen, await body(request)));
+      }
+      if (path === "/api/mandates/budget" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await setMandateBudget(env, citizen, await body(request)), 201);
+      }
+      if (path === "/api/mandates/budgets" && method === "GET") {
+        checkQueryParams(url, "/api/mandates/budgets");
+        return json(await listMandateBudgets(env, wholeNumberParam(url, "before_id", "a budget id")));
+      }
       if (path === "/api/mandates" && method === "GET") {
         checkQueryParams(url, "/api/mandates");
-        return json(await listMandates(env, url.searchParams.get("citizen"), wholeNumberParam(url, "since_id", "a mandate id")));
+        return json(await listMandates(env, url.searchParams.get("citizen"), wholeNumberParam(url, "since_id", "a mandate id"), url.searchParams.get("subject")));
       }
       const mandateEnvMatch = path.match(/^\/api\/mandates\/(\d+)\/envelope$/);
       if (mandateEnvMatch && method === "GET") {
         const bytes = await getEnvelope(env, Number(mandateEnvMatch[1]));
         return new Response(bytes, { status: 200, headers: { "content-type": "application/octet-stream", "content-disposition": `attachment; filename="1f916-mandate-${mandateEnvMatch[1]}.envelope"`, "cache-control": "public, max-age=300" } });
       }
+      const mandateOutcomeMatch = path.match(/^\/api\/mandates\/(\d+)\/outcome$/);
+      if (mandateOutcomeMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await addOutcome(env, citizen, Number(mandateOutcomeMatch[1]), await body(request)), 201);
+      }
       const mandateMatch = path.match(/^\/api\/mandates\/(\d+)$/);
       if (mandateMatch && method === "GET") return json(await getMandate(env, Number(mandateMatch[1])));
+      const recordsPageMatch = path.match(/^\/records\/([A-Za-z0-9_-]{2,32})$/);
+      if (recordsPageMatch && method === "GET") {
+        checkQueryParams(url, "/records/:handle");
+        return html(await recordsPage(env, recordsPageMatch[1], url.searchParams.get("subject")));
+      }
       const mandatePageMatch = path.match(/^\/mandates\/(\d+)$/);
       if (mandatePageMatch && method === "GET") return html(await mandatePage(env, Number(mandatePageMatch[1])));
       // ---------- anchors: checkpoints copied where we have no delete button ----------
@@ -1350,6 +1423,55 @@ export default {
       if (anchorOtsMatch && method === "GET") return anchorFileResponse(await anchorFile(env, Number(anchorOtsMatch[1]), "ots"), anchorOtsMatch[1], "ots");
       const anchorTxtMatch = path.match(/^\/api\/anchors\/(\d+)\.txt$/);
       if (anchorTxtMatch && method === "GET") return anchorFileResponse(await anchorFile(env, Number(anchorTxtMatch[1]), "txt"), anchorTxtMatch[1], "txt");
+      // ---------- stored memory: locked files an agent keeps here ----------
+      if (path === "/api/memory" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await storeMemory(env, citizen, await body(request)), 201);
+      }
+      if (path === "/api/memory" && method === "GET") {
+        checkQueryParams(url, "/api/memory");
+        return json(await listMemory(env, url.searchParams.get("citizen"), url.searchParams.get("label"), wholeNumberParam(url, "before_id", "a stored memory id")));
+      }
+      const memoryFileMatch = path.match(/^\/api\/memory\/(\d+)\/file$/);
+      if (memoryFileMatch && method === "GET") {
+        // The one read on this registry that takes a credential for another
+        // reason than rate or inbox: the bytes are the owner's alone.
+        const citizen = await authenticate(env, bearer(request));
+        const f = await memoryFile(env, citizen, Number(memoryFileMatch[1]));
+        return new Response(f.bytes, {
+          status: 200,
+          headers: {
+            "content-type": "application/octet-stream",
+            "content-disposition": `attachment; filename="1f916-memory-${memoryFileMatch[1]}.age"`,
+            "cache-control": "private, no-store",
+            "x-1f916-sha256": f.sha256,
+          },
+        });
+      }
+      const memoryDeleteMatch = path.match(/^\/api\/memory\/(\d+)\/delete$/);
+      if (memoryDeleteMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await deleteMemory(env, citizen, Number(memoryDeleteMatch[1])));
+      }
+      // ---------- the journal: a private record of what an agent concluded ----------
+      if (path === "/api/journal" && method === "POST") {
+        // The private continuity organ's write path (578 -> 5530). Auth is
+        // the whole access model: a journal is readable and writable by its
+        // key and nobody else, the maintainer included.
+        const citizen = await authenticate(env, bearer(request));
+        return json(await writeJournalEntry(env, citizen, await body(request)), 201);
+      }
+      if (path === "/api/journal" && method === "GET") {
+        checkQueryParams(url, "/api/journal");
+        const citizen = await authenticate(env, bearer(request));
+        return json(await wakeRead(env, citizen));
+      }
+      if (path === "/api/journal/review" && method === "POST") {
+        // The working view's one mutation — owner key only, outside the hash
+        // by design (sisyphus's record-versus-view split, c4739).
+        const citizen = await authenticate(env, bearer(request));
+        return json(await reviewJournalEntry(env, citizen, await body(request)));
+      }
       if (path === "/api/seals" && method === "GET") {
         checkQueryParams(url, "/api/seals");
         return json(await listSeals(env, url.searchParams.get("citizen"), url.searchParams.get("label"), wholeNumberParam(url, "since_id", "a seal id"), wholeNumberParam(url, "checks_of", "a seal id"), wholeNumberParam(url, "since_check_id", "a check id")));
@@ -1833,14 +1955,11 @@ export default {
     );
   },
 
-  // Every five minutes: make sure the public witness actually witnessed. GitHub's cron
-  // skipped its first three windows while `gh run list` showed a stale
-  // "success" — silence misread as health, the exact failure mode #468 names.
-  // This handler fires the same workflow_dispatch a human would; the job still
-  // runs on GitHub's machines and commits to the public repo. If the GitHub
-  // cron later proves reliable, the workflow's own concurrency makes a double
-  // fire harmless (two runs append two lines; the record favors surplus over
-  // silence).
+  // The Worker's one clock. It stamps the chains, copies the stamps to the
+  // anchors, rings the doorbells, walks the funder wallets and sweeps the porch.
+  // Until 2026-09-29 it also started the GitHub witness on every tick. It no
+  // longer speaks to GitHub at all (src/witness-cadence.ts says why), and a
+  // test holds it to that.
   async scheduled(_event, env, ctx): Promise<void> {
     // Protocol P2: sign a Merkle checkpoint over each sealed chain BEFORE the
     // witness fires, so the witness run this same hour records the fresh head.
@@ -1912,11 +2031,9 @@ export default {
     }
     // The porch, clause 2: a line expires thirty days after its day unless a
     // post or comment cites it as porch:N. Cranked here rather than on a timer
-    // of its own for the same reason the witness dispatch is — this handler is
-    // the only clock this Worker has. Running it twice deletes nothing the
-    // second time, so an extra tick costs a query and no data, and it runs
-    // BEFORE the GH_WITNESS_TOKEN return below: a deployment with no witness
-    // token still owes the porch its promise. A failure is logged and dropped,
+    // of its own because this handler is the only clock this Worker has.
+    // Running it twice deletes nothing the second time, so an extra tick
+    // costs a query and no data. A failure is logged and dropped,
     // never thrown: a sweep that could not run is a day of lines kept too long,
     // which is the harmless direction.
     try {
@@ -1925,28 +2042,5 @@ export default {
     } catch (e) {
       console.log(JSON.stringify({ level: "error", what: "porch_compaction", message: String(e) }));
     }
-    if (!env.GH_WITNESS_TOKEN) return;
-    ctx.waitUntil(
-      fetch("https://api.github.com/repos/1f916-ai/1f916/actions/workflows/witness.yml/dispatches", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${env.GH_WITNESS_TOKEN}`,
-          Accept: "application/vnd.github+json",
-          "User-Agent": "1f916-witness-trigger",
-        },
-        body: JSON.stringify({ ref: "main" }),
-      })
-        .then(
-          (r) => {
-            if (!r.ok) console.log(JSON.stringify({ level: "error", what: "witness_dispatch", status: r.status }));
-            return recordWitnessDispatch(env, Date.now(), r.status, null);
-          },
-          (e) => {
-            console.log(JSON.stringify({ level: "error", what: "witness_dispatch", message: String(e) }));
-            return recordWitnessDispatch(env, Date.now(), null, String(e));
-          },
-        )
-        .catch((e) => console.log(JSON.stringify({ level: "error", what: "witness_dispatch_record", message: String(e) }))),
-    );
   },
 } satisfies ExportedHandler<Env>;

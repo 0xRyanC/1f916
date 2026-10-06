@@ -551,6 +551,16 @@ CREATE TABLE IF NOT EXISTS checkpoints (
 );
 CREATE INDEX IF NOT EXISTS idx_checkpoints_log ON checkpoints(log, id DESC);
 
+-- migrations/0073: a stamp, signed a second time in the format the certificate
+-- logs publish (src/note.ts). Written once by the stamping job, in its own
+-- table, so a stamp's row is never written after it is made. A stamp with no
+-- row here has no note.
+CREATE TABLE IF NOT EXISTS checkpoint_notes (
+  checkpoint_id INTEGER PRIMARY KEY REFERENCES checkpoints(id),
+  signature TEXT NOT NULL,
+  created_at INTEGER NOT NULL
+);
+
 -- migrations/0015: protocol P3 — attestations, anchored in the identity
 -- chain by payload sha-256; disputes and retractions append beside targets.
 CREATE TABLE IF NOT EXISTS attestations (
@@ -1524,7 +1534,91 @@ CREATE TABLE IF NOT EXISTS mandates (
   stored INTEGER NOT NULL DEFAULT 0,
   envelope_bytes INTEGER,
   label TEXT NOT NULL DEFAULT '',
-  created_at INTEGER NOT NULL
+  created_at INTEGER NOT NULL,
+  -- Who the record was made for (a label the recorder chose, never
+  -- interpreted here) and the recorder's own signature over the record's
+  -- fingerprints. Both are sealed through the commit. Added by migration 0070.
+  subject TEXT CHECK (subject IS NULL OR (length(subject) >= 1 AND length(subject) <= 128)),
+  signature TEXT,
+  key_thumbprint TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_mandates_citizen ON mandates(citizen_id, id);
 CREATE INDEX IF NOT EXISTS idx_mandates_citizen_created ON mandates(citizen_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_mandates_citizen_subject ON mandates(citizen_id, subject, id);
+
+-- What came of it, added to a record that was made without one. One row per
+-- mandate, enforced by the primary key: an outcome is added once and never
+-- changed, and the mandates row it belongs to is never touched by it, so the
+-- record's own commit stays byte for byte what was sealed.
+CREATE TABLE IF NOT EXISTS mandate_outcomes (
+  mandate_id INTEGER PRIMARY KEY REFERENCES mandates(id),
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  seal_id INTEGER NOT NULL UNIQUE REFERENCES seals(id),
+  commit_hash TEXT NOT NULL UNIQUE CHECK (length(commit_hash) = 64),
+  chained TEXT NOT NULL,
+  outcome_hash TEXT NOT NULL CHECK (length(outcome_hash) = 64),
+  stored INTEGER NOT NULL DEFAULT 0 CHECK (stored IN (0, 1)),
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mandate_outcomes_citizen_created ON mandate_outcomes(citizen_id, created_at);
+
+-- Daily mandate budgets the maintainer has set for named accounts. Append-only:
+-- the newest row for an account is its budget, the earlier rows are its
+-- history. Each is sealed into the maintainer's chain through seal_id.
+CREATE TABLE IF NOT EXISTS mandate_budgets (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  per_day INTEGER NOT NULL CHECK (per_day >= 1 AND per_day <= 1000000),
+  reason TEXT NOT NULL CHECK (length(reason) >= 1),
+  set_by INTEGER NOT NULL REFERENCES citizens(id),
+  seal_id INTEGER NOT NULL UNIQUE REFERENCES seals(id),
+  commit_hash TEXT NOT NULL UNIQUE CHECK (length(commit_hash) = 64),
+  created_at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_mandate_budgets_citizen ON mandate_budgets(citizen_id, id);
+
+-- Stored memory: locked files an agent keeps here. The bytes are in the
+-- content store under mem/<id>; this row is what is public about them. A
+-- deleted row keeps its seal and its fingerprint and loses its bytes.
+CREATE TABLE IF NOT EXISTS memory_blobs (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  citizen_id INTEGER NOT NULL REFERENCES citizens(id),
+  label TEXT NOT NULL CHECK (length(label) >= 1 AND length(label) <= 48),
+  seal_id INTEGER NOT NULL UNIQUE REFERENCES seals(id),
+  hash TEXT NOT NULL CHECK (length(hash) = 64),
+  bytes INTEGER NOT NULL CHECK (bytes > 0 AND bytes <= 262144),
+  created_at INTEGER NOT NULL,
+  deleted_at INTEGER,
+  deleted_why TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_memory_blobs_citizen ON memory_blobs(citizen_id, id);
+CREATE INDEX IF NOT EXISTS idx_memory_blobs_citizen_label ON memory_blobs(citizen_id, label, id);
+
+-- migrations/0074: the journal — the private continuity organ (578 -> 5530).
+-- Append-only, key-owned, chained per citizen; body_locked is a locked file
+-- the registry holds no key for, NULL when only body_hash was sent
+-- (local-master mode); review_status/reviewed_at are the mutable
+-- working view, outside the hash preimage by design (see src/journal.ts).
+CREATE TABLE IF NOT EXISTS journal_entries (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  citizen_id    INTEGER NOT NULL REFERENCES citizens(id),
+  kind          TEXT NOT NULL
+                CHECK (kind IN ('core', 'suspend', 'note', 'renewal', 'break', 'custody')),
+  body_locked   TEXT,
+  body_hash     TEXT NOT NULL,
+  ref_id        INTEGER REFERENCES journal_entries(id),
+  relation      TEXT
+                CHECK (relation IS NULL OR relation IN ('supersedes', 'contradicts', 'revises')),
+  prompted_by   TEXT,
+  unresolved    TEXT,
+  anchor        TEXT,
+  review_status TEXT NOT NULL DEFAULT 'unreviewed'
+                CHECK (review_status IN ('unreviewed', 'adopted', 'contested', 'quarantined')),
+  reviewed_at   INTEGER,
+  created_at    INTEGER NOT NULL,
+  prev_hash     TEXT NOT NULL,
+  hash          TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_journal_citizen ON journal_entries(citizen_id, id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_citizen_prev ON journal_entries(citizen_id, prev_hash);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_hash ON journal_entries(hash);

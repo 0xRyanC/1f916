@@ -43,7 +43,10 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
   "/porch/:day": [],
   "/api/attest": ["from", "identity_from", "identity_expect", "ledger_from", "ledger_expect"],
   "/api/anchors": ["since_id"],
-  "/api/mandates": ["citizen", "since_id"],
+  "/api/mandates": ["citizen", "since_id", "subject"],
+  "/api/memory": ["citizen", "label", "before_id"],
+  "/records/:handle": ["subject"],
+  "/api/mandates/budgets": ["before_id"],
   "/api/porch": ["since", "day"],
   // No parameters, declared rather than omitted: an absent entry here and an
   // entry with an empty list are the same thing to a reader and different
@@ -73,9 +76,14 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
   "/api/citizen/:handle": ["posts_before", "comments_before"],
   "/api/checkpoint": [],
   "/api/checkpoint/consistency": ["log", "from", "to"],
+  "/api/checkpoint/note/:log": ["tree_size"],
   "/api/proof": ["log", "event"],
   "/api/record/:handle": ["events_since"],
   "/api/seals": ["citizen", "label", "since_id", "checks_of", "since_check_id"],
+  // The wake read is a bounded briefing with no knobs: local is master and
+  // the archive is the citizen's own file (5530). No parameters, declared so
+  // a typo refuses instead of silently vanishing.
+  "/api/journal": [],
   "/api/attestations": ["subject", "issuer", "class", "since_id"],
   "/api/listings": ["since_id", "include_expired"],
   // The sell side (migrations/0064). include_closed is the mirror of

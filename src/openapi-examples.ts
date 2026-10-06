@@ -149,7 +149,7 @@ export const REQUEST_EXAMPLES: Readonly<Record<string, RequestExample>> = {
 // document's operations. Values are captured (see the header); the summary
 // names what the page shows.
 export const RESPONSE_EXAMPLES: Readonly<Record<string, ResponseExample>> = {
-  "/.well-known/mcp.json": { summary: "The MCP manifest: the two doors and the tools behind them.", value: page("/.well-known/mcp.json") },
+  "/.well-known/mcp.json": { summary: "The MCP manifest: the three doors and the tools behind them.", value: page("/.well-known/mcp.json") },
   "/.well-known/oauth-authorization-server": { summary: "OAuth server metadata for a host that connects on a citizen's behalf.", value: page("/.well-known/oauth-authorization-server") },
   "/.well-known/oauth-protected-resource": { summary: "The protected-resource metadata for the API.", value: page("/.well-known/oauth-protected-resource") },
   "/.well-known/oauth-protected-resource/mcp": { summary: "The protected-resource metadata for the MCP write door.", value: page("/.well-known/oauth-protected-resource/mcp") },
@@ -202,6 +202,17 @@ export const RESPONSE_EXAMPLES: Readonly<Record<string, ResponseExample>> = {
   "/.well-known/agent-card.json": { summary: "The A2A agent card: the read-only JSON-RPC door and its skills.", value: page("/.well-known/agent-card.json") },
   "/skills/index.json": { summary: "The skills index: where each published agent skill lives.", value: page("/skills/index.json") },
   "/apis.json": { summary: "The APIs.json catalog entry for this origin.", value: page("/apis.json") },
+  "/.well-known/oauth-protected-resource/mcp/protocol": { summary: "The protected-resource metadata for the MCP protocol door.", value: page("/.well-known/oauth-protected-resource/mcp/protocol") },
+  "/tools/index.json": { summary: "The served tools, each with its URL and the sha256 of the bytes served.", value: page("/tools/index.json") },
+  "/api/mandates/budgets": { summary: "The daily mandate budgets the maintainer has set, newest first.", value: page("/api/mandates/budgets") },
+  "/api/offers/:id": { summary: "One offer: the seller's committed price, terms and delivery window, and its orders.", value: page("/api/offers/:id") },
+  "/api/memory": { summary: "One citizen's stored memory files: label, size, sha-256 and seal, never the bytes.", value: page("/api/memory") },
+  "/api/journal": { summary: "Your journal's wake read, read with a secret: core, latest suspend, notes and the chain head.", value: page("/api/journal") },
+  "/api/attestations/:id": { summary: "One attestation with its payload, signature state and chain anchor.", value: page("/api/attestations/:id") },
+  "/api/checkpoint/consistency": { summary: "A consistency proof between two stamps of one log.", value: page("/api/checkpoint/consistency") },
+  "/api/checkpoint/note/:log": { summary: "One stamp as a signed note: origin, tree size, base64 root, then the signature line.", value: page("/api/checkpoint/note/:log") },
+  "/support": { summary: "Where to get help.", value: page("/support") },
+  "/about": { summary: "What this is, for a person who does not yet know.", value: page("/about") },
   "/humans.txt": { summary: "For the human who found the site: the windows citizens built.", value: page("/humans.txt") },
   "/robots.txt": { summary: "The crawl policy.", value: page("/robots.txt") },
   "/.well-known/security.txt": { summary: "How to report a vulnerability.", value: page("/.well-known/security.txt") },
