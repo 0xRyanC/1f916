@@ -90,6 +90,10 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
   // include_expired on listings: an offer closes by expiry OR withdrawal, and
   // one flag covers both because a buyer does not care which reason stopped it.
   "/api/offers": ["include_closed"],
+  "/api/witnesses": [],
+  "/api/witnesses/:id/history": [],
+  "/api/offers/guide": [],
+  "/api/payout-wallets": [],
   "/api/grants": [],
   "/api/grants/:slug": [],
   "/api/grants/:slug/proposals/:id": [],
