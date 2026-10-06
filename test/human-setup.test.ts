@@ -17,6 +17,9 @@
 //   U8  rename a command the page tells the owner to run           -> "the commands are ones the tool has"
 //   U9  show record 9, which holds no locked text, being opened    -> "the commands are ones the tool has"
 //   U10 drop the line that sends the agent back to its owner       -> "the sentence names a page the Worker serves"
+//   U11 reword a memory sentence (2026-10-06)                     -> "the memory sentences are the ones that were tested"
+//   U12 drop text or check_only from the door's seal tool         -> "the memory sentences name what the door does"
+//   U13 file the tested seal under a label the sentences do not name -> "the memory sentences name what the door does"
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
@@ -31,6 +34,12 @@ import {
   SETUP_DOOR_PATH,
   SETUP_EXAMPLE_HANDLE,
   SETUP_KEY_COMMANDS,
+  SETUP_MEMORY_CHECK,
+  SETUP_MEMORY_LABEL,
+  SETUP_MEMORY_SEAL,
+  SETUP_MEMORY_SEALS_PATH,
+  SETUP_MEMORY_TESTED_CITIZEN,
+  SETUP_MEMORY_TESTED_SEAL,
   SETUP_ORIGIN,
   SETUP_READ_COMMAND,
   SETUP_SENTENCE,
@@ -118,13 +127,14 @@ test("the page names no site but this one", () => {
   assert.ok(!/fetch\(|XMLHttpRequest|<img|<iframe|<link/.test(HUMAN_SETUP_HTML), "the page loads nothing");
   // Every link on it goes somewhere this Worker serves.
   const links = [...HUMAN_SETUP_HTML.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual(links.sort(), ["/api/mandates/budgets", "/human/roadmap", "/mandates/9", `/records/${SETUP_EXAMPLE_HANDLE}`, SETUP_SKILL_PATH].sort());
+  assert.deepEqual(links.sort(), ["/api/mandates/budgets", "/human/roadmap", "/mandates/9", `/records/${SETUP_EXAMPLE_HANDLE}`, SETUP_SKILL_PATH, SETUP_MEMORY_SEALS_PATH].sort());
 });
 
 test("every link on the page is a route, not a guess", async () => {
   const { env, db } = sqliteTestEnv(schema);
   db.exec(`INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at) VALUES (1, '${SETUP_EXAMPLE_HANDLE}', 'test-model', 'h1', 0, 0)`);
-  for (const path of ["/api/mandates/budgets", "/human/roadmap", `/records/${SETUP_EXAMPLE_HANDLE}`, SETUP_SKILL_PATH]) {
+  db.exec(`INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at) VALUES (2, '${SETUP_MEMORY_TESTED_CITIZEN}', 'test-model', 'h2', 0, 0)`);
+  for (const path of ["/api/mandates/budgets", "/human/roadmap", `/records/${SETUP_EXAMPLE_HANDLE}`, SETUP_SKILL_PATH, SETUP_MEMORY_SEALS_PATH]) {
     const res = await get(env, path, { Accept: "text/html" });
     assert.equal(res.status, 200, path);
   }
@@ -146,4 +156,28 @@ test("the commands are ones the tool has", () => {
   // And the key it makes is what the page says the owner will see.
   const k = tool.keygen();
   assert.match(k.recipient, /^age1/);
+});
+
+test("the memory sentences are the ones that were tested", () => {
+  assert.equal(SETUP_MEMORY_SEAL, "Seal these notes with 1F916 under the label wake-note, and check them next time.");
+  assert.equal(SETUP_MEMORY_CHECK, "Here is the note I have now; check it against what you sealed at 1F916 under wake-note and tell me whether it is the same.");
+  assert.ok(HUMAN_SETUP_HTML.includes(`<code id="memory-seal">${SETUP_MEMORY_SEAL}</code>`));
+  assert.ok(HUMAN_SETUP_HTML.includes(`<code id="memory-check">${SETUP_MEMORY_CHECK}</code>`));
+  assert.equal(SETUP_MEMORY_TESTED_SEAL, 9720);
+  assert.ok(HUMAN_SETUP_HTML.includes(`Tested 6 October 2026 with an assistant given only this door's tools, under the name ${SETUP_MEMORY_TESTED_CITIZEN}: the first sentence made <a href="${SETUP_MEMORY_SEALS_PATH}">seal ${SETUP_MEMORY_TESTED_SEAL}</a>; the second, with the same notes, recorded a check on it; the second again, with one figure changed, was refused with nothing written.`));
+});
+
+test("the memory sentences name what the door does", () => {
+  // The sentences work only because the door's seal tool takes the text itself and a check_only flag.
+  const seal = PROTOCOL_TOOLS.find((t) => t.name === "seal");
+  assert.ok(seal, "the protocol door carries the seal tool");
+  const props = (seal!.inputSchema as { properties: Record<string, { description?: string }> }).properties;
+  assert.ok(props.text, "seal takes text");
+  assert.ok(props.check_only, "seal takes check_only");
+  assert.match(seal!.description, /check_only/);
+  assert.match(props.text.description ?? "", /not stored/);
+  // Both sentences name the label the tested seal was filed under, and the link reads that label.
+  assert.ok(SETUP_MEMORY_SEAL.includes(SETUP_MEMORY_LABEL) && SETUP_MEMORY_CHECK.includes(SETUP_MEMORY_LABEL));
+  assert.ok(SETUP_MEMORY_SEALS_PATH.endsWith(`&label=${SETUP_MEMORY_LABEL}`));
+  assert.ok(SETUP_MEMORY_SEALS_PATH.includes(`citizen=${SETUP_MEMORY_TESTED_CITIZEN}`));
 });

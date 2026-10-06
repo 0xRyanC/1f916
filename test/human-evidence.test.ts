@@ -33,6 +33,7 @@ import {
   EVIDENCE_COMMANDS,
   EVIDENCE_ORIGIN,
   EVIDENCE_READ_DATE,
+  EVIDENCE_RESEARCH_PATH,
   EVIDENCE_ROUTES,
   EVIDENCE_SETUP_PATH,
   EVIDENCE_STANDARD_SITE,
@@ -45,7 +46,7 @@ import { SURFACE } from "../src/surface.ts";
 const schema = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
 const get = (env: unknown, path: string, headers: Record<string, string> = {}) => worker.fetch(new Request(EVIDENCE_ORIGIN + path, { headers }), env as never);
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
-const text = HUMAN_EVIDENCE_HTML.replace(/<style>.*?<\/style>/s, "").replace(/<[^>]+>/g, " ");
+const text = HUMAN_EVIDENCE_HTML.replace(/<style>.*?<\/style>/s, "").replace(/<[^>]+>/g, " ").replace(/\s+/g, " ");
 
 test("the page is served as HTML", async () => {
   const { env } = sqliteTestEnv(schema);
@@ -85,6 +86,9 @@ test("the page never says the control is required or the record certified", () =
   assert.match(text, /registry's one chain, in which every entry since the chain began carries a hash, and every one after the first of them commits to the one before it, whoever wrote that one/);
   assert.match(text, /Once a head covers it, it has a fixed position in a tree whose signed head is published at\s+\/api\/checkpoint\s+by a stamp attempted every five minutes; witnesses that are not us countersign the heads they see, on schedules of their own/);
   assert.match(text, /Every event since the chain began has a position in a signed tree once a head covers it/);
+  assert.match(text, /once a head covers them, fixed tree positions/);
+  // The siblings are named in the standard's own capitalisation.
+  assert.ok(text.includes("E015.2 (AI agent logging implementation, supplemental)"));
   assert.doesNotMatch(text, /hourly/);
   assert.match(text, /The witnesses registered here, each with the address of its copies and its public key where it gave one/);
   assert.match(text, /Nothing on this page should be read as their answer/);
@@ -142,7 +146,7 @@ test("a Bitcoin anchor is never called confirmed", () => {
 test("the figure and the reading carry their date", () => {
   assert.match(EVIDENCE_READ_DATE, /^\d{1,2} [A-Z][a-z]+ 20\d\d$/);
   // One figure on both pages: the research snapshot's, with the head's coverage and the unchained rows beside it.
-  assert.ok(text.includes(`At the snapshot of ${EVIDENCE_SNAPSHOT.date} the log held ${EVIDENCE_SNAPSHOT.events.toLocaleString("en-US")} entries, of which the newest signed head covered ${EVIDENCE_SNAPSHOT.tree_size.toLocaleString("en-US")}; the first ${EVIDENCE_SNAPSHOT.unchained_rows} were written before the chain began.`));
+  assert.ok(text.includes(`At the research snapshot of ${EVIDENCE_SNAPSHOT.date} the log held ${EVIDENCE_SNAPSHOT.events.toLocaleString("en-US")} entries, of which the newest signed head covered ${EVIDENCE_SNAPSHOT.tree_size.toLocaleString("en-US")}; the first ${EVIDENCE_SNAPSHOT.unchained_rows} were written before the chain began.`));
   assert.equal(EVIDENCE_SNAPSHOT.events - EVIDENCE_SNAPSHOT.tree_size, EVIDENCE_SNAPSHOT.unchained_rows);
   assert.ok(text.includes(`Read ${EVIDENCE_READ_DATE} from the standard's evidence guidance and its accountability domain at ${EVIDENCE_STANDARD_SITE}.`));
   assert.ok(text.includes(`On ${EVIDENCE_READ_DATE} we sent the standard's authors a suggestion`));
@@ -156,7 +160,8 @@ test("the page links nowhere but here, and names the standard's site only as the
   assert.equal(EVIDENCE_STANDARD_SITE, "standard.aiuc-1.com");
   // The standard's site is named as a citation in text, never linked.
   const links = [...HUMAN_EVIDENCE_HTML.matchAll(/href="([^"]+)"/g)].map((m) => m[1]);
-  assert.deepEqual([...new Set(links)].sort(), [EVIDENCE_CHECKER_PATH, EVIDENCE_SETUP_PATH].sort());
+  assert.deepEqual([...new Set(links)].sort(), [EVIDENCE_CHECKER_PATH, EVIDENCE_SETUP_PATH, EVIDENCE_RESEARCH_PATH].sort());
+  assert.ok(SURFACE.some((r) => r.path === EVIDENCE_RESEARCH_PATH && r.method === "GET"));
   assert.ok(!/fetch\(|XMLHttpRequest|<img|<iframe|<link|<script/.test(HUMAN_EVIDENCE_HTML), "the page loads and runs nothing");
 });
 

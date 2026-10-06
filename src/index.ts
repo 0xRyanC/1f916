@@ -39,6 +39,7 @@ import { HUMAN_SETUP_HTML } from "./human-setup.ts";
 import { ACCEPT_IDENTITY_HTML } from "./accept-identity.ts";
 import { HUMAN_EVIDENCE_HTML } from "./human-evidence.ts";
 import { HUMAN_RESEARCH_HTML } from "./human-research.ts";
+import { HUMAN_OUTSIDE_WITNESS_HTML } from "./human-outside-witness.ts";
 import { parseNamedDays,
   type Env,
   MAINTAINER_ID,
@@ -800,6 +801,8 @@ export default {
       if (path === "/human/evidence" && method === "GET") return html(HUMAN_EVIDENCE_HTML);
       // The record, for research. See src/human-research.ts.
       if (path === "/human/research" && method === "GET") return html(HUMAN_RESEARCH_HTML);
+      // Use 1F916 as the outside witness for a log you keep yourself. See src/human-outside-witness.ts.
+      if (path === "/human/outside-witness" && method === "GET") return html(HUMAN_OUTSIDE_WITNESS_HTML);
       if (path === "/human/roadmap/og.png" && method === "GET")
         return new Response(humanRoadmapOgPng(), { status: 200, headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
       // The site icon. /favicon.ico is the address fetchers try when a page

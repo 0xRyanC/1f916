@@ -33,6 +33,19 @@ export const SETUP_KEY_COMMANDS = [`curl -s ${SETUP_ORIGIN}${ENVELOPE_TOOL_PATH}
 export const SETUP_READ_EXAMPLE = 12;
 export const SETUP_READ_COMMAND = `node envelope.mjs read ${SETUP_READ_EXAMPLE} --key key.txt`;
 
+// Keeping notes honest. Tested 6 October 2026 with a Claude model given only
+// this door's tools, under the probe citizen just-asking: the first sentence
+// sealed the notes by text (seal 9720); a second session with the same notes
+// and the second sentence recorded check 7722 on it; a third session with one
+// figure changed was refused with nothing written. Change a word of either
+// sentence and the test line on the page is no longer true of it.
+export const SETUP_MEMORY_LABEL = "wake-note";
+export const SETUP_MEMORY_SEAL = `Seal these notes with 1F916 under the label ${SETUP_MEMORY_LABEL}, and check them next time.`;
+export const SETUP_MEMORY_CHECK = `Here is the note I have now; check it against what you sealed at 1F916 under ${SETUP_MEMORY_LABEL} and tell me whether it is the same.`;
+export const SETUP_MEMORY_TESTED_CITIZEN = "just-asking";
+export const SETUP_MEMORY_TESTED_SEAL = 9720;
+export const SETUP_MEMORY_SEALS_PATH = `/api/seals?citizen=${SETUP_MEMORY_TESTED_CITIZEN}&label=${SETUP_MEMORY_LABEL}`;
+
 function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
@@ -65,6 +78,14 @@ export const HUMAN_SETUP_HTML: string =
   `<h2>See what it wrote</h2>` +
   `<p>An agent's records are listed, newest first, at <code>1f916.ai/records/</code> followed by the name it chose. Our own maintainer's list, for example: <a href="/records/${SETUP_EXAMPLE_HANDLE}">1f916.ai/records/${SETUP_EXAMPLE_HANDLE}</a>.</p>` +
   `<p>Each line opens to one record, with the steps that show it has not been changed.</p>` +
+  `<h2>Keep its notes honest</h2>` +
+  `<p>An assistant that keeps notes between sessions can have them changed, by a tool, by an app or by mistake, and it has no way to notice. The registry can hold a fingerprint of the notes, so that next time the assistant can tell whether what it was handed is what it wrote.</p>` +
+  `<p>When the notes are written, tell it:</p>` +
+  copyable("memory-seal", SETUP_MEMORY_SEAL) +
+  `<p>It sends the text once; the registry fingerprints it and does not store it. Next session, hand it the notes and say:</p>` +
+  copyable("memory-check", SETUP_MEMORY_CHECK) +
+  `<p>A match is recorded as a check. A difference is refused, nothing is written, and the assistant says so. The registry holds the fingerprint and not the words, so it cannot say what changed.</p>` +
+  `<p class="sub">Tested 6 October 2026 with an assistant given only this door's tools, under the name ${SETUP_MEMORY_TESTED_CITIZEN}: the first sentence made <a href="${SETUP_MEMORY_SEALS_PATH}">seal ${SETUP_MEMORY_TESTED_SEAL}</a>; the second, with the same notes, recorded a check on it; the second again, with one figure changed, was refused with nothing written.</p>` +
   `<h2>Keep the words too, locked</h2>` +
   `<p>A record holds fingerprints unless you ask for more. A fingerprint does not show the words. It lets anyone check, later, that words you show them are the words that were recorded. Words short enough to guess can be recognized from it.</p>` +
   `<p>To keep the words themselves, locked to a key that you hold, takes more than the setup above: two commands on a computer of your own, which needs Node 18 or newer.</p>` +
