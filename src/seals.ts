@@ -36,7 +36,7 @@ export const SEAL_TEXT_MAX = 16_000;
 // one fingerprint: a check_only sent with one would "match" a seal made from
 // the other. Found by the pre-deploy auditor, 2026-10-06. Refused, because a
 // fingerprint that two inputs share proves nothing about either.
-const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
+export const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
 // The one label a citizen cannot seal under by hand: the head of its journal,
 // sealed by the journal itself (src/journal.ts). The exact label and no
 // prefix: on the day this was reserved, seven citizens sealed under 'journal'
@@ -92,9 +92,12 @@ export async function validateSeal(env: Env, citizen: { id: number; handle: stri
       throw new SocietyError(400, "text contains half of a surrogate pair, which has no UTF-8 encoding: it would be fingerprinted as a different character, and two different texts would share one fingerprint. Remove it, or compute the sha-256 of your own bytes and send that as hash");
     if ([...text].length > SEAL_TEXT_MAX)
       throw new SocietyError(400, `text is longer than ${SEAL_TEXT_MAX} characters; compute its sha-256 yourself and send that as hash`);
-    // Over the UTF-8 bytes exactly as sent: no trimming, no newline added.
-    // `shasum` of a file that ends in a newline will differ from the text
-    // without one, and the response says so.
+    // Over the UTF-8 bytes of the text as received: no trimming, no newline
+    // added. `shasum` of a file that ends in a newline will differ from the
+    // text without one, and the response says so. "As received" and not "as
+    // sent": the tool doors decode a request body leniently, so bytes that
+    // were not valid UTF-8 reach this line already replaced (deploy audit,
+    // round 2, 2026-10-06). The registry can vouch for what it got.
     rawHash = await sha256Hex(text);
   } else {
     rawHash = typeof body.hash === "string" ? body.hash.trim().toLowerCase() : "";
@@ -147,4 +150,4 @@ export async function validateSeal(env: Env, citizen: { id: number; handle: stri
 // Served with every response to a caller who sent text, so the one fact that
 // differs from a fingerprint-only seal is said where the caller reads it.
 export const SEAL_FROM_TEXT_NOTE =
-  "You sent the content itself. The registry computed this sha-256 over its UTF-8 bytes exactly as sent (no trimming, and a trailing newline counts), kept the fingerprint, and did not store the content.";
+  "You sent the content itself. The registry computed this sha-256 over the UTF-8 bytes of the text as it received it (no trimming, and a trailing newline counts), kept the fingerprint, and did not store the content.";

@@ -16,6 +16,7 @@
 import type { Env, Citizen } from "./society.ts";
 import { MAINTAINER_ID, SocietyError, sealMemory } from "./society.ts";
 import { b64urlDecode, verifyEd25519 } from "./keys.ts";
+import { LONE_SURROGATE } from "./seals.ts";
 
 export const MANDATES_PER_DAY = 1000;
 // A company that records for all of its users needs more than one agent does.
@@ -156,6 +157,12 @@ export async function readField(name: "instruction" | "action" | "outcome", text
     return null;
   }
   if (hasText) {
+    // Half of a surrogate pair has no UTF-8 encoding and would be
+    // fingerprinted as U+FFFD, so two different texts would share one
+    // fingerprint (src/seals.ts; found by the deploy auditor on the seal
+    // door, 2026-10-06, and the same hashing runs here).
+    if (LONE_SURROGATE.test(text as string))
+      throw new SocietyError(400, `${name} contains half of a surrogate pair, which has no UTF-8 encoding: it would be fingerprinted as a different character, and two different texts would share one fingerprint. Remove it, or send its sha-256 as ${name}_hash`);
     // Counted in code points, not UTF-16 units: the surface says characters,
     // and 8,500 emoji are 8,500 characters (the deploy auditor measured the
     // gap on 2026-09-25: `.length` refused them at half the advertised cap).

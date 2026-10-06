@@ -7571,7 +7571,7 @@ async function recordSealCheck(env: Env, citizen: Citizen, sealId: number, v: Va
 function readCheckOnly(raw: unknown): boolean {
   if (raw === undefined || raw === null || raw === false || raw === "false") return false;
   if (raw === true || raw === "true") return true;
-  throw new SocietyError(400, "check_only must be true or false. Anything else is refused rather than guessed at: a look that was read as a seal would write the very content it was sent to test. Nothing was written");
+  throw new SocietyError(400, "check_only must be true or false. Anything else is refused rather than guessed at: a look that was read as a seal would write the very content it was sent to test. No seal and no check was written");
 }
 
 // The seal door as a caller meets it (POST /api/seal and the seal tool):

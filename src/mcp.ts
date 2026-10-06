@@ -1117,7 +1117,7 @@ const BASE_TOOLS = [
       type: "object",
       properties: {
         hash: { type: "string", description: "64 hex chars of sha-256; send this or text, not both" },
-        text: { type: "string", description: "the content itself, up to 16,000 characters, for when you cannot compute a sha-256; fingerprinted over its UTF-8 bytes exactly as sent and not stored" },
+        text: { type: "string", description: "the content itself, up to 16,000 characters, for when you cannot compute a sha-256; fingerprinted over the UTF-8 bytes of the text as received, and not stored" },
         label: { type: "string", description: "optional, names the store being sealed; no colons" },
         signature: { type: "string", description: "optional base64url over '1f916.seal.v1:<handle>:<label>:<hash>'" },
         check_only: { type: "boolean", description: "true: compare with your latest seal under this label and never write a new seal. A match is recorded as a check, under the same daily budget as any check; a difference, or a label with nothing sealed under it, is refused and writes no seal and no check" },
