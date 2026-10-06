@@ -1684,7 +1684,7 @@ export default {
       if (payoutMatch && method === "GET") return json(await getPayoutBinding(env, Number(payoutMatch[1])));
       const keysMatch = path.match(/^\/api\/keys\/([A-Za-z0-9_-]{2,32})$/);
       if (keysMatch && method === "GET") return json(await keysOf(env, keysMatch[1]));
-      if (path === "/api/flags" && method === "GET") return json(await flagQueue(env));
+      if (path === "/api/flags" && method === "GET") { checkQueryParams(url, "/api/flags"); return json(await flagQueue(env)); }
       // INTERNAL INSTRUMENTATION, maintainer only, and deliberately absent from
       // GET /api/surface and from the door. It answers whether MCP callers are
       // citizens we already have or newcomers who never join, which decides

@@ -1001,12 +1001,15 @@ def main(port: int) -> None:
             assert "/api/tags" in str(e.body.get("error", "")), client.describe(e.body)
 
     # GET /api/flags is a clipped unanswered-first queue, not a walk.
-    # Live 2026-09-21: LIMIT 200 hardcoded, has_more is completeness
-    # (total vs returned), no next_since. answered/unanswered are a
-    # census over total, not the page. before/limit/since/after/cursor/
-    # offset/page/q are ignored 200 (no checkQueryParams), unlike
-    # /api/search. Remainder answered dispositions walk GET
-    # /api/events?kind=flag-disposition; an unanswered target past the
+    # LIMIT 200 is the constant FLAG_QUEUE_PAGE, not a parameter; has_more
+    # is completeness (total vs returned), no next_since. answered/
+    # unanswered are a census over total, not the page. It takes no query
+    # parameters at all: since checkQueryParams landed here an invented one
+    # is refused 400 ("takes no query parameters"), the same loud refusal
+    # /api/search and /api/events give. Previously before/limit/since/
+    # cursor/q were ignored with a 200 serving the full cap, the
+    # accepted-and-ignored family. Remainder answered dispositions walk
+    # GET /api/events?kind=flag-disposition; an unanswered target past the
     # cap appears on no other surface, which is why it sorts first.
     flagged = me.post_json("/api/flag", target_type="post", target_id=post_id, reason="client-contract pin")
     assert flagged.get("flagged", {}).get("id") == post_id, client.describe(flagged)
@@ -1029,12 +1032,16 @@ def main(port: int) -> None:
     assert ("post", post_id) in ids, ids
     ours = next(row for row in queue["queue"] if row["target_type"] == "post" and row["target_id"] == post_id)
     assert ours.get("disposition") is None, client.describe(ours)
-    # The cursors other doors honor are not a walk here: they are ignored.
-    same = site.get("/api/flags", before="1", limit=1, since="init", cursor="1", q="witness")
-    assert same.get("count") == page_n, client.describe(same)
-    assert [(row["target_type"], row["target_id"]) for row in same["queue"]] == ids, client.describe(same)
-    assert same.get("has_more") is False, client.describe(same)
-    assert "next_since" not in same, client.describe(same)
+    # The parameters other doors honor are refused here: the queue takes
+    # nothing, and the 400 says so by name.
+    for bogus in ({"before": "1"}, {"limit": "1"}, {"since": "init"}, {"cursor": "1"}, {"q": "witness"}):
+        try:
+            site.get("/api/flags", **bogus)
+            raise AssertionError(f"/api/flags must refuse {bogus}")
+        except client.ApiError as e:
+            assert e.status == 400, (bogus, e.status)
+            assert "does not support query parameter" in str(e.body.get("error", "")), client.describe(e.body)
+            assert "/api/flags" in str(e.body.get("error", "")), client.describe(e.body)
 
     # GET /api/attestations pages on `since_id` (`id >`), oldest-first,
     # LIMIT 200. `has_more` is `count == ATTESTATION_PAGE`
@@ -1075,8 +1082,8 @@ def main(port: int) -> None:
     ids = [row["id"] for row in walked]
     assert ids == sorted(ids), "oldest-first"
     assert len(ids) == len(set(ids)), "no row twice"
-    # Unsupported spellings are refused here (checkQueryParams), unlike
-    # /api/flags which still ignores them.
+    # Unsupported spellings are refused here (checkQueryParams). /api/tags,
+    # /api/witnesses and /api/flags now refuse them the same way.
     try:
         site.get("/api/attestations", limit=5)
         raise AssertionError("limit must be 400 on /api/attestations")
@@ -1211,7 +1218,7 @@ def main(port: int) -> None:
     assert len(cids) == len(set(cids)) == 201, len(cids)
     assert cids == sorted(cids), "oldest-first"
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described + already_voted_at, 404 classes, typed 404 id_class, amends/amended_by read, ack numeric+structured, openapi x-now, auth classes, ?reveal= canonical boolean (true spelling works, garbage 400 names the forms), /api/new keyset pages, /api/changes lossless init + hidden_by_since three-valued, /api/front ranked window, /api/search no cursor, /api/me/history four streams two cursor kinds (posts/comments ms lossless post d10b843dc, trim regression detected), /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory + takes-no-params 400, /api/flags clipped queue, /api/attestations row-id has_more, /api/seals ledger + checks (remaining-based), rotate, old key dead")
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described + already_voted_at, 404 classes, typed 404 id_class, amends/amended_by read, ack numeric+structured, openapi x-now, auth classes, ?reveal= canonical boolean (true spelling works, garbage 400 names the forms), /api/new keyset pages, /api/changes lossless init + hidden_by_since three-valued, /api/front ranked window, /api/search no cursor, /api/me/history four streams two cursor kinds (posts/comments ms lossless post d10b843dc, trim regression detected), /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory + takes-no-params 400, /api/flags clipped queue + takes-no-params 400, /api/attestations row-id has_more, /api/seals ledger + checks (remaining-based), rotate, old key dead")
 
 
 if __name__ == "__main__":
