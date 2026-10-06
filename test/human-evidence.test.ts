@@ -68,7 +68,8 @@ test("the quotations are the text as read, and are shown whole", () => {
   assert.deepEqual(E015_SIBLINGS.map((s) => `${s.id} ${s.title} ${s.level}`), ["E015.1 Logging implementation mandatory", "E015.2 AI agent logging implementation supplemental", "E015.3 Log storage mandatory"]);
   for (const q of [E015_TEXT, E015_4_TEXT, E015_4_EVIDENCE]) assert.ok(HUMAN_EVIDENCE_HTML.includes(`<blockquote>${esc(q)}</blockquote>`), q.slice(0, 40));
   assert.ok(HUMAN_EVIDENCE_HTML.includes(`“${E015_TITLE}”, is labelled mandatory:`));
-  assert.ok(HUMAN_EVIDENCE_HTML.includes(`E015.4, “${E015_4_TITLE}”, is labelled supplemental:`));
+  assert.ok(HUMAN_EVIDENCE_HTML.includes(`The control's line on that row, “E015.4 Config: ${E015_4_TITLE}”, is labelled a supplemental control, and the evidence it names is:`));
+  assert.ok(HUMAN_EVIDENCE_HTML.includes("Its row describes the control as:</p>"));
   // The page claims nothing about the standard beyond the cited pages: no purpose, no definition of the labels.
   assert.doesNotMatch(text, /written for audits|insurance/i);
   assert.match(text, /The pages read define neither label; we read supplemental as not required/);
@@ -79,11 +80,12 @@ test("the page never says the control is required or the record certified", () =
   assert.doesNotMatch(text.replace(/\bnot required\b/g, ""), /\brequired\b|\brequires\b|\bcertified\b|\bcompliant\b|\bcompliance\b|\bendorse/i);
   assert.match(text, /We are not an auditor, certify nothing, and have no connection to the standard's authors/);
   assert.match(text, /what counts as evidence is the auditor's call/);
-  assert.match(text, /from the first signed head after it was sealed, which is attempted every five minutes with an hourly backstop\. It does not prove the record was true or complete/);
+  assert.match(text, /from the first signed head after it was sealed; a stamp is attempted every five minutes\. It does not prove the record was true or complete/);
   assert.match(text, /unless it asks for the text to be kept openly, the registry fingerprints it and keeps nothing/);
-  assert.match(text, /registry's one chain, in which every entry since the chain began commits to the one before it, whoever wrote that one/);
-  assert.match(text, /by a stamp attempted every five minutes with an hourly backstop; witnesses that are not us countersign the heads they see, on schedules of their own/);
-  assert.match(text, /Every event since the chain began has a position in a signed tree/);
+  assert.match(text, /registry's one chain, in which every entry since the chain began carries a hash, and every one after the first of them commits to the one before it, whoever wrote that one/);
+  assert.match(text, /Once a head covers it, it has a fixed position in a tree whose signed head is published at\s+\/api\/checkpoint\s+by a stamp attempted every five minutes; witnesses that are not us countersign the heads they see, on schedules of their own/);
+  assert.match(text, /Every event since the chain began has a position in a signed tree once a head covers it/);
+  assert.doesNotMatch(text, /hourly/);
   assert.match(text, /The witnesses registered here, each with the address of its copies and its public key where it gave one/);
   assert.match(text, /Nothing on this page should be read as their answer/);
 });

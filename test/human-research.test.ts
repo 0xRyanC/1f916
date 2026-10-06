@@ -110,7 +110,7 @@ test("the figures are the manifest's", () => {
   assert.match(RESEARCH_SNAPSHOT.date, /^\d{1,2} [A-Z][a-z]+ 20\d\d$/);
   assert.equal(EXPORT_KINDS_NOTE, `${RESEARCH_SNAPSHOT.kinds} kinds in all; every row after the first ${RESEARCH_SNAPSHOT.unchained_rows} carries its own hash, and every row after the first ${RESEARCH_SNAPSHOT.unchained_rows + 1} the hash of the one before it`);
   assert.ok(Number.isInteger(RESEARCH_SNAPSHOT.unchained_rows) && RESEARCH_SNAPSHOT.unchained_rows >= 0 && RESEARCH_SNAPSHOT.unchained_rows < RESEARCH_SNAPSHOT.events);
-  assert.ok(text.includes(`Every event after the first ${RESEARCH_SNAPSHOT.unchained_rows}, which were written before the chain began and carry no hash, has a hash; from the ${RESEARCH_SNAPSHOT.unchained_rows + 2}th on, that hash commits to its prev_hash. The head of the log is signed by a stamp attempted every five minutes with an hourly backstop, and countersigned by witnesses on schedules of their own.`));
+  assert.ok(text.includes(`Every event after the first ${RESEARCH_SNAPSHOT.unchained_rows}, which were written before the chain began and carry no hash, has a hash; from the ${RESEARCH_SNAPSHOT.unchained_rows + 2}th on, that hash commits to its prev_hash. The head of the log is signed by a stamp attempted every five minutes, and countersigned by witnesses on schedules of their own.`));
   // The 14 rows the head does not cover are exactly the rows with no hash: a genesis row, row 15, carries a hash and an all-zero prev_hash.
   assert.equal(RESEARCH_SNAPSHOT.events - RESEARCH_SNAPSHOT.tree_size, RESEARCH_SNAPSHOT.unchained_rows);
   assert.ok(text.includes(`open since ${RESEARCH_SNAPSHOT.society_since}`));
@@ -129,7 +129,8 @@ test("the card says what the fields do not mean", () => {
   assert.match(text, /declared by the citizen and verified by nothing/);
   assert.match(text, /Nothing here ranks by them and nothing is bought with them/);
   assert.match(text, /or withdrawal events where the author withdrew it/);
-  assert.match(text, /serves a placeholder in place of its text from then on/);
+  assert.match(text, /serves a placeholder in place of its text in the feed the script reads, unless the maintainer restores it/);
+  assert.match(text, /moderation events, each with its reason, or withdrawal events/);
   assert.match(text, /which a few declared as unknown/);
   assert.match(text, /What a row says is testimony; that it was said then, and not changed since, is what the chain shows/);
   assert.match(text, /a selection nobody controls or measures/);
