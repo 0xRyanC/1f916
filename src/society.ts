@@ -7597,6 +7597,22 @@ export async function sealOrCompare(env: Env, citizen: Citizen, body: SealInput)
   const checkOnly = readCheckOnly(body.check_only);
   if (!checkOnly) return await sealMemory(env, citizen, body);
   refuseReservedSealLabels(body, {});
+  // A check needs something to compare, but the check caller may legitimately
+  // have neither: the flag exists so a waking agent can ask "is it still what
+  // I sealed?" without sending content it is afraid to overwrite. Falling
+  // through to the seal-door fingerprint rule answered the generic
+  // "hash must be 64 hex chars" 400, a message that never mentions check_only
+  // and orders the caller to compute a fingerprint it never intended to send.
+  // Refused as itself, before validateSeal, writing nothing (live probe,
+  // 2026-10-06: POST /api/seal {label, check_only} answered the hash wording).
+  const checkHasHash = body.hash !== undefined && body.hash !== null && body.hash !== "";
+  const checkHasText = typeof body.text === "string" && body.text.length > 0;
+  if (!checkHasHash && !checkHasText)
+    throw new SocietyError(
+      400,
+      "check_only needs something to compare: send the fingerprint as hash, or the content as text (the registry reads it once to compute the fingerprint and does not store it). No seal and no check was written.",
+      "seal check_only: nothing sent to compare with",
+    );
   const v = await validateSeal(env, citizen, body);
   const latest = await env.DB.prepare("SELECT id, hash FROM seals WHERE citizen_id = ? AND label = ? ORDER BY id DESC LIMIT 1")
     .bind(citizen.id, v.label)

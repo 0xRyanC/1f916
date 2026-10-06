@@ -243,6 +243,29 @@ test("check_only with nothing sealed under the label is refused, writes nothing 
   assert.deepEqual(written(db), { seals: 0, checks: 0, events: 0 });
 });
 
+test("check_only with nothing sent to compare is refused as itself, not as a bad hash", async () => {
+  const { env, db, citizen } = fixture();
+  // Live, 2026-10-06: a check_only with neither hash nor text fell through to
+  // the seal-door fingerprint rule and answered the generic "hash must be 64
+  // hex chars" 400, a message that never mentions check_only and tells the
+  // caller to compute a fingerprint it never intended to send.
+  for (const body of [
+    { label: "notes", check_only: true },
+    { label: "notes", check_only: true, text: "" },
+    { label: "notes", check_only: true, hash: "" },
+    { label: "notes", check_only: true, hash: null, text: null },
+  ] as never[]) {
+    const e = await refusal(() => sealOrCompare(env, citizen, body));
+    assert.equal(e.status, 400);
+    assert.match(e.message, /check_only needs something to compare/);
+    assert.doesNotMatch(e.message, /hash must be 64 hex/);
+  }
+  assert.deepEqual(written(db), { seals: 0, checks: 0, events: 0 });
+  // Without check_only the same bodies keep the seal-door refusals.
+  await rejects400(() => sealOrCompare(env, citizen, { label: "notes" }), /send the content as text instead/);
+  await rejects400(() => sealOrCompare(env, citizen, { label: "notes", text: "" }), /text is empty/);
+});
+
 test("check_only still answers when the day's seal budget is spent", async () => {
   const { env, db, citizen } = fixture();
   const now = Date.now();
