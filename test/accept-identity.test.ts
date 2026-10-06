@@ -17,6 +17,8 @@
 //   A7  let the script's sign command sign a line it was handed    -> "the sign command builds the line itself"
 //   A8  link an outside site, or a path the mirror does not serve  -> "the page names no site but this one"
 //   A9  print the figure without its date                          -> "the figure carries the day it was read"
+//   A10 return the handle as typed when the registry spells it otherwise (2026-10-06, auditor) -> "the handle that comes back is the registry's spelling"
+//   A11 accept a non-canonical signature spelling, or a 22-hex nonce      -> "one spelling per signature, and a hex nonce is held to the hex length"
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
@@ -73,6 +75,7 @@ test("the line on the page is the line the script builds", () => {
   // The surface says the same line, so a reader of either learns the same format.
   const entry = SURFACE.find((r) => r.path === "/accept")!;
   assert.ok(entry.summary.includes(IDENTITY_LINE));
+  assert.ok(entry.summary.includes(ACCEPT_SCRIPT_PATH), "the surface names the path the mirror serves the script at");
   // No piece may carry a colon, or a site could move the boundaries of the line.
   for (const [h, a, n] of [["a:b", "x.y", NONCE], ["ab", "x.y:443", NONCE], ["ab", "x.y", `${NONCE}:x`], ["ab", "X.y", NONCE], ["ab", "https://x.y", NONCE], ["ab", "x.y", "short"]] as const) {
     assert.throws(() => script.identityMessage(h, a, n), /must/);
@@ -132,7 +135,8 @@ test("the whole check reads two public pages and says what the record says", asy
   const asked: string[] = [];
   const fetchImpl = async (url: string) => {
     asked.push(url);
-    if (url === `${ACCEPT_ORIGIN}/api/keys/some-agent`) return new Response(JSON.stringify({ keys: [{ x, thumbprint: "t", status: "active", bound_at: 1700000000000 }] }), { status: 200 });
+    // The registry finds a handle without regard to case and serves its one spelling.
+    if (url.toLowerCase() === `${ACCEPT_ORIGIN}/api/keys/some-agent`) return new Response(JSON.stringify({ handle: "some-agent", keys: [{ x, thumbprint: "t", status: "active", bound_at: 1700000000000 }] }), { status: 200 });
     if (url === `${ACCEPT_ORIGIN}/api/record/some-agent`) return new Response(JSON.stringify({ since: 1690000000000, events_total: 7, model: "test-model" }), { status: 200 });
     return new Response("not found", { status: 404 });
   };
@@ -149,6 +153,12 @@ test("the whole check reads two public pages and says what the record says", asy
   const bad = await script.acceptIdentity({ handle: "some-agent", audience: "other.example", nonce: NONCE, signature: sig, fetchImpl });
   assert.equal(bad.verified, false);
   assert.deepEqual(asked, [`${ACCEPT_ORIGIN}/api/keys/some-agent`]);
+  // The handle that comes back is the registry's spelling, never the typed one: a handle typed in another case is refused before any key is tried.
+  asked.length = 0;
+  const typed = await script.acceptIdentity({ handle: "SOME-AGENT", audience: "town.example", nonce: NONCE, signature: script.signIdentity(pem, "SOME-AGENT", "town.example", NONCE), fetchImpl });
+  assert.equal(typed.verified, false);
+  assert.match(typed.reason, /spelled 'SOME-AGENT' in the line but 'some-agent' at the registry/);
+  assert.deepEqual(asked, [`${ACCEPT_ORIGIN}/api/keys/SOME-AGENT`]);
   // An unknown handle is said plainly.
   assert.match((await script.acceptIdentity({ handle: "nobody", audience: "town.example", nonce: NONCE, signature: sig, fetchImpl })).reason, /no citizen 'nobody'/);
 });
@@ -209,4 +219,22 @@ test("the figure carries the day it was read", () => {
   assert.ok(Number.isInteger(ACCEPT_KEYS_BOUND) && ACCEPT_KEYS_BOUND > 0);
   assert.match(ACCEPT_KEYS_BOUND_DATE, /^\d{1,2} [A-Z][a-z]+ 20\d\d$/);
   assert.ok(ACCEPT_IDENTITY_HTML.includes(`As of ${ACCEPT_KEYS_BOUND_DATE}, ${ACCEPT_KEYS_BOUND} agents have an active key.`));
+});
+
+test("one spelling per signature, and a hex nonce is held to the hex length", () => {
+  const { x, pem } = keypair();
+  const keys = [{ x, thumbprint: "t", status: "active", bound_at: 1 }];
+  const sig = script.signIdentity(pem, "some-agent", "town.example", NONCE);
+  // Flip trailing bits of the last character: the same 64 bytes, another string.
+  const last = sig[sig.length - 1];
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+  const variant = sig.slice(0, -1) + alphabet[(alphabet.indexOf(last) + 1) % 64];
+  assert.equal(Buffer.from(variant, "base64url").equals(Buffer.from(sig, "base64url")), true, "the variant decodes to the same bytes");
+  const r = script.verifyIdentity({ handle: "some-agent", audience: "town.example", nonce: NONCE, signature: variant, keys });
+  assert.equal(r.verified, false);
+  assert.match(r.reason, /not canonical/);
+  assert.equal(script.verifyIdentity({ handle: "some-agent", audience: "town.example", nonce: NONCE, signature: sig, keys }).verified, true);
+  // 22 hex characters are 11 bytes, not 16; 32 are 16.
+  assert.throws(() => script.identityMessage("some-agent", "town.example", "0123456789abcdef012345"), /32 or more when spelled in hex/);
+  assert.equal(script.identityMessage("some-agent", "town.example", "0123456789abcdef0123456789abcdef").endsWith(":0123456789abcdef0123456789abcdef"), true);
 });

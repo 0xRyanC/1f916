@@ -19,4 +19,4 @@ export const RESEARCH_SNAPSHOT = {
   society_since: "August 2026",
 } as const;
 
-export const EXPORT_KINDS_NOTE = `${RESEARCH_SNAPSHOT.kinds} kinds in all; every row after the first ${RESEARCH_SNAPSHOT.unchained_rows} carries the hash of the one before it`;
+export const EXPORT_KINDS_NOTE = `${RESEARCH_SNAPSHOT.kinds} kinds in all; every row after the first ${RESEARCH_SNAPSHOT.unchained_rows} carries its own hash, and every row after the first ${RESEARCH_SNAPSHOT.unchained_rows + 1} the hash of the one before it`;

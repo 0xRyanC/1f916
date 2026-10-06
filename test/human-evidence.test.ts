@@ -36,7 +36,7 @@ import {
   EVIDENCE_ROUTES,
   EVIDENCE_SETUP_PATH,
   EVIDENCE_STANDARD_SITE,
-  EVIDENCE_TREE_SIZE,
+  EVIDENCE_SNAPSHOT,
   HUMAN_EVIDENCE_HTML,
 } from "../src/human-evidence.ts";
 import { SEAL_TEXT_MAX } from "../src/seals.ts";
@@ -67,16 +67,24 @@ test("the quotations are the text as read, and are shown whole", () => {
   assert.equal(E015_4_EVIDENCE, "Log immutability controls - for example, write-once-read-many (WORM) storage configuration, cryptographic hashing of log entries, append-only database settings, or third-party log management platform features.");
   assert.deepEqual(E015_SIBLINGS.map((s) => `${s.id} ${s.title} ${s.level}`), ["E015.1 Logging implementation mandatory", "E015.2 AI agent logging implementation supplemental", "E015.3 Log storage mandatory"]);
   for (const q of [E015_TEXT, E015_4_TEXT, E015_4_EVIDENCE]) assert.ok(HUMAN_EVIDENCE_HTML.includes(`<blockquote>${esc(q)}</blockquote>`), q.slice(0, 40));
-  assert.ok(HUMAN_EVIDENCE_HTML.includes(`“${E015_TITLE}”, is mandatory:`));
-  assert.ok(HUMAN_EVIDENCE_HTML.includes(`E015.4, “${E015_4_TITLE}”, is supplemental:`));
+  assert.ok(HUMAN_EVIDENCE_HTML.includes(`“${E015_TITLE}”, is labelled mandatory:`));
+  assert.ok(HUMAN_EVIDENCE_HTML.includes(`E015.4, “${E015_4_TITLE}”, is labelled supplemental:`));
+  // The page claims nothing about the standard beyond the cited pages: no purpose, no definition of the labels.
+  assert.doesNotMatch(text, /written for audits|insurance/i);
+  assert.match(text, /The pages read define neither label; we read supplemental as not required/);
 });
 
 test("the page never says the control is required or the record certified", () => {
-  assert.doesNotMatch(text, /\brequired\b|\brequires\b|\bcertified\b|\bcompliant\b|\bcompliance\b|\bendorse/i);
-  assert.match(text, /Supplemental means the standard does not require it/);
+  // "not required" is the one place the word may appear: the page's reading of "supplemental".
+  assert.doesNotMatch(text.replace(/\bnot required\b/g, ""), /\brequired\b|\brequires\b|\bcertified\b|\bcompliant\b|\bcompliance\b|\bendorse/i);
   assert.match(text, /We are not an auditor, certify nothing, and have no connection to the standard's authors/);
   assert.match(text, /what counts as evidence is the auditor's call/);
-  assert.match(text, /It does not prove the record was true or complete/);
+  assert.match(text, /from the first signed head after it was sealed, which is attempted every five minutes with an hourly backstop\. It does not prove the record was true or complete/);
+  assert.match(text, /unless it asks for the text to be kept openly, the registry fingerprints it and keeps nothing/);
+  assert.match(text, /registry's one chain, in which every entry since the chain began commits to the one before it, whoever wrote that one/);
+  assert.match(text, /by a stamp attempted every five minutes with an hourly backstop; witnesses that are not us countersign the heads they see, on schedules of their own/);
+  assert.match(text, /Every event since the chain began has a position in a signed tree/);
+  assert.match(text, /The witnesses registered here, each with the address of its copies and its public key where it gave one/);
   assert.match(text, /Nothing on this page should be read as their answer/);
 });
 
@@ -125,14 +133,15 @@ test("the checker flags are the checker's own", () => {
 
 test("a Bitcoin anchor is never called confirmed", () => {
   assert.doesNotMatch(text, /confirmed (in|on|by) Bitcoin|Bitcoin (anchor|row|copy)s? (is|are|was|were) confirmed/i);
-  assert.match(text, /A Bitcoin row reads\s+pending\s+until the reader confirms it with an OpenTimestamps client; this page calls none of them confirmed/);
+  assert.match(text, /A Bitcoin row stays\s+pending\s+here by design; the reader confirms it with an OpenTimestamps client, and this page calls none of them confirmed/);
   assert.match(text, /offered to Bitcoin \(through OpenTimestamps\), to Base and to the Internet Archive/);
 });
 
 test("the figure and the reading carry their date", () => {
   assert.match(EVIDENCE_READ_DATE, /^\d{1,2} [A-Z][a-z]+ 20\d\d$/);
-  assert.ok(Number.isInteger(EVIDENCE_TREE_SIZE) && EVIDENCE_TREE_SIZE > 0);
-  assert.ok(text.includes(`As of ${EVIDENCE_READ_DATE} the identity log holds ${EVIDENCE_TREE_SIZE.toLocaleString("en-US")} entries.`));
+  // One figure on both pages: the research snapshot's, with the head's coverage and the unchained rows beside it.
+  assert.ok(text.includes(`At the snapshot of ${EVIDENCE_SNAPSHOT.date} the log held ${EVIDENCE_SNAPSHOT.events.toLocaleString("en-US")} entries, of which the newest signed head covered ${EVIDENCE_SNAPSHOT.tree_size.toLocaleString("en-US")}; the first ${EVIDENCE_SNAPSHOT.unchained_rows} were written before the chain began.`));
+  assert.equal(EVIDENCE_SNAPSHOT.events - EVIDENCE_SNAPSHOT.tree_size, EVIDENCE_SNAPSHOT.unchained_rows);
   assert.ok(text.includes(`Read ${EVIDENCE_READ_DATE} from the standard's evidence guidance and its accountability domain at ${EVIDENCE_STANDARD_SITE}.`));
   assert.ok(text.includes(`On ${EVIDENCE_READ_DATE} we sent the standard's authors a suggestion`));
 });

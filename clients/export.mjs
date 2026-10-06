@@ -172,7 +172,7 @@ export async function exportAll({ origin = DEFAULT_ORIGIN, out = "1f916-export",
     rights: "A snapshot of what the registry serves. The rights in the text stay with whoever wrote it; the registry's grant is to serve, chain and seal it (see /terms). Cite the record and carry this notice with any copy.",
     how_to_check: "sha-256 of each file as written; counts are rows. Re-run the script and compare, or compare identity_log_head with GET /api/checkpoint at the time you read.",
   };
-  manifest.manifest_sha256_basis = "sha-256 over the JSON of `files` and `identity_log_head`, in that order, as the manifest writes them";
+  manifest.manifest_sha256_basis = "sha-256 over JSON.stringify(files) followed by JSON.stringify(identity_log_head): compact JSON, key order as written here, no separator between the two";
   manifest.fingerprint = sha256File([JSON.stringify(manifest.files), JSON.stringify(manifest.identity_log_head)]);
   writeFileSync(join(out, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n");
   return manifest;
