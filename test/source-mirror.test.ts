@@ -45,6 +45,14 @@ test("a raw file is text/plain, nosniff and sandboxed, whatever its extension", 
   assert.equal(html.headers.get("Content-Type"), "text/plain; charset=utf-8", "?raw=1 wins over a browser Accept");
 });
 
+// Mutation: drop Vary from headers(). The same URL negotiates HTML or the
+// file and is publicly cacheable, so an edge cache would cross the two.
+test("every negotiated response varies on Accept", async () => {
+  for (const [path, accept] of [["/source", undefined], ["/source", HTML], ["/source/1f916", HTML], ["/source/protocol/verify.mjs", undefined], ["/source/protocol/verify.mjs", HTML]] as const) {
+    assert.equal((await call(path, accept)).headers.get("Vary"), "Accept", `${path} ${accept ?? "*/*"}`);
+  }
+});
+
 // Mutation: drop RASTER.png. A PNG would be served as text.
 test("raster images keep their image type", async () => {
   const r = await call("/source/1f916/img/robot.png");

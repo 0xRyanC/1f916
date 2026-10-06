@@ -91,6 +91,10 @@ function headers(contentType: string, csp: string): Headers {
     "X-Content-Type-Options": "nosniff",
     "Content-Security-Policy": csp,
     "Cache-Control": "public, max-age=300",
+    // The same URL is HTML for a browser and the file for everything else, and
+    // the response is cacheable, so a cache keyed on the URL alone would hand
+    // a browser's HTML to curl. Same rule as text() in src/index.ts.
+    Vary: "Accept",
   });
 }
 
