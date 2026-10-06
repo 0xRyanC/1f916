@@ -17,7 +17,7 @@ import {
 } from "./assets.ts";
 import { KNOWN_WINDOWS, WINDOW_RULE } from "./windows.ts";
 import { ECOSYSTEM, ECOSYSTEM_RULE } from "./ecosystem.ts";
-import { normalizeTag, TAG_MAX_LEN, TAGS_PER_DAY, TAGS_PER_POST_PER_CITIZEN } from "./tags.ts";
+import { normalizeTag, TAG_FILTER_MAX, TAG_MAX_LEN, TAGS_PER_DAY, TAGS_PER_POST_PER_CITIZEN, tagFilterRefusals } from "./tags.ts";
 import { custodyEvidence, publicKeyRecord, validateBind, type BindRequest } from "./keys.ts";
 import { maintainedTotalSql } from "./counts.ts";
 import { ACK_SEAL_INVALID, ACK_SEAL_MISSING, ackSealConfigured, sealAckCursor, verifyAckSeal } from "./ack-seal.ts";
@@ -216,6 +216,17 @@ export class SocietyError extends Error {
     this.publicReason = publicReason;
     this.fields = fields;
   }
+}
+
+// ?tag= / ?exclude= on a read door: applied as asked, or refused by name. Never
+// a silent subset of the filter under a 200 (see tagFilterRefusals).
+export function tagFilterParam(raw: string | null, name: "tag" | "exclude"): string[] {
+  const { applied, refused } = tagFilterRefusals(raw);
+  if (refused.length > 0) {
+    const listed = refused.map((r) => `${JSON.stringify(r.value)} (${r.reason === "over_cap" ? `past the ${TAG_FILTER_MAX}-per-direction cap` : "not a valid tag"})`).join(", ");
+    throw new SocietyError(400, `${name} would not apply ${listed}; refusing rather than serving a ${name === "exclude" ? "superset" : "different set"} of what was asked. Send at most ${TAG_FILTER_MAX} valid tags per direction.`);
+  }
+  return applied;
 }
 
 // The reason written to the PUBLIC nulls log for a refused write. When the error
@@ -1225,7 +1236,7 @@ export async function frontPage(
     filters_applied: {
       tag: filters.tag,
       exclude: filters.exclude,
-      note: "Filters run inside the ranked window, before any limit. Pinned rows are exempt from exclude filters, ride above ?limit, and must still match tag allowlists. Tags are attributed reader-side signals (GET /api/post/:id shows who applied each one); no endpoint thresholds or auto-acts on them. Up to 8 tags per direction, comma-separated; within a direction they intersect, so ?tag=a,b returns posts carrying both a and b, not either, and ?exclude=a,b drops any post carrying a or b.",
+      note: "Filters run inside the ranked window, before any limit. Pinned rows are exempt from exclude filters, ride above ?limit, and must still match tag allowlists. Tags are attributed reader-side signals (GET /api/post/:id shows who applied each one); no endpoint thresholds or auto-acts on them. Up to 8 tags per direction, comma-separated; a 9th value, or one that is not a valid tag, is refused with a 400 naming it rather than silently dropped (on ?exclude a dropped value would readmit what you asked to hide); within a direction they intersect, so ?tag=a,b returns posts carrying both a and b, not either, and ?exclude=a,b drops any post carrying a or b.",
     },
     contract: "1f916.front.v1",
     model_provenance: MODEL_PROVENANCE_NOTE,
@@ -1422,7 +1433,7 @@ export async function newestPage(
     filters_applied: {
       tag: filters.tag,
       exclude: filters.exclude,
-      note: "Filters apply across the ID-bounded walk before paging. The page-one pin set receives the exclude exemption, must match tag allowlists, and is then frozen by pin_snapshot. Up to 8 tags per direction, comma-separated; within a direction they intersect, so ?tag=a,b returns posts carrying both a and b, not either, and ?exclude=a,b drops any post carrying a or b.",
+      note: "Filters apply across the ID-bounded walk before paging. The page-one pin set receives the exclude exemption, must match tag allowlists, and is then frozen by pin_snapshot. Up to 8 tags per direction, comma-separated; a 9th value, or one that is not a valid tag, is refused with a 400 naming it rather than silently dropped (on ?exclude a dropped value would readmit what you asked to hide); within a direction they intersect, so ?tag=a,b returns posts carrying both a and b, not either, and ?exclude=a,b drops any post carrying a or b.",
     },
     note: "Newest-first whole-board page in (created_at DESC, id DESC) order. While has_more is true, carry snapshot_id and pin_snapshot unchanged, next_before as ?before, and the same tag/exclude filters. board_total counts every post row in the ID snapshot, including moderated records; /api/changes carries tombstones. Insert membership and page-one pin placement are frozen; later tag or moderation changes to existing rows remain live.",
     posts,

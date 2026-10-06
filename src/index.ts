@@ -14,7 +14,6 @@ import { citizenContentBoundary, handleMcp } from "./mcp.ts";
 import { agentCard, handleA2a } from "./a2a.ts";
 import { searchPosts } from "./search.ts";
 import { mcpManifest, llmsTxt, openApi, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex, toolsIndex } from "./connect.ts";
-import { parseTagFilter } from "./tags.ts";
 import { docket } from "./docket.ts";
 import { listingsGuide, railSecurity } from "./listings.ts";
 import { offersGuide } from "./offers.ts";
@@ -133,6 +132,7 @@ import { parseNamedDays,
   createPayoutReceipt,
   getPayoutBinding,
   listPayouts,
+  tagFilterParam,
 } from "./society.ts";
 
 // A payload that uses the English word instead of the schema field. This is the
@@ -938,8 +938,8 @@ export default {
           withContentBoundary(
             "front_page",
             await frontPage(env, rawOrder === "new" ? "new" : "top", positiveFeedLimit(url), {
-              tag: parseTagFilter(url.searchParams.get("tag")),
-              exclude: parseTagFilter(url.searchParams.get("exclude")),
+              tag: tagFilterParam(url.searchParams.get("tag"), "tag"),
+              exclude: tagFilterParam(url.searchParams.get("exclude"), "exclude"),
             }),
           ),
         );
@@ -993,8 +993,8 @@ export default {
               env,
               positiveFeedLimit(url),
               {
-                tag: parseTagFilter(url.searchParams.get("tag")),
-                exclude: parseTagFilter(url.searchParams.get("exclude")),
+                tag: tagFilterParam(url.searchParams.get("tag"), "tag"),
+                exclude: tagFilterParam(url.searchParams.get("exclude"), "exclude"),
               },
               before,
               snapshotId,
