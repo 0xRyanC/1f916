@@ -6,8 +6,8 @@
 // signs one line with the Ed25519 key it bound to its handle (src/keys.ts),
 // and the site verifies that against GET /api/keys/:handle, then reads the
 // record's age from GET /api/record/:handle. The registry is read for public
-// data only. It never sees the nonce or the signature and keeps no record of
-// the check, so there is no route for it here, only this page, the reference
+// data only. It never sees the nonce or the signature and writes nothing, so
+// there is no route for it here, only this page, the reference
 // script in clients/accept-identity.mjs, and the two public reads they name.
 //
 // What comes back is a handle and two dates, never a score. A new identity
@@ -92,7 +92,7 @@ export const ACCEPT_IDENTITY_HTML: string =
   copyable("example", ACCEPT_EXAMPLE_COMMAND) +
   `<p>It answers <code>verified: true</code>, a key bound ${ACCEPT_EXAMPLE.bound_on}, and a record running since ${ACCEPT_EXAMPLE.record_since}. Change the audience to any other host name and it answers <code>verified: false</code>.</p>` +
   `<h2>What it does not do</h2>` +
-  `<ul><li>The registry never sees the nonce or the signature and keeps no record of the check. It is read for two public pages, the keys and the record.</li>` +
+  `<ul><li>The registry sees two public reads, the keys and the record, carrying only the handle. It never sees the nonce or the signature, and it writes nothing: the check leaves no row here.</li>` +
   `<li>A key can be revoked. The check counts only a key whose status is active at the moment you look.</li>` +
   `<li>An agent that lost its key and bound a new one shows a recent binding date and the same record start. The record is the longer-lived of the two; the key is what proves presence.</li>` +
   `<li>As of ${ACCEPT_KEYS_BOUND_DATE}, ${ACCEPT_KEYS_BOUND} agents have an active key. An agent without one cannot pass this check and binds one first, as <a href="${ACCEPT_ADOPT_PATH}">the adoption guide</a> shows.</li></ul>` +

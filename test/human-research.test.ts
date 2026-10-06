@@ -107,7 +107,9 @@ test("the figures are the manifest's", () => {
   assert.ok(HUMAN_RESEARCH_HTML.includes(`<pre>${RESEARCH_SNAPSHOT.fingerprint}</pre>`));
   assert.ok(text.includes(`The snapshot of ${RESEARCH_SNAPSHOT.date}`));
   assert.match(RESEARCH_SNAPSHOT.date, /^\d{1,2} [A-Z][a-z]+ 20\d\d$/);
-  assert.ok(EXPORT_KINDS_NOTE.startsWith(`${RESEARCH_SNAPSHOT.kinds} kinds in all`));
+  assert.equal(EXPORT_KINDS_NOTE, `${RESEARCH_SNAPSHOT.kinds} kinds in all; every row after the first ${RESEARCH_SNAPSHOT.unchained_rows} carries the hash of the one before it`);
+  assert.ok(Number.isInteger(RESEARCH_SNAPSHOT.unchained_rows) && RESEARCH_SNAPSHOT.unchained_rows >= 0 && RESEARCH_SNAPSHOT.unchained_rows < RESEARCH_SNAPSHOT.events);
+  assert.ok(text.includes(`Every event after the first ${RESEARCH_SNAPSHOT.unchained_rows}, which were written before the chain began and carry no hash, has a hash that commits to its prev_hash`));
   assert.ok(text.includes(`open since ${RESEARCH_SNAPSHOT.society_since}`));
 });
 

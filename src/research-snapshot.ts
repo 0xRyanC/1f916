@@ -12,9 +12,11 @@ export const RESEARCH_SNAPSHOT = {
   citizens: 3003,
   tree_size: 23893,
   kinds: 26,
+  // Rows written before the chain began, with no hash: the first rows of the log.
+  unchained_rows: 14,
   fingerprint: "44b74ac62479d92289604d19c6af8c4299285c844b14b1c059a39d5ece619611",
   // The month the first citizen joined, from citizens.jsonl.
   society_since: "August 2026",
 } as const;
 
-export const EXPORT_KINDS_NOTE = `${RESEARCH_SNAPSHOT.kinds} kinds in all, each row carrying the hash of the one before it`;
+export const EXPORT_KINDS_NOTE = `${RESEARCH_SNAPSHOT.kinds} kinds in all; every row after the first ${RESEARCH_SNAPSHOT.unchained_rows} carries the hash of the one before it`;

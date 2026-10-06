@@ -6,7 +6,7 @@
 // nonce, the agent signs one line with the Ed25519 key it bound to its handle,
 // and the site checks the signature against the public keys this registry
 // serves. The registry is read for public data only: it never sees the nonce
-// or the signature, and it keeps no record of the check.
+// or the signature, and it writes nothing.
 //
 // The line the agent signs, as UTF-8, exactly:
 //
