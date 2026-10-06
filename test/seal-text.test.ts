@@ -350,7 +350,7 @@ test("check_only that is neither true nor false is refused and writes nothing, h
   await sealOrCompare(env, citizen, { text: original, label: "core" });
   const before = written(db);
   for (const bad of [1, 0, "True", "TRUE", "yes", "on", "1", " true ", "", [true], { a: 1 }] as unknown[]) {
-    await rejects400(() => sealOrCompare(env, citizen, { text: tampered, label: "core", check_only: bad }), /check_only must be true or false/);
+    await rejects400(() => sealOrCompare(env, citizen, { text: tampered, label: "core", check_only: bad }), /check_only must be true or false.*No seal and no check was written$/);
     assert.deepEqual(written(db), before, `check_only: ${JSON.stringify(bad)} wrote something`);
   }
   const newest = db.prepare("SELECT hash FROM seals WHERE citizen_id = 1 AND label = 'core' ORDER BY id DESC LIMIT 1").get() as { hash: string };
@@ -418,4 +418,40 @@ test("a bad signature is explained to the caller in full and to the public log w
   const ok = (await sealOrCompare(env, citizen, { text, label, signature: right })) as Record<string, unknown>;
   assert.equal(ok.sealed, true);
   assert.equal(ok.signed, true);
+});
+
+// Round 1 of the second deploy audit, 2026-10-06: the guard for "check_only
+// with nothing to compare" tested `typeof text === "string"`, so a text of
+// 123, [] or {} counted as nothing sent. The caller was told to "send the
+// content as text" when it had sent text of the wrong type, and the public
+// reason said nothing was sent. A wrong type is something sent, and
+// validateSeal is where it is named.
+test("check_only with a text that is not a string is told the text must be a string, not that nothing was sent", async () => {
+  const { env, db, citizen } = fixture();
+  for (const bad of [123, [], {}, true] as unknown[]) {
+    const e = await refusal(() => sealOrCompare(env, citizen, { label: "notes", check_only: true, text: bad }));
+    assert.equal(e.status, 400);
+    assert.match(e.message, /text must be a string/);
+    assert.doesNotMatch(e.message, /check_only needs something to compare/);
+    assert.doesNotMatch(nullReasonFor(e), /nothing sent to compare with/);
+  }
+  assert.deepEqual(written(db), { seals: 0, checks: 0, events: 0 });
+});
+
+// The corrections below were each made because a served sentence claimed
+// more than the code does. None was pinned, so each could be reverted with
+// the suite green (second deploy audit, 2026-10-06). Killing mutation: put
+// any of the old phrases back, red.
+test("served sentences on the seal door say what is not written and how text is fingerprinted, and not the phrases they replaced", () => {
+  const society = readFileSync(fileURLToPath(new URL("../src/society.ts", import.meta.url)), "utf8");
+  const route = SURFACE_SRC.split("\n").find((l) => l.includes('path: "/api/seal"') && l.includes('method: "POST"')) ?? "";
+  assert.ok(route.includes("A check_only with neither `hash` nor `text` to compare is refused with 400 and writes no seal and no check."));
+  assert.ok(!/writes nothing/.test(route), "a refused write is counted in the nulls log, so 'writes nothing' is not true");
+  assert.match(society, /check_only must be true or false\. Anything else is refused rather than guessed at: [^"]*No seal and no check was written"/);
+  assert.ok(!/it was sent to test\. Nothing was written/.test(society));
+  assert.match(SEAL_FROM_TEXT_NOTE, /over the UTF-8 bytes of the text as it received it/);
+  assert.ok(!/exactly as sent/.test(SEAL_FROM_TEXT_NOTE), "the registry cannot vouch for bytes before they were decoded");
+  const tool = MCP.slice(MCP.indexOf('name: "seal",'), MCP.indexOf('name: "record_mandate",'));
+  assert.match(tool, /fingerprinted over the UTF-8 bytes of the text as received, and not stored/);
+  assert.ok(!/exactly as sent/.test(tool));
 });

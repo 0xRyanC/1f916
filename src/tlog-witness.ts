@@ -50,6 +50,11 @@ export const MAX_PROOF_LINES = 63;
 // refused. The format lets a verifier reject the future; a few minutes of
 // skew between two honest machines is not the future.
 export const FUTURE_SKEW_SECONDS = 300;
+// A witness's answer is a handful of signature lines or one number. Anything
+// longer than this is not an answer this code will parse. The request's
+// timeout is the caller's: `fetchImpl` is handed in, and whoever wires this
+// to a schedule must give it one.
+export const MAX_ANSWER_CHARS = 16_384;
 
 function b64(bytes: Uint8Array): string {
   let s = "";
@@ -192,6 +197,11 @@ export async function verifyCosignatureV1(line: string, key: WitnessKey, checkpo
   const big = view.getBigUint64(0, false);
   if (big > BigInt(Number.MAX_SAFE_INTEGER)) return null;
   const timestamp = Number(big);
+  // A witness must not send a zero timestamp for a whole-tree cosignature.
+  if (timestamp === 0) return null;
+  // A clock that is not a number judges nothing, and a comparison with NaN is
+  // always false, which would wave every timestamp through. Refuse instead.
+  if (nowMs !== undefined && !Number.isFinite(nowMs)) return null;
   if (nowMs !== undefined && timestamp > Math.floor(nowMs / 1000) + FUTURE_SKEW_SECONDS) return null;
   if (!checkpointText.endsWith("\n")) return null;
   const message = te.encode(`cosignature/v1\ntime ${timestamp}\n${checkpointText}`);
@@ -216,8 +226,9 @@ export interface SubmitArgs {
 
 export type SubmitResult =
   | { kind: "cosigned"; size: number; oldSize: number; attempts: number; verified: { line: string; timestamp: number }[]; unverified: string[] }
-  // The witness has already signed a size at or past this checkpoint. Nothing
-  // is wrong and nothing is owed: the next, larger checkpoint is the one to send.
+  // The witness has already signed a size past this checkpoint. Nothing is
+  // wrong and nothing is owed: the next, larger checkpoint is the one to send.
+  // (A witness at exactly this size is asked again and signs it again.)
   | { kind: "witness-ahead"; size: number; witnessSize: number; attempts: number }
   | { kind: "refused"; answer: WitnessAnswer; attempts: number }
   // The witness answered 200 and none of its lines is its valid cosignature
@@ -243,7 +254,8 @@ export async function submitCheckpoint(args: SubmitArgs): Promise<SubmitResult> 
       const body = addCheckpointBody(oldSize, proof, args.note);
       attempts++;
       const res = await args.fetchImpl(`${args.url}/add-checkpoint`, { method: "POST", body, headers: { "content-type": "text/plain; charset=utf-8" } });
-      answer = readWitnessAnswer(res.status, await res.text());
+      const text = await res.text();
+      answer = text.length > MAX_ANSWER_CHARS ? { kind: "malformed", status: res.status, reason: "the answer is longer than a witness's answer can be" } : readWitnessAnswer(res.status, text);
     } catch (e) {
       return { kind: "network-error", message: String(e).slice(0, 200), attempts };
     }

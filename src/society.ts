@@ -7608,10 +7608,13 @@ export async function sealOrCompare(env: Env, citizen: Citizen, body: SealInput)
   // through to the seal-door fingerprint rule answered the generic
   // "hash must be 64 hex chars" 400, a message that never mentions check_only
   // and orders the caller to compute a fingerprint it never intended to send.
-  // Refused as itself, before validateSeal, writing nothing (live probe,
+  // Refused as itself, before validateSeal, writing no seal and no check (live probe,
   // 2026-10-06: POST /api/seal {label, check_only} answered the hash wording).
   const checkHasHash = body.hash !== undefined && body.hash !== null && body.hash !== "";
-  const checkHasText = typeof body.text === "string" && body.text.length > 0;
+  // A `text` that is not a string is still something sent: it falls through
+  // to validateSeal, which names the mistake ("text must be a string"). Only
+  // absent, null and empty mean nothing came (deploy audit, 2026-10-06).
+  const checkHasText = body.text !== undefined && body.text !== null && body.text !== "";
   if (!checkHasHash && !checkHasText)
     throw new SocietyError(
       400,
