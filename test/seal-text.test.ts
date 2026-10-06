@@ -24,6 +24,8 @@
 //   - drop the cap: 16,001 characters seal, red.
 //   - drop the non-string refusal: a number sent as text beside a valid hash
 //     seals the hash, red.
+//   - read the seal budget before deciding seal or check again: an unchanged
+//     hash on a spent budget is refused 429, and so is a malformed one, red.
 //   - make the door ignore check_only (`if (true) return await sealMemory`):
 //     a difference inserts a second seal, and a look on a spent budget is
 //     refused 429, red.
@@ -281,6 +283,23 @@ test("check_only still answers when the day's seal budget is spent", async () =>
   const match = (await sealOrCompare(env, citizen, { hash: last, label: "bulk", check_only: true })) as Record<string, unknown>;
   assert.equal(match.checked, true);
   assert.equal(count(db, "seals"), SEALS_PER_DAY);
+});
+
+test("an unchanged hash is a check on a spent seal budget, and a malformed one is named, not counted", async () => {
+  const { env, db, citizen } = fixture();
+  const now = Date.now();
+  const insert = db.prepare("INSERT INTO seals (citizen_id, hash, label, sealed_at) VALUES (1, ?, 'bulk', ?)");
+  for (let i = 0; i < SEALS_PER_DAY; i++) insert.run(sha(`bulk-${i}`), now - 1000);
+  // Without check_only too: re-sending the latest fingerprint writes a check,
+  // which has its own budget, so the spent seal budget has nothing to refuse.
+  const last = sha(`bulk-${SEALS_PER_DAY - 1}`);
+  const resent = (await sealOrCompare(env, citizen, { hash: last, label: "bulk" })) as Record<string, unknown>;
+  assert.equal(resent.checked, true);
+  assert.equal(count(db, "seals"), SEALS_PER_DAY);
+  await rejects400(() => sealOrCompare(env, citizen, { hash: "nope", label: "bulk" }), /64 hex chars/);
+  // A real seal is still refused.
+  const spent = await refusal(() => sealOrCompare(env, citizen, { hash: sha("new"), label: "bulk" }));
+  assert.equal(spent.status, 429);
 });
 
 test("check_only does not open the reserved labels: a look under them is refused like a seal", async () => {
