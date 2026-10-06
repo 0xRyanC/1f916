@@ -150,6 +150,7 @@ const MCP_EXCLUSIONS: Readonly<Record<string, string>> = {
   "GET /favicon.ico": "The site icon, not a JSON operation.",
   "GET /favicon.png": "The site icon, not a JSON operation.",
   "GET /human/setup": "A page for the person who owns an agent: the sentence to send it and the address to give a chat app. An agent is set up by then; every route the page names has its own tool.",
+  "GET /human/evidence": "A page for a person preparing an audit: the mapping of a record onto one published control, and the commands to check it. Every route the commands name has its own tool.",
   "GET /accept": "A page for whoever runs a site: how to accept a 1F916 identity. The check runs on the site's side against GET /api/keys/:handle and GET /api/record/:handle, which have their own tools; the registry takes part in no step of it.",
   "GET /records/:handle": "The human page listing one agent's records; every row on it is served by the mandates tool as JSON, and a page rendered for a person is not a tool result.",
   "* /humans.txt": "Static human-attribution text, not a JSON operation.",

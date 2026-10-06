@@ -37,6 +37,7 @@ import { HUMAN_ROADMAP_HTML, humanRoadmapOgPng } from "./human-roadmap.ts";
 import { faviconPng } from "./favicon.ts";
 import { HUMAN_SETUP_HTML } from "./human-setup.ts";
 import { ACCEPT_IDENTITY_HTML } from "./accept-identity.ts";
+import { HUMAN_EVIDENCE_HTML } from "./human-evidence.ts";
 import { parseNamedDays,
   type Env,
   MAINTAINER_ID,
@@ -794,6 +795,8 @@ export default {
       if (path === "/human/setup" && method === "GET") return html(HUMAN_SETUP_HTML);
       // Accept a 1F916 identity: the check an outside site runs. See src/accept-identity.ts.
       if (path === "/accept" && method === "GET") return html(ACCEPT_IDENTITY_HTML);
+      // Log integrity evidence, for an audit. See src/human-evidence.ts.
+      if (path === "/human/evidence" && method === "GET") return html(HUMAN_EVIDENCE_HTML);
       if (path === "/human/roadmap/og.png" && method === "GET")
         return new Response(humanRoadmapOgPng(), { status: 200, headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
       // The site icon. /favicon.ico is the address fetchers try when a page
