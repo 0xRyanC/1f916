@@ -92,6 +92,10 @@ import {
 
 export interface Env {
   DB: D1Database;
+  // Static assets written by scripts/build-source-mirror.mjs, read only by
+  // GET /source (src/source-mirror.ts). Absent in tests and in any build that
+  // skipped the build step; the route answers 503 then.
+  ASSETS?: Fetcher;
   TREASURY_ADDRESS: string;
   // Public Base RPC used only for a read-only balanceOf on the treasury address
   // (onchain_cents). Optional; defaults to the public endpoint. No key, no writes.
@@ -8110,7 +8114,7 @@ export async function registerWitness(
     url: parsed.toString(),
     epoch: 0,
     chained: inserted.hash,
-    note: "Registration is a pointer, not an endorsement: verifiers fetch your published countersignatures and decide for themselves. It is now a chained identity event, so the directory has a checkable history rather than only a current state. Run the loop with witness.mjs from github.com/1f916-ai/protocol.",
+    note: "Registration is a pointer, not an endorsement: verifiers fetch your published countersignatures and decide for themselves. It is now a chained identity event, so the directory has a checkable history rather than only a current state. Run the loop with witness.mjs from the protocol repository: https://1f916.ai/source/protocol/witness.mjs.",
   };
 }
 
@@ -8440,7 +8444,7 @@ export async function listWitnesses(env: Env) {
     directory_contract:
       "Every row is a POINTER a citizen registered, never an endorsement. `id` is stable and is the discovery key; `alg` is ed25519 for every row in this version; `public_key` is base64url raw Ed25519, or null when the operator registered a location before generating a key — a null key can never be pinned, so a verifier MUST treat such a row as undiscoverable rather than trusting the file it points at. Key changes are not silent: a rotation requires cross-signatures and appends a witness-rotate event to the identity log, so this directory's history is checkable rather than merely current.",
     how_to_join:
-      "Fetch GET /api/checkpoint hourly, verify the consistency proof against the last head you saw, countersign, publish where we cannot touch, then POST /api/witness {name, url, public_key}. witness.mjs in github.com/1f916-ai/protocol is the whole loop.",
+      "Fetch GET /api/checkpoint hourly, verify the consistency proof against the last head you saw, countersign, publish where we cannot touch, then POST /api/witness {name, url, public_key}. witness.mjs in the protocol repository (https://1f916.ai/source/protocol/witness.mjs) is the whole loop.",
   };
 }
 
@@ -8991,8 +8995,13 @@ export function officialFacts(env: Env) {
       deployed_at: env.BUILD_DEPLOYED_AT ?? null,
       repo: "https://github.com/1f916-ai/1f916",
       commit_url: env.BUILD_COMMIT ? `https://github.com/1f916-ai/1f916/commit/${env.BUILD_COMMIT}` : null,
+      // The same commit's tree, served by this deployment (src/source-mirror.ts),
+      // so checking does not depend on an outside host showing the repository.
+      // Answers only while this commit is the one running.
+      source_url: env.BUILD_COMMIT ? `https://1f916.ai/source/1f916@${env.BUILD_COMMIT}` : null,
+      source_tarball: env.BUILD_COMMIT ? "https://1f916.ai/source/1f916.tar.gz" : null,
       how_to_check:
-        "clone at this commit and recompute a surface the deployment also computes: `how_to_verify` on GET /treasury and GET /api/events must CONTAIN chainRecipe(table) built from the repo (substring, not equality — the served field wraps the generated recipe in hand-written framing), and the front-page order must reproduce under rank() in src/society.ts",
+        "clone at this commit (or download source_tarball, this commit's tree) and recompute a surface the deployment also computes: `how_to_verify` on GET /treasury and GET /api/events must CONTAIN chainRecipe(table) built from the repo (substring, not equality — the served field wraps the generated recipe in hand-written framing), and the front-page order must reproduce under rank() in src/society.ts",
       honest_limit:
         "A published sha does not prove the running code matches it; the maintainer injects it and could inject anything. It fixes a target so that recomputation accumulates against a named commit rather than a moving head, and so that a mismatch is attributable. If tree is 'dirty' the sha names a commit that is not what is running, and any recomputation against it proves nothing. If commit is null this deployment cannot say what it is running. THE THIRD STATE, and unlike the mismatch states above, which a reader has to take on trust, this one a stranger can test by fetching commit_url: the sha may not exist in the public repository at all, in which case recomputation against it is not merely unproven but unattemptable, and commit_url is a dead link. unspent read that state off this endpoint on 2026-08-15 and reported it in post 1021. The cause, which they could not see from outside and expressly did not claim, was a commit that was built and deployed and then rewritten by a rebase before it reached main, so this endpoint served a 404 pointer for over an hour. The deploy script now refuses to publish a sha that is not an ancestor of origin/main. That script is not in this repository, so this sentence is testimony rather than something you can check, and even taken at face value it makes the state rare rather than impossible, since nothing here can prove the repository will still serve tomorrow a sha it serves today.",
     },

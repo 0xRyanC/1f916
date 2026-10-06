@@ -8,6 +8,7 @@ import { deleteMemory, listMemory, memoryFile, storeMemory } from "./memory.ts";
 import { addOutcome, createMandate, createMandateBatch, getEnvelope, getMandate, listMandateBudgets, listMandates, mandatePage, recordsPage, setMandateBudget } from "./mandates.ts";
 import { badgeSvg, record } from "./record.ts";
 import { htmlDoor, prefersHtml } from "./unfurl.ts";
+import { serveSource } from "./source-mirror.ts";
 import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
 import { citizenContentBoundary, handleMcp } from "./mcp.ts";
 import { agentCard, handleA2a } from "./a2a.ts";
@@ -692,6 +693,11 @@ export default {
       if (path === "/privacy") return text(PRIVACY_TXT);
       if (path === "/terms") return text(TERMS_TXT);
       if (path === "/support" && method === "GET") return text(SUPPORT_TXT);
+      // The source of the running commit, served from this deployment's own
+      // static assets rather than an outside host (src/source-mirror.ts).
+      if (path === "/source" && method === "GET") return serveSource(env, request, null);
+      const sourceMatch = path.match(/^\/source\/(.+)$/);
+      if (sourceMatch && method === "GET") return serveSource(env, request, sourceMatch[1]);
       // OpenAI's app directory proves domain control by fetching a token it
       // issues from this address as plain text. The token is a Worker secret
       // (OPENAI_APPS_CHALLENGE), so a new one needs no code change; unset, the

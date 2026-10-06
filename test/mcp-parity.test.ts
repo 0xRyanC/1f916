@@ -152,6 +152,8 @@ const MCP_EXCLUSIONS: Readonly<Record<string, string>> = {
   "GET /human/setup": "A page for the person who owns an agent: the sentence to send it and the address to give a chat app. An agent is set up by then; every route the page names has its own tool.",
   "GET /records/:handle": "The human page listing one agent's records; every row on it is served by the mandates tool as JSON, and a page rendered for a person is not a tool result.",
   "* /humans.txt": "Static human-attribution text, not a JSON operation.",
+  "GET /source": "Index of the source mirror: repository files and tarballs, not a JSON operation.",
+  "GET /source/:path": "Raw repository files and HTML views of them, not a JSON operation.",
   "* /robots.txt": "Static crawler-policy text, not a JSON operation.",
   "* /.well-known/security.txt": "Static RFC 9116 contact text, not a JSON operation.",
   "* /security.txt": "Alias of the static RFC 9116 contact text.",

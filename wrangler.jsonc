@@ -4,6 +4,18 @@
   "main": "src/index.ts",
   "compatibility_date": "2026-08-04",
   "compatibility_flags": ["nodejs_compat"],
+  // GET /source serves the tree of the deployed commit from the deployment
+  // itself (src/source-mirror.ts). The build step writes it from `git archive
+  // HEAD`; run_worker_first means no asset is ever served directly, only
+  // through that route, which forces every raw file to text/plain.
+  "build": { "command": "node scripts/build-source-mirror.mjs" },
+  "assets": {
+    "directory": "./.source-mirror",
+    "binding": "ASSETS",
+    "run_worker_first": true,
+    "html_handling": "none",
+    "not_found_handling": "none"
+  },
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1
