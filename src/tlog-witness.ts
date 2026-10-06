@@ -255,7 +255,12 @@ export async function submitCheckpoint(args: SubmitArgs): Promise<SubmitResult> 
       attempts++;
       const res = await args.fetchImpl(`${args.url}/add-checkpoint`, { method: "POST", body, headers: { "content-type": "text/plain; charset=utf-8" } });
       const text = await res.text();
-      answer = text.length > MAX_ANSWER_CHARS ? { kind: "malformed", status: res.status, reason: "the answer is longer than a witness's answer can be" } : readWitnessAnswer(res.status, text);
+      // Only a 200 and a 409 carry a body this code parses. Any other status
+      // is read by its status alone, so a long error page from a proxy does
+      // not turn "unknown log" into "malformed". The bound limits what is
+      // parsed, not what was read: capping the read is `fetchImpl`'s job.
+      const hasBody = res.status === 200 || res.status === 409;
+      answer = hasBody && text.length > MAX_ANSWER_CHARS ? { kind: "malformed", status: res.status, reason: "the answer is longer than a witness's answer can be" } : readWitnessAnswer(res.status, hasBody ? text : "");
     } catch (e) {
       return { kind: "network-error", message: String(e).slice(0, 200), attempts };
     }
@@ -263,7 +268,9 @@ export async function submitCheckpoint(args: SubmitArgs): Promise<SubmitResult> 
       const verified: { line: string; timestamp: number }[] = [];
       const unverified: string[] = [];
       for (const line of answer.lines) {
-        const ok = await verifyCosignatureV1(line, args.key, parsed.body, args.nowMs);
+        // A line this runtime cannot check must never throw its way out of a
+        // scheduled job: it is set aside like any other unverified line.
+        const ok = await verifyCosignatureV1(line, args.key, parsed.body, args.nowMs).catch(() => null);
         if (ok) verified.push({ line, timestamp: ok.timestamp });
         else unverified.push(line);
       }
