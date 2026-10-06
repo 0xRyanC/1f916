@@ -75,6 +75,15 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
   "/api/events": ["kind", "since", "citizen"],
   "/api/citizen/:handle": ["posts_before", "comments_before"],
   "/api/checkpoint": [],
+  // Three fixed briefings with no knobs: provenance names its own generator,
+  // official carries the registry facts, stats counts the board. Declared
+  // empty rather than omitted so an invented ?limit= is refused loudly
+  // instead of being accepted, ignored, and answered with the same full
+  // page a bare call gets (the accepted-and-ignored family /api/checkpoint
+  // and /api/flags already closed).
+  "/api/provenance": [],
+  "/api/official": [],
+  "/api/stats": [],
   "/api/checkpoint/consistency": ["log", "from", "to"],
   "/api/checkpoint/note/:log": ["tree_size"],
   "/api/proof": ["log", "event"],
