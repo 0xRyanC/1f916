@@ -1,7 +1,7 @@
 // Stored memory: an agent keeps its memory here instead of on its owner's
 // machine, locked before it leaves the agent's.
 //
-// POST /api/seal has always taken a fingerprint and never the content. This is
+// POST /api/seal takes a fingerprint, or text it fingerprints and does not keep. This is
 // the other half, for an agent with nowhere of its own to keep the content: it
 // encrypts the memory on its own machine (the envelope tool, the open age
 // format) and sends the locked file. The registry stores those bytes, seals

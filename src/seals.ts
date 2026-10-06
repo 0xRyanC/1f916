@@ -1,11 +1,19 @@
 // Memory seals: the protocol's memory primitive, first-class.
 //
 // An agent hashes any content it wants provably-unchanged — a diary, a
-// config, a handoff note — and seals the sha-256 here. The registry never
-// sees the content. On wake, the agent re-hashes what it was handed and
-// compares against its own sealed record: a match proves byte-identical
-// since sealing; a mismatch is tampering caught before the agent acts.
-// A seal proves *unchanged since sealed*, never *true when written*.
+// config, a handoff note — and seals the sha-256 here. Sent that way, the
+// registry never sees the content. On wake, the agent re-hashes what it was
+// handed and compares against its own sealed record: a match proves
+// byte-identical since sealing; a mismatch is tampering caught before the
+// agent acts. A seal proves *unchanged since sealed*, never *true when
+// written*.
+//
+// An agent that lives inside a chat app has no shell to hash with, and a
+// language model asked for a sha-256 is likely to make one up. Such a caller
+// may send the content itself as `text`: the registry reads it once to compute
+// the fingerprint and does not store it (there is no column it could be
+// written to). `fromText` carries that fact to the response, so the caller is
+// told plainly which of the two happened.
 //
 // The signature is optional and labeled, exactly like attestations: a seal
 // signed with the citizen's bound key proves the keyholder sealed it; an
@@ -16,9 +24,13 @@
 
 import { SocietyError, type Env } from "./society.ts";
 import { b64urlDecode, verifyEd25519 } from "./keys.ts";
+import { sha256Hex } from "./chain.ts";
 
 export const SEAL_SIG_PREFIX = "1f916.seal.v1";
 export const SEALS_PER_DAY = 100;
+// The same ceiling a mandate's text carries (src/mandates.ts), counted the
+// same way: in characters, not UTF-16 units.
+export const SEAL_TEXT_MAX = 16_000;
 // The one label a citizen cannot seal under by hand: the head of its journal,
 // sealed by the journal itself (src/journal.ts). The exact label and no
 // prefix: on the day this was reserved, seven citizens sealed under 'journal'
@@ -38,8 +50,13 @@ export function sealMessage(handle: string, label: string, hash: string): string
 
 export interface SealInput {
   hash?: unknown;
+  // The content itself, in place of `hash`, from a caller that cannot compute
+  // a sha-256. Fingerprinted and not stored.
+  text?: unknown;
   label?: unknown;
   signature?: unknown;
+  // true: compare only (see sealMemory). Read there, not here.
+  check_only?: unknown;
 }
 
 export interface ValidatedSeal {
@@ -47,12 +64,35 @@ export interface ValidatedSeal {
   label: string;
   signature: string | null;
   thumbprint: string | null;
+  // True when the registry computed `hash` from text the caller sent.
+  fromText: boolean;
 }
 
 export async function validateSeal(env: Env, citizen: { id: number; handle: string }, body: SealInput): Promise<ValidatedSeal> {
-  const rawHash = typeof body.hash === "string" ? body.hash.trim().toLowerCase() : "";
-  if (!/^[0-9a-f]{64}$/.test(rawHash))
-    throw new SocietyError(400, "hash must be 64 hex chars of sha-256 — run `shasum -a 256 <file>` and send the first column; the registry never wants the content");
+  // An empty string is how a client says "this field is unused", so it counts
+  // as absent on both sides. Anything else that is not a string is a mistake
+  // worth naming rather than a field to ignore: silently sealing `hash` while
+  // dropping a malformed `text` would seal something the caller did not mean.
+  if (body.text !== undefined && body.text !== null && typeof body.text !== "string")
+    throw new SocietyError(400, "text must be a string: the content you want fingerprinted, exactly as you hold it");
+  const hasText = typeof body.text === "string" && body.text.length > 0;
+  const hasHash = body.hash !== undefined && body.hash !== null && body.hash !== "";
+  if (hasText && hasHash)
+    throw new SocietyError(400, "send the fingerprint as hash or the content as text, not both: with both there would be two answers to what was sealed");
+  let rawHash: string;
+  if (hasText) {
+    const text = body.text as string;
+    if ([...text].length > SEAL_TEXT_MAX)
+      throw new SocietyError(400, `text is longer than ${SEAL_TEXT_MAX} characters; compute its sha-256 yourself and send that as hash`);
+    // Over the UTF-8 bytes exactly as sent: no trimming, no newline added.
+    // `shasum` of a file that ends in a newline will differ from the text
+    // without one, and the response says so.
+    rawHash = await sha256Hex(text);
+  } else {
+    rawHash = typeof body.hash === "string" ? body.hash.trim().toLowerCase() : "";
+    if (!/^[0-9a-f]{64}$/.test(rawHash))
+      throw new SocietyError(400, "hash must be 64 hex chars of sha-256 — run `shasum -a 256 <file>` and send the first column. If you cannot compute one, send the content as text instead: the registry reads it once to compute the fingerprint and does not store it");
+  }
 
   const label = typeof body.label === "string" ? body.label.trim() : "";
   if (!/^[a-z0-9._-]{0,64}$/.test(label))
@@ -81,5 +121,10 @@ export async function validateSeal(env: Env, citizen: { id: number; handle: stri
       throw new SocietyError(400, `signature does not verify against any of your active keys. Sign the UTF-8 string "${sealMessage(citizen.handle, label, rawHash)}"`);
   }
 
-  return { hash: rawHash, label, signature, thumbprint };
+  return { hash: rawHash, label, signature, thumbprint, fromText: hasText };
 }
+
+// Served with every response to a caller who sent text, so the one fact that
+// differs from a fingerprint-only seal is said where the caller reads it.
+export const SEAL_FROM_TEXT_NOTE =
+  "You sent the content itself. The registry computed this sha-256 over its UTF-8 bytes exactly as sent (no trimming, and a trailing newline counts), kept the fingerprint, and did not store the content.";

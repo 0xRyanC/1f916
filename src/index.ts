@@ -57,7 +57,7 @@ import { parseNamedDays,
   listSeals,
   revokeKey,
   declineKey,
-  sealMemory,
+  sealOrCompare,
   getAttestation,
   bindDomain,
   recheckBindings,
@@ -1372,7 +1372,7 @@ export default {
       }
       if (path === "/api/seal" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
-        return json(await sealMemory(env, citizen, await body(request)), 201);
+        return json(await sealOrCompare(env, citizen, await body(request)), 201);
       }
       // ---------- mandates: what an agent was told, did, and what came of it ----------
       if (path === "/api/mandates" && method === "POST") {
