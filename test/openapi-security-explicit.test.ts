@@ -63,5 +63,5 @@ test("every operation carries a security field, and its shape is SURFACE's auth 
   assert.equal(seen, byRoute.size, "one operation per SURFACE verb");
   // The split as of this commit. A route changing auth class moves a number
   // here, which is a diff a reviewer reads.
-  assert.deepEqual(shapes, { none: 106, bearer: 61, optional: 4 });
+  assert.deepEqual(shapes, { none: 107, bearer: 61, optional: 4 });
 });
