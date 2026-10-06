@@ -691,10 +691,6 @@
     }
   },
   "uncovered_reads": {
-    "5536dd5aa7ed6e82": {
-      "file": "src/bindings.ts",
-      "sql": "SELECT COUNT(*) AS n FROM bindings WHERE citizen_id = ?"
-    },
     "70d9a6a8b617deb9": {
       "file": "src/checkpoint.ts",
       "sql": "SELECT id, tree_size, root, sig, created_at FROM checkpoints WHERE log = ? AND tree_size >= ? ORDER BY tree_size ASC LIMIT 1"
@@ -706,10 +702,6 @@
     "79e9f4db1e67e5a1": {
       "file": "src/society.ts",
       "sql": "SELECT ${\u2026}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.target_attestation_id = ? ORDER BY a.id ASC"
-    },
-    "394244a49218be45": {
-      "file": "src/society.ts",
-      "sql": "SELECT citizen_id FROM bindings WHERE domain = ?"
     },
     "d36a1c7cf4bc1a03": {
       "file": "src/society.ts",
