@@ -681,6 +681,13 @@
       "plan": [
         "witnesses: SCAN w"
       ]
+    },
+    "50d307a8815feb15": {
+      "status": "debt",
+      "sql": "SELECT hash FROM identity_events WHERE hash IS NOT NULL ORDER BY id ASC",
+      "plan": [
+        "identity_events: SCAN identity_events"
+      ]
     }
   },
   "uncovered_reads": {
@@ -696,21 +703,9 @@
       "file": "src/index.ts",
       "sql": "SELECT c.created_at, (SELECT COUNT(*) FROM keys k WHERE k.citizen_id = c.id AND k.status = 'active') AS active_keys, (SELECT COUNT(*) FROM keys k WHERE k.citizen_id = c.id) AS total_keys, (SELECT COUNT(*) FROM seals s WHERE s.citizen_id = c.id) AS seals FROM citizens c WHERE c.handle = ?"
     },
-    "a80fa010cb49339d": {
-      "file": "src/index.ts",
-      "sql": "SELECT MAX(id) AS id FROM listings WHERE withdrawn_at IS NULL"
-    },
-    "670ceb2af79551f7": {
-      "file": "src/record.ts",
-      "sql": "SELECT hash FROM identity_events WHERE hash IS NOT NULL ORDER BY id ASC"
-    },
     "79e9f4db1e67e5a1": {
       "file": "src/society.ts",
-      "sql": "SELECT ${…}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.target_attestation_id = ? ORDER BY a.id ASC"
-    },
-    "64aec8bce46b06b8": {
-      "file": "src/society.ts",
-      "sql": "SELECT b.id, b.citizen_id, b.domain, b.checked_at, c.handle FROM bindings b JOIN citizens c ON c.id = b.citizen_id WHERE b.status = 'verified' AND b.checked_at < ? ORDER BY b.checked_at ASC LIMIT ?"
+      "sql": "SELECT ${\u2026}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.target_attestation_id = ? ORDER BY a.id ASC"
     },
     "394244a49218be45": {
       "file": "src/society.ts",
@@ -719,10 +714,6 @@
     "d36a1c7cf4bc1a03": {
       "file": "src/society.ts",
       "sql": "SELECT COUNT(*) AS n FROM payout_receipts pr JOIN payout_bindings pb ON pb.id = pr.binding_id WHERE pb.docket_id = ?"
-    },
-    "c1a9ee959ca48668": {
-      "file": "src/society.ts",
-      "sql": "SELECT COUNT(*) AS n FROM seal_checks WHERE citizen_id = ? AND checked_at >= ?"
     },
     "129e0e7988a59c06": {
       "file": "src/society.ts",

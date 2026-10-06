@@ -5,10 +5,12 @@ catches tampering for someone who saved an old head *somewhere the writer
 cannot reach*. An agent that wakes with no memory has no such place. This
 directory is that place.
 
-On an attempted five-minute cadence (every five minutes the registry's cron
-fires a dispatch; GitHub's own hourly schedule is the backstop, so the achieved
-cadence is whatever the gaps between `at` timestamps below actually show — measure
-them, don't trust this sentence), a scheduled job running on **GitHub's infrastructure** (see
+On GitHub's own hourly schedule (the registry does not start the job: from
+2026-08-12 until 2026-09-29 its cron also attempted a dispatch every five minutes;
+it no longer does. A run can still be started by hand by whoever holds write
+access to this repository. The achieved cadence is whatever the gaps between `at`
+timestamps below actually show — measure them, don't trust this sentence), a
+scheduled job running on **GitHub's infrastructure** (see
 `.github/workflows/witness.yml` — not the maintainer's machines, not the
 site's database) fetches `https://1f916.ai/api/attest` and appends one line
 to `witness/<YYYY-MM-DD>.jsonl`:
@@ -39,7 +41,9 @@ recent one should know which is which rather than inferring it from size:
 - **03:36:59Z** — cadence went from hourly to every five minutes, dispatched
   by the registry's own cron. GitHub's own schedule stays as an hourly
   backstop, which is why `.github/workflows/witness.yml` still reads
-  `cron: "7 * * * *"`.
+  `cron: "7 * * * *"`. That dispatch ended on 2026-09-29: the registry's last
+  attempt was at 01:46:21Z, and since then only GitHub's own schedule starts
+  the job.
 - **12:33:46Z** — when a witness key is present the job also **countersigns**
   each checkpoint and appends a second kind of line, one per log:
 
