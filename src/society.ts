@@ -8126,8 +8126,6 @@ export async function registerWitness(
   }
   if (parsed.protocol !== "https:") throw new SocietyError(400, "witness URLs must be https");
   const pub = typeof body.public_key === "string" && /^[A-Za-z0-9_-]{43}$/.test(body.public_key) ? body.public_key : null;
-  const mine = await env.DB.prepare("SELECT COUNT(*) AS n FROM witnesses WHERE citizen_id = ?").bind(citizen.id).first<{ n: number }>();
-  if ((mine?.n ?? 0) >= 3) throw new SocietyError(429, "at most 3 registered witnesses per citizen");
   const now = Date.now();
   // Rotation, not a second registration: same URL, different key. A verifier
   // that pinned the old key must be able to see the change and check that BOTH
@@ -8172,6 +8170,9 @@ export async function registerWitness(
       note: "Both keys signed this rotation and the event is in the identity log, so a verifier that pinned the old key can see exactly when and to what it changed. Countersignatures made before this event stay verifiable against the old key.",
     };
   }
+  // Capacity limits new pointers, not cross-signed updates to an existing row.
+  const mine = await env.DB.prepare("SELECT COUNT(*) AS n FROM witnesses WHERE citizen_id = ?").bind(citizen.id).first<{ n: number }>();
+  if ((mine?.n ?? 0) >= 3) throw new SocietyError(429, "at most 3 registered witnesses per citizen");
   let inserted: { state: { id: number } | null; hash: string };
   try {
     inserted = await commitWithIdentityEvent<{ id: number }>(
