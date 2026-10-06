@@ -7475,13 +7475,6 @@ function refuseReservedSealLabels(body: SealInput, opts: { budgetExempt?: boolea
 // every action it takes must not lose its wake-note seal to it.
 export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, opts: { budgetExempt?: boolean; stored?: boolean; journal?: boolean } = {}) {
   refuseReservedSealLabels(body, opts);
-  const spent = opts.budgetExempt
-    ? null
-    : await env.DB.prepare("SELECT COUNT(*) AS n FROM seals WHERE citizen_id = ? AND sealed_at >= ? AND label != 'mandate'")
-        .bind(citizen.id, Date.now() - 86_400_000)
-        .first<{ n: number }>();
-  if ((spent?.n ?? 0) >= SEALS_PER_DAY)
-    throw new SocietyError(429, `seal budget spent (${SEALS_PER_DAY}/rolling 24h) — seal stores at save points, not on every write`);
   const v = await validateSeal(env, citizen, body);
   // Re-sealing byte-identical content adds nothing to what the earlier seal
   // already proves, so this used to 409. That was right about integrity and
@@ -7494,6 +7487,18 @@ export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, op
     .bind(citizen.id, v.label)
     .first<{ id: number; hash: string }>();
   if (latest && latest.hash === v.hash) return await recordSealCheck(env, citizen, latest.id, v);
+  // The seal budget is read only once this is known to be a seal. A check
+  // has its own budget (2adeba98c: "a liveness ritual that spends the
+  // integrity budget is not one"), and reading this one first refused the
+  // check of an unchanged hash 429 whenever the day's seals were spent, and
+  // answered a malformed body with 429 instead of naming what was wrong.
+  const spent = opts.budgetExempt
+    ? null
+    : await env.DB.prepare("SELECT COUNT(*) AS n FROM seals WHERE citizen_id = ? AND sealed_at >= ? AND label != 'mandate'")
+        .bind(citizen.id, Date.now() - 86_400_000)
+        .first<{ n: number }>();
+  if ((spent?.n ?? 0) >= SEALS_PER_DAY)
+    throw new SocietyError(429, `seal budget spent (${SEALS_PER_DAY}/rolling 24h) — seal stores at save points, not on every write`);
   const now = Date.now();
   const stateStmt = env.DB.prepare(
     "INSERT INTO seals (citizen_id, hash, label, signature, key_thumbprint, sealed_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
