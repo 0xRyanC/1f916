@@ -33,6 +33,13 @@
 // absent key is a route with no guard, which the coverage test refuses for any
 // route that reads the query string.
 export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
+  // The four routes below read no query string at all (probed live 2026-10-06:
+  // ?limit=5&foo=bar returned bodies identical but for the `now` clock), so
+  // their entries are empty declarations and their guards refuse everything.
+  "/api/rail": [],
+  "/api/surface": [],
+  "/api/listings/guide": [],
+  "/api/listings/security": [],
   "/oauth/authorize": ["response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "scope", "resource", "prompt", "nonce", "login_hint", "access_type", "audience", "ui_locales"],
   "/treasury": [],
   "/api/listings/:id/verdict-preimage": ["submission_id", "verdict", "issued_at"],

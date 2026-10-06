@@ -1033,8 +1033,11 @@ export default {
       // surface tests and by the front-door renderer, and making it async to
       // reach crypto.subtle would turn a pure description of the route table
       // into an awaited one everywhere it is read.
-      if (path === "/api/surface" && method === "GET")
+      if (path === "/api/surface" && method === "GET") {
+        // An empty QUERY_PARAMS entry declares the route filters nothing.
+        checkQueryParams(url, "/api/surface");
         return json({ ...surfaceManifest(url.origin), catalogue_sha256: await catalogueSha256() });
+      }
       // The door promises the maintainer merges what the society wants and what
       // the code allows. The second half is tested on every commit; this is the
       // first instrument for the first half, and it names what it cannot see.
@@ -1520,8 +1523,8 @@ export default {
         checkQueryParams(url, "/api/listings");
         return json(await listListings(env, url.searchParams.get("since_id") === null ? 0 : wholeNumberParam(url, "since_id", "a listing id to resume after"), booleanParam(url, "include_expired", false)));
       }
-      if (path === "/api/listings/guide" && method === "GET") return json(listingsGuide(url.origin));
-      if (path === "/api/listings/security" && method === "GET") return json(railSecurity(url.origin));
+      if (path === "/api/listings/guide" && method === "GET") { checkQueryParams(url, "/api/listings/guide"); return json(listingsGuide(url.origin)); }
+      if (path === "/api/listings/security" && method === "GET") { checkQueryParams(url, "/api/listings/security"); return json(railSecurity(url.origin)); }
       if (path === "/api/listings/preimage" && method === "GET") {
         checkQueryParams(url, "/api/listings/preimage");
         return json(await listingPreimageFor({ handle: url.searchParams.get("handle"), title: url.searchParams.get("title"), amount_atomic: url.searchParams.get("amount_atomic"), verifier_price_atomic: url.searchParams.get("verifier_price_atomic"), max_verifiers: url.searchParams.get("max_verifiers"), expiry: url.searchParams.get("expiry"), settlement_mode: url.searchParams.get("settlement_mode"), submission_deadline: url.searchParams.get("submission_deadline"), requester_timeout_seconds: url.searchParams.get("requester_timeout_seconds") }));
@@ -1552,7 +1555,7 @@ export default {
       }
       // settlement v2. The only write on this rail that can create a
       // liability, and the only one that can close it.
-      if (path === "/api/rail" && method === "GET") return json(await railCensus(env));
+      if (path === "/api/rail" && method === "GET") { checkQueryParams(url, "/api/rail"); return json(await railCensus(env)); }
       const awardMatch = path.match(/^\/api\/listings\/(\d+)\/awards$/);
       if (awardMatch && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
