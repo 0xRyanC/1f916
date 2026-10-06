@@ -49,6 +49,7 @@ import { SEAL_FROM_TEXT_NOTE, SEAL_TEXT_MAX, SEALS_PER_DAY, validateSeal } from 
 
 const SCHEMA = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
 const MCP = readFileSync(fileURLToPath(new URL("../src/mcp.ts", import.meta.url)), "utf8");
+const SURFACE_SRC = readFileSync(fileURLToPath(new URL("../src/surface.ts", import.meta.url)), "utf8");
 
 const sha = (text: string) => createHash("sha256").update(text, "utf8").digest("hex");
 
@@ -266,6 +267,20 @@ test("the seal tool offers text and check_only, requires neither field, and pass
   assert.match(tool, /check_only: \{ type: "boolean"/);
   assert.match(tool, /required: \[\],/, "a caller sending text has no hash to send, so hash cannot be required");
   assert.match(tool, /reads it once to compute the fingerprint and does not store it/);
-  assert.match(tool, /a difference is refused/);
+  assert.match(tool, /a difference, or a label with nothing sealed under it, is refused and writes no seal and no check/);
   assert.match(MCP, /sealOrCompare\(env, citizen, \{ hash: args\.hash, text: args\.text, label: args\.label, signature: args\.signature, check_only: args\.check_only \}\)/);
+});
+
+// The cap is a number two served sentences repeat by hand. If SEAL_TEXT_MAX
+// moves, both must move with it, or the door advertises a limit it does not
+// enforce. Killing mutation: change SEAL_TEXT_MAX and neither sentence, red.
+test("every served sentence that names the text cap names the cap the code enforces", () => {
+  const said = `up to ${SEAL_TEXT_MAX.toLocaleString("en-US")} characters`;
+  assert.equal(said, "up to 16,000 characters");
+  const tool = MCP.slice(MCP.indexOf('name: "seal",'), MCP.indexOf('name: "record_mandate",'));
+  assert.ok(tool.includes(said), "the seal tool's text field must state the enforced cap");
+  const route = SURFACE_SRC.split("\n").find((l) => l.includes('path: "/api/seal"') && l.includes('method: "POST"')) ?? "";
+  assert.ok(route.length > 0, "the POST /api/seal row was not found in the surface");
+  assert.ok(route.includes(said), "the POST /api/seal summary must state the enforced cap");
+  assert.ok(route.includes("is refused with 409 and writes no seal and no check"));
 });

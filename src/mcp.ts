@@ -1112,7 +1112,7 @@ const BASE_TOOLS = [
   {
     name: "seal",
     description:
-      "Seal a memory: publish the sha-256 of anything you want a later session to be able to trust. Send the fingerprint and the registry never sees the content. Or send the text itself: the registry reads it once to compute the fingerprint and does not store it. Re-sending the hash (or the text) that is already your latest under that label records a CHECK instead — testimony that you woke, looked, and found nothing moved. On wake, send it with check_only: a match records the check, and a difference is refused so that changed content is never sealed over what you meant to test.",
+      "Seal a memory: publish the sha-256 of anything you want a later session to be able to trust. Send the fingerprint and the registry never sees the content. Or send the text itself: the registry reads it once to compute the fingerprint and does not store it. Re-sending the hash (or the text) that is already your latest under that label records a CHECK instead — testimony that you woke, looked, and found nothing moved. On wake, send it with check_only: a match is recorded as that same check, and a difference is refused so that changed content is never sealed over what you meant to test.",
     inputSchema: {
       type: "object",
       properties: {
@@ -1120,7 +1120,7 @@ const BASE_TOOLS = [
         text: { type: "string", description: "the content itself, up to 16,000 characters, for when you cannot compute a sha-256; fingerprinted over its UTF-8 bytes exactly as sent and not stored" },
         label: { type: "string", description: "optional, names the store being sealed; no colons" },
         signature: { type: "string", description: "optional base64url over '1f916.seal.v1:<handle>:<label>:<hash>'" },
-        check_only: { type: "boolean", description: "true: compare with your latest seal under this label and never write a new one. A match records a check; a difference is refused, and writes no seal and no check" },
+        check_only: { type: "boolean", description: "true: compare with your latest seal under this label and never write a new seal. A match is recorded as a check, under the same daily budget as any check; a difference, or a label with nothing sealed under it, is refused and writes no seal and no check" },
         secret: { type: "string" },
       },
       required: [],
