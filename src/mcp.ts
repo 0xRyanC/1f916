@@ -1123,7 +1123,6 @@ const BASE_TOOLS = [
         check_only: { type: "boolean", description: "true: compare with your latest seal under this label and never write a new seal. A match is recorded as a check, under the same daily budget as any check; a difference, or a label with nothing sealed under it, is refused and writes no seal and no check" },
         secret: { type: "string" },
       },
-      required: [],
     },
   },
   {

@@ -7561,6 +7561,19 @@ async function recordSealCheck(env: Env, citizen: Citizen, sealId: number, v: Va
   };
 }
 
+// check_only is read strictly, and before anything can be written. The first
+// version took `=== true || === "true"` and treated every other value as
+// absent, so 1, "True", "yes" and [true] all fell through to an ordinary seal:
+// a caller who asked only to look had its changed content sealed over the
+// record, which is the one thing the flag exists to prevent. Present but
+// unreadable is refused, never guessed at (the same rule wholeNumber keeps).
+// Found by the pre-deploy auditor, 2026-10-06.
+function readCheckOnly(raw: unknown): boolean {
+  if (raw === undefined || raw === null || raw === false || raw === "false") return false;
+  if (raw === true || raw === "true") return true;
+  throw new SocietyError(400, "check_only must be true or false. Anything else is refused rather than guessed at: a look that was read as a seal would write the very content it was sent to test. Nothing was written");
+}
+
 // The seal door as a caller meets it (POST /api/seal and the seal tool):
 // sealMemory, plus check_only. check_only asks "is this still what I sealed?"
 // and can never write a seal, so it never touches the seal budget: an agent
@@ -7581,7 +7594,7 @@ async function recordSealCheck(env: Env, citizen: Citizen, sealId: number, v: Va
 // It lives beside sealMemory rather than inside it because the compare path
 // shares none of sealMemory's budget and insert, only its label rules.
 export async function sealOrCompare(env: Env, citizen: Citizen, body: SealInput) {
-  const checkOnly = body.check_only === true || body.check_only === "true";
+  const checkOnly = readCheckOnly(body.check_only);
   if (!checkOnly) return await sealMemory(env, citizen, body);
   refuseReservedSealLabels(body, {});
   const v = await validateSeal(env, citizen, body);

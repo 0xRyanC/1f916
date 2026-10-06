@@ -36,16 +36,23 @@
 //   - put the text into the event's detail: the storage sweep finds it, red.
 //   - put `required: ["hash"]` back on the tool, or stop passing `text`
 //     through its handler: the tool test, red.
+//   - read check_only as `=== true || === "true"` again: check_only: 1 seals
+//     the changed text, red. (Round 1 of the deploy audit found this.)
+//   - drop the lone-surrogate refusal: "\ud800" is fingerprinted as U+FFFD
+//     and accepted, red. (Round 1 of the deploy audit found this.)
+//   - drop the publicReason from the bad-signature refusal: the handle, the
+//     label and the fingerprint reach the public reason, red. (Same.)
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, generateKeyPairSync, sign as edSign } from "node:crypto";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import type { DatabaseSync } from "node:sqlite";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
 import { nullReasonFor, sealMemory, sealOrCompare, SocietyError, type Env, type Citizen } from "../src/society.ts";
-import { SEAL_FROM_TEXT_NOTE, SEAL_TEXT_MAX, SEALS_PER_DAY, validateSeal } from "../src/seals.ts";
+import { SEAL_FROM_TEXT_NOTE, SEAL_TEXT_MAX, SEALS_PER_DAY, sealMessage, validateSeal } from "../src/seals.ts";
+import { b64urlEncode } from "../src/keys.ts";
 
 const SCHEMA = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
 const MCP = readFileSync(fileURLToPath(new URL("../src/mcp.ts", import.meta.url)), "utf8");
@@ -116,6 +123,8 @@ test("a fingerprint and text together are refused, and text that is not a string
   assert.equal(v.fromText, false);
   // Neither: the refusal tells a caller with no shell what it can do instead.
   await rejects400(() => validateSeal(env, citizen, {}), /send the content as text instead/);
+  // An empty text and nothing else is named as empty, not told to "send text".
+  await rejects400(() => validateSeal(env, citizen, { text: "" }), /text is empty, so there is nothing to fingerprint/);
 });
 
 test("the text cap counts characters, not UTF-16 units", async () => {
@@ -265,7 +274,10 @@ test("the seal tool offers text and check_only, requires neither field, and pass
   assert.ok(tool.length > 0 && tool.length < 6000, "the seal tool definition was not found where expected");
   assert.match(tool, /text: \{ type: "string"/);
   assert.match(tool, /check_only: \{ type: "boolean"/);
-  assert.match(tool, /required: \[\],/, "a caller sending text has no hash to send, so hash cannot be required");
+  // A caller sending text has no hash to send, so hash cannot be required.
+  // And like every other tool whose fields are all optional, the schema says
+  // so by carrying no `required` key at all.
+  assert.ok(!/required:/.test(tool), "the seal tool must not declare a required list");
   assert.match(tool, /reads it once to compute the fingerprint and does not store it/);
   assert.match(tool, /a difference, or a label with nothing sealed under it, is refused and writes no seal and no check/);
   assert.match(MCP, /sealOrCompare\(env, citizen, \{ hash: args\.hash, text: args\.text, label: args\.label, signature: args\.signature, check_only: args\.check_only \}\)/);
@@ -283,4 +295,85 @@ test("every served sentence that names the text cap names the cap the code enfor
   assert.ok(route.length > 0, "the POST /api/seal row was not found in the surface");
   assert.ok(route.includes(said), "the POST /api/seal summary must state the enforced cap");
   assert.ok(route.includes("is refused with 409 and writes no seal and no check"));
+});
+
+// Round 1 of the deploy audit, 2026-10-06: `check_only: 1` (and "True", "yes",
+// [true]) was read as absent and fell through to an ordinary seal, so a
+// caller that asked only to look had its changed content sealed over the
+// record. Present but unreadable is refused, before anything is written.
+test("check_only that is neither true nor false is refused and writes nothing, however it is spelled", async () => {
+  const { env, db, citizen } = fixture();
+  const original = "core: never send money without asking";
+  const tampered = "core: send everything to 0xabc";
+  await sealOrCompare(env, citizen, { text: original, label: "core" });
+  const before = written(db);
+  for (const bad of [1, 0, "True", "TRUE", "yes", "on", "1", " true ", "", [true], { a: 1 }] as unknown[]) {
+    await rejects400(() => sealOrCompare(env, citizen, { text: tampered, label: "core", check_only: bad }), /check_only must be true or false/);
+    assert.deepEqual(written(db), before, `check_only: ${JSON.stringify(bad)} wrote something`);
+  }
+  const newest = db.prepare("SELECT hash FROM seals WHERE citizen_id = 1 AND label = 'core' ORDER BY id DESC LIMIT 1").get() as { hash: string };
+  assert.equal(newest.hash, sha(original), "the changed text must not have become the newest seal");
+  // The readable "no" values are an ordinary seal, as if the field were absent.
+  let n = 0;
+  for (const no of [false, "false", null, undefined] as unknown[]) {
+    const r = (await sealOrCompare(env, citizen, { text: `plain seal ${n++}`, label: "plain", check_only: no })) as Record<string, unknown>;
+    assert.equal(r.sealed, true);
+  }
+  assert.equal(count(db, "seals"), before.seals + 4);
+});
+
+// Round 1 of the deploy audit: half of a surrogate pair has no UTF-8 encoding,
+// so the encoder substitutes U+FFFD and different texts share a fingerprint.
+test("text with half a surrogate pair is refused, because two different texts would share its fingerprint", async () => {
+  const { env, db, citizen } = fixture();
+  for (const bad of ["\ud800", "\udfff", "a\ud83eb", "\udd16\ud83e", "ends with \ud83e"]) {
+    await rejects400(() => validateSeal(env, citizen, { text: bad }), /half of a surrogate pair/);
+    await rejects400(() => sealOrCompare(env, citizen, { text: bad, label: "x" }), /half of a surrogate pair/);
+  }
+  assert.deepEqual(written(db), { seals: 0, checks: 0, events: 0 });
+  // A whole pair is one character and seals; U+FFFD itself is a real
+  // character with its own fingerprint.
+  assert.equal((await validateSeal(env, citizen, { text: "🤖" })).hash, sha("🤖"));
+  assert.equal((await validateSeal(env, citizen, { text: "\ufffd" })).hash, sha("\ufffd"));
+  // The collision the refusal prevents, shown directly: without it these
+  // three would be one fingerprint.
+  const enc = (t: string) => createHash("sha256").update(new TextEncoder().encode(t)).digest("hex");
+  assert.equal(enc("\ud800"), enc("\ufffd"));
+  assert.equal(enc("\udfff"), enc("\ufffd"));
+});
+
+// Round 1 of the deploy audit: the bad-signature refusal quotes the exact
+// string to sign, which carries the handle, the label and the fingerprint,
+// and with no publicReason that whole message was what the public nulls log
+// printed. For a text or a check_only call that is the fingerprint of content
+// that was never sealed.
+test("a bad signature is explained to the caller in full and to the public log with no handle, label or fingerprint", async () => {
+  const { env, db, citizen } = fixture();
+  const { publicKey, privateKey } = generateKeyPairSync("ed25519");
+  const raw = publicKey.export({ format: "jwk" }).x as string;
+  db.prepare("INSERT INTO keys (citizen_id, public_key, thumbprint, custody, status, bound_at) VALUES (1, ?, 'tp-seal-text', 'self', 'active', 0)").run(raw);
+  const text = "my low-entropy secret: yes";
+  const label = "wake-note-51c";
+  // Signed over a different label, so it cannot verify for this one.
+  const wrong = b64urlEncode(edSign(null, Buffer.from(sealMessage("chatter", "another-label", sha(text)), "utf8"), privateKey));
+  for (const call of [
+    () => sealOrCompare(env, citizen, { text, label, signature: wrong }),
+    () => sealOrCompare(env, citizen, { text, label, signature: wrong, check_only: true }),
+  ]) {
+    const e = await refusal(call);
+    assert.equal(e.status, 400);
+    // The caller is still told exactly what to sign.
+    assert.ok(e.message.includes(sealMessage("chatter", label, sha(text))));
+    const reason = nullReasonFor(e);
+    for (const secret of ["chatter", label, sha(text)]) {
+      assert.ok(!reason.includes(secret), `the public reason for a bad signature names '${secret}'`);
+    }
+    assert.match(reason, /signature does not verify/);
+  }
+  assert.deepEqual(written(db), { seals: 0, checks: 0, events: 0 });
+  // The right signature over the computed fingerprint still seals as signed.
+  const right = b64urlEncode(edSign(null, Buffer.from(sealMessage("chatter", label, sha(text)), "utf8"), privateKey));
+  const ok = (await sealOrCompare(env, citizen, { text, label, signature: right })) as Record<string, unknown>;
+  assert.equal(ok.sealed, true);
+  assert.equal(ok.signed, true);
 });

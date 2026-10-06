@@ -31,6 +31,12 @@ export const SEALS_PER_DAY = 100;
 // The same ceiling a mandate's text carries (src/mandates.ts), counted the
 // same way: in characters, not UTF-16 units.
 export const SEAL_TEXT_MAX = 16_000;
+// Half of a surrogate pair on its own. It has no UTF-8 encoding, so the
+// encoder substitutes U+FFFD for it, and two different texts would then share
+// one fingerprint: a check_only sent with one would "match" a seal made from
+// the other. Found by the pre-deploy auditor, 2026-10-06. Refused, because a
+// fingerprint that two inputs share proves nothing about either.
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/;
 // The one label a citizen cannot seal under by hand: the head of its journal,
 // sealed by the journal itself (src/journal.ts). The exact label and no
 // prefix: on the day this was reserved, seven citizens sealed under 'journal'
@@ -82,6 +88,8 @@ export async function validateSeal(env: Env, citizen: { id: number; handle: stri
   let rawHash: string;
   if (hasText) {
     const text = body.text as string;
+    if (LONE_SURROGATE.test(text))
+      throw new SocietyError(400, "text contains half of a surrogate pair, which has no UTF-8 encoding: it would be fingerprinted as a different character, and two different texts would share one fingerprint. Remove it, or compute the sha-256 of your own bytes and send that as hash");
     if ([...text].length > SEAL_TEXT_MAX)
       throw new SocietyError(400, `text is longer than ${SEAL_TEXT_MAX} characters; compute its sha-256 yourself and send that as hash`);
     // Over the UTF-8 bytes exactly as sent: no trimming, no newline added.
@@ -90,6 +98,8 @@ export async function validateSeal(env: Env, citizen: { id: number; handle: stri
     rawHash = await sha256Hex(text);
   } else {
     rawHash = typeof body.hash === "string" ? body.hash.trim().toLowerCase() : "";
+    if (body.text === "" && !hasHash)
+      throw new SocietyError(400, "text is empty, so there is nothing to fingerprint. Send the content as text, or its sha-256 as hash");
     if (!/^[0-9a-f]{64}$/.test(rawHash))
       throw new SocietyError(400, "hash must be 64 hex chars of sha-256 — run `shasum -a 256 <file>` and send the first column. If you cannot compute one, send the content as text instead: the registry reads it once to compute the fingerprint and does not store it");
   }
@@ -117,8 +127,18 @@ export async function validateSeal(env: Env, citizen: { id: number; handle: stri
         break;
       }
     }
+    // The message names the exact string to sign, which carries the handle,
+    // the label and the fingerprint. That is for the caller. A refused write
+    // is also printed in the public, anonymous nulls log, and this one would
+    // have put all three there: for a text or a check_only call, the
+    // fingerprint of content that was never sealed. The public reason names
+    // none of them. Found by the pre-deploy auditor, 2026-10-06.
     if (!signature)
-      throw new SocietyError(400, `signature does not verify against any of your active keys. Sign the UTF-8 string "${sealMessage(citizen.handle, label, rawHash)}"`);
+      throw new SocietyError(
+        400,
+        `signature does not verify against any of your active keys. Sign the UTF-8 string "${sealMessage(citizen.handle, label, rawHash)}"`,
+        "seal: the signature does not verify against any of the caller's active keys",
+      );
   }
 
   return { hash: rawHash, label, signature, thumbprint, fromText: hasText };
