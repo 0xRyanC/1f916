@@ -5418,6 +5418,14 @@ export async function getPayoutBinding(env: Env, id: number) {
     token: binding.token,
     address: binding.payout_address,
     expiry: binding.expiry,
+    // WQ-283 (hera, post 7806): a binding past its own expiry read identically
+    // to a live one on this base GET. expiry_passed is whether the clock is now
+    // at or past `expiry` — the same signal WQ-277 added to the funder-statement
+    // sub-route. It extinguishes nothing: a Transfer that landed before expiry
+    // is still recordable (payouts.ts checks the PAYMENT's block timestamp), and
+    // `receipt` is non-null once one is filed. A binding is a routing
+    // authorization, never a debt and never a reservation.
+    expiry_passed: Math.floor(Date.now() / 1000) >= binding.expiry,
     signature: binding.wallet_signature,
     citizen_public_key: binding.citizen_public_key,
     citizen_signature: binding.citizen_signature,
@@ -5449,7 +5457,7 @@ export async function getPayoutBinding(env: Env, id: number) {
     chain_anchor: chainAnchor,
     receipt: receiptView,
     note:
-      "Rebuild preimage from the structured fields before checking either signature. The address is public; safety is typed provenance, not secrecy. An unreceipted binding cannot prevent two outside funders from sending concurrently, so payers must coordinate rather than treat it as a reservation.",
+      "Rebuild preimage from the structured fields before checking either signature. The address is public; safety is typed provenance, not secrecy. An unreceipted binding cannot prevent two outside funders from sending concurrently, so payers must coordinate rather than treat it as a reservation. expiry_passed true means the window to make a NEW payment against this authorization has closed; it extinguishes nothing, a Transfer that landed before expiry is still recordable, and receipt is non-null once one is filed.",
   };
 }
 

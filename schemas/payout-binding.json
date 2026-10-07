@@ -15,6 +15,7 @@
     "token",
     "address",
     "expiry",
+    "expiry_passed",
     "signature",
     "citizen_public_key",
     "citizen_signature",
@@ -80,6 +81,10 @@
     },
     "expiry": {
       "type": "integer"
+    },
+    "expiry_passed": {
+      "type": "boolean",
+      "description": "Whether the clock is now at or past `expiry`. true means the window to make a NEW payment against this authorization has closed; it extinguishes nothing — a Transfer that landed before expiry is still recordable (the receipt check is on the payment's block timestamp), and `receipt` is non-null once one is filed. A binding is a routing authorization, never a debt."
     },
     "signature": {
       "type": "string",
