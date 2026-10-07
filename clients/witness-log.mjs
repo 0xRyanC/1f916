@@ -49,6 +49,7 @@ export function witnessLine(log, count, head) {
   if (RESERVED(log)) throw new Error(`log must not be '${log}': the registry keeps mandate, journal.head and names beginning stored. for its own records`);
   // The count goes into the line as the digits given, never through Number():
   // above 2^53 that would round, and a rounded count is a different line.
+  if (typeof count === "number" && !Number.isSafeInteger(count)) throw new Error("count must be a whole number of entries, digits only: pass a count above 2^53 as a string");
   const raw = typeof count === "number" ? String(count) : count;
   if (typeof raw !== "string" || !/^(0|[1-9]\d{0,29})$/.test(raw)) throw new Error("count must be a whole number of entries, digits only");
   const n = raw;
@@ -73,11 +74,15 @@ export async function witness({ action, log, count, head, secret, origin = DEFAU
   } catch {
     answer = { error: `the registry answered ${res.status} without JSON` };
   }
+  if (answer === null || typeof answer !== "object" || Array.isArray(answer)) answer = { error: `the registry answered ${res.status} with ${answer === null ? "null" : "something other than an object"}` };
   // The door's own fields first, then ours, so that an answer cannot overwrite
   // the status or the line it was given. `ok` is the whole verdict: a 201, a
   // seal or a check, and the door's hash equal to the sha-256 of the line.
   const expected = createHash("sha256").update(text, "utf8").digest("hex");
-  const ok = res.status === 201 && (answer.sealed === true || answer.checked === true) && answer.hash === expected;
+  // A seal must have sealed and a check must have checked: a check that the
+  // door answered with a new seal is not the check that was asked for.
+  const wanted = action === "seal" ? "sealed" : "checked";
+  const ok = res.status === 201 && answer !== null && typeof answer === "object" && answer[wanted] === true && answer.hash === expected;
   return { ...answer, status: res.status, line: text, line_sha256: expected, ok };
 }
 

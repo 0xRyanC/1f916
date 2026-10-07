@@ -79,6 +79,7 @@ test("the adapter refuses a piece that cannot be part of the line", () => {
     assert.throws(() => adapter.witnessLine(log as string, count as number, head as string), /must/, `${log} ${count} ${head}`);
   }
   assert.equal(adapter.witnessLine("x".repeat(LABEL_MAX), 0, HEAD).startsWith(OW_LINE_PREFIX), true);
+  assert.throws(() => adapter.witnessLine("ok", 2 ** 60, HEAD), /above 2\^53 as a string/);
 });
 
 test("seal and check send what the door expects, and only that", async () => {
@@ -122,11 +123,18 @@ test("the figures are the ones the seal door enforces", () => {
   assert.ok(text.includes(`an account may make ${SEALS_PER_DAY.toLocaleString("en-US")} seals in any rolling day`));
   assert.ok(text.includes(`up to ${SEAL_CHECKS_PER_DAY.toLocaleString("en-US")} a day`));
   assert.ok(text.includes(`1 to ${LABEL_MAX} characters`));
-  assert.ok(text.includes(`One seal an hour is 24 a day; an account may make ${SEALS_PER_DAY} seals in any rolling day, and a line already sealed is recorded as a check instead, up to ${SEAL_CHECKS_PER_DAY} a day. So one each five minutes, 288 a day, fits only a log whose head changes ${SEALS_PER_DAY} times a day or fewer`));
+  assert.ok(text.includes(`One seal an hour is 24 a day; an account may make ${SEALS_PER_DAY} seals in any rolling day, and a line that matches the latest seal is recorded as a check instead, up to ${SEAL_CHECKS_PER_DAY} a day. So one each five minutes, 288 a day, fits only when the runs that see a new head are ${SEALS_PER_DAY} a day or fewer`));
   assert.ok(SEALS_PER_DAY < 288 && SEALS_PER_DAY >= 24);
   assert.match(text, /not one of the names the registry keeps for its own records \(\s*mandate\s*,\s*journal\.head\s*,\s*anything beginning\s*stored\.\s*\)/);
   assert.ok(!/nothing is written/.test(text), "a refusal is a row in the public nulls log; the page says no seal and no check");
   assert.ok(text.includes("any other line is refused, with no seal and no check written"));
+  assert.ok(text.includes("a line that matches the latest seal is recorded as a check instead"));
+  assert.ok(text.includes("fits only when the runs that see a new head are"));
+  // Pinned after the audit found them unpinned: the limits bullet, the newline note, the covering head.
+  assert.ok(text.includes("What a seal covers can be checked against the log as it stood then; entries newer than the last seal are covered by nothing until the next one, and the interval you choose is that bound."));
+  assert.ok(text.includes("take the sha-256 of the line alone, with no newline after it"));
+  assert.ok(text.includes("once a head covers it, each seal's event has an inclusion proof under that signed head; witnesses countersign the heads they see"));
+  assert.ok(text.includes("that shows nothing about a rewrite"));
 });
 
 test("the worked example is the adapter's line for a seal that exists", () => {
@@ -184,6 +192,11 @@ test("one round trip through the real door", async () => {
   assert.equal(same.status, 201);
   assert.equal(same.checked, true);
   assert.equal(same.ok, true);
+  // A check answered with a seal is not ok; a seal answered with a check is not ok.
+  const sealedAnswer = async () => new Response(JSON.stringify({ sealed: true, hash: createHash("sha256").update(adapter.witnessLine("my-log", 12, HEAD), "utf8").digest("hex") }), { status: 201 });
+  assert.equal((await adapter.witness({ action: "check", log: "my-log", count: 12, head: HEAD, secret, origin: OW_ORIGIN, fetchImpl: sealedAnswer })).ok, false);
+  const checkedAnswer = async () => new Response(JSON.stringify({ checked: true, hash: createHash("sha256").update(adapter.witnessLine("my-log", 12, HEAD), "utf8").digest("hex") }), { status: 201 });
+  assert.equal((await adapter.witness({ action: "seal", log: "my-log", count: 12, head: HEAD, secret, origin: OW_ORIGIN, fetchImpl: checkedAnswer })).ok, false);
   const grown = await adapter.witness({ action: "check", log: "my-log", count: 13, head: HEAD, secret, origin: OW_ORIGIN, fetchImpl });
   assert.equal(grown.status, 409);
   assert.equal(grown.ok, false);
@@ -207,6 +220,7 @@ test("the command exits 0 only on a seal or a check of the line", async () => {
     [201, JSON.stringify({ sealed: true, hash: good, status: 500, line: "another" })],
     [201, JSON.stringify({ checked: true, hash: good })],
     [409, JSON.stringify({ error: "check_only: this is NOT what you last sealed" })],
+    [201, "null"],
   ];
   let i = 0;
   const server = createServer((req, res) => {
@@ -232,9 +246,17 @@ test("the command exits 0 only on a seal or a check of the line", async () => {
       child.on("close", (status) => resolve({ status, stdout }));
     });
   const results: { status: number | null; stdout: string }[] = [];
-  for (const _ of answers) results.push(await run());
-  await new Promise<void>((r) => server.close(() => r()));
-  assert.deepEqual(results.map((r) => r.status), [1, 1, 1, 1, 0, 0, 1]);
+  try {
+    for (const _ of answers) results.push(await run());
+  } finally {
+    // Closed before any assertion can throw, or an open server keeps the runner alive forever.
+    await new Promise<void>((r) => server.close(() => r()));
+  }
+  // The sixth answer is a check's success; a seal command must not take it as its own.
+  assert.equal(results[5].status, 1);
+  assert.deepEqual(results.map((r) => r.status), [1, 1, 1, 1, 0, 1, 1, 1]);
+  // A null body is an answer the adapter names, not a TypeError.
+  assert.match(JSON.parse(results[7].stdout).error, /answered 201 with null/);
   // The door's answer cannot overwrite what the adapter knows: status and line are the adapter's.
   const fifth = JSON.parse(results[4].stdout);
   assert.equal(fifth.status, 201);

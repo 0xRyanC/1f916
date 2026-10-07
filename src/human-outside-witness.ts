@@ -58,14 +58,14 @@ export const HUMAN_OUTSIDE_WITNESS_HTML: string =
   `<h1>Be witnessed</h1>` +
   `<p class="sub">For whoever keeps a log of an agent's actions, in any tool, and wants to show that the log was not rebuilt after the fact. A copy of your log's head, held by a party outside your control, on a schedule.</p>` +
   `<h2>What a hash chain alone does not show</h2>` +
-  `<p>Your log is a chain: each entry carries the hash of the one before it. Against a head you also hold, that shows nothing: drop an entry or change one, chain the rest again, and the file verifies. What shows a rewrite is a copy of the head held by someone who is not you, taken before it. That is one way to show what an audit control asks for when it asks that gaps and omissions be detectable; <a href="${OW_EVIDENCE_PATH}">the evidence page</a> quotes one.</p>` +
+  `<p>Your log is a chain: each entry carries the hash of the one before it. Against a head you also hold, that shows nothing about a rewrite: drop an entry or change one, chain the rest again, and the file verifies. What shows a rewrite is a copy of the head held by someone who is not you, taken before it. That is one way to show what an audit control asks for when it asks that gaps and omissions be detectable; <a href="${OW_EVIDENCE_PATH}">the evidence page</a> quotes one.</p>` +
   `<h2>The line</h2>` +
   pre(OW_LINE) +
   `<p><code>name</code> is 1 to ${LABEL_MAX} characters of <code>a-z 0-9 . _ -</code>, not one of the names the registry keeps for its own records (<code>mandate</code>, <code>journal.head</code>, anything beginning <code>stored.</code>), and becomes the label the seals are filed under, so each log you keep has its own series. <code>entries</code> is how many entries the log holds. <code>hex</code> is the sha-256 at its head. The registry fingerprints the line, keeps the fingerprint in its own chained, checkpointed, witnessed and anchored record, and does not store the line.</p>` +
   `<h2>Three commands</h2>` +
   `<p>Once, register a citizen for your logger. The answer carries its secret, once:</p>` +
   pre(OW_REGISTER_COMMAND) +
-  `<p>On a schedule, seal the head. One seal an hour is ${n(24)} a day; an account may make ${n(SEALS_PER_DAY)} seals in any rolling day, and a line already sealed is recorded as a check instead, up to ${n(SEAL_CHECKS_PER_DAY)} a day. So one each five minutes, ${n(288)} a day, fits only a log whose head changes ${n(SEALS_PER_DAY)} times a day or fewer:</p>` +
+  `<p>On a schedule, seal the head. One seal an hour is ${n(24)} a day; an account may make ${n(SEALS_PER_DAY)} seals in any rolling day, and a line that matches the latest seal is recorded as a check instead, up to ${n(SEAL_CHECKS_PER_DAY)} a day. So one each five minutes, ${n(288)} a day, fits only when the runs that see a new head are ${n(SEALS_PER_DAY)} a day or fewer:</p>` +
   pre(OW_SEAL_COMMAND) +
   `<p>Whenever you want to know whether the head you hold for the latest sealed count is what was sealed, compare. A match is recorded as a check; any other line is refused, with no seal and no check written:</p>` +
   pre(OW_CHECK_COMMAND) +
