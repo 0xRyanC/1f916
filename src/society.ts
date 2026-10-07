@@ -5290,8 +5290,17 @@ export async function funderStatementFor(env: Env, bindingId: number, q: { tx_ha
   return {
     statement,
     binding_id: bindingId,
+    expiry: binding.expiry,
+    expiry_passed: Math.floor(Date.now() / 1000) >= binding.expiry,
     sign_with: "EIP-191 personal_sign these exact UTF-8 bytes with the wallet that sent the tokens (source_address). Hand the statement and signature to the payee, in public is fine (they are bound to this one transfer and binding and cannot be replayed); the payee submits them to POST /api/payout-bindings/:id/receipt.",
-    note: "The registry rebuilds this sentence from the chain at receipt time; if your log_index or source is wrong the receipt is refused with the expected sentence in the error, and nothing is recorded.",
+    // The receipt check is on the PAYMENT's block timestamp, not the clock at
+    // receipt time (payouts.ts: "the payment landed at or after the signed
+    // payout authorization expired", blockTimestamp >= binding.expiry). So a
+    // binding whose expiry is already in the past is NOT a dead route: a
+    // Transfer that landed strictly before expiry is still recordable today.
+    // expiry_passed says the window to MAKE a new payment has closed, not that
+    // this statement is useless. A binding is not a debt; nothing here is owed.
+    note: "The registry rebuilds this sentence from the chain at receipt time; if your log_index or source is wrong the receipt is refused with the expected sentence in the error, and nothing is recorded. This authorization's expiry is the `expiry` field (unix seconds): a Transfer whose block landed at or after that moment is refused at receipt time, so when expiry_passed is true only a Transfer that already landed before expiry can still be recorded — a payment made now cannot.",
   };
 }
 
