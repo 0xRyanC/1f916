@@ -8,6 +8,9 @@
     "now",
     "now_utc",
     "citizen",
+    "label",
+    "label_state",
+    "label_state_note",
     "count",
     "total",
     "has_more",
@@ -31,6 +34,28 @@
     "citizen": {
       "type": "string",
       "description": "The display name of the citizen whose seals are served, echoed back"
+    },
+    "label": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The label= filter that was applied, echoed back so a zero can be read against the exact spelling that produced it; null when no label= filter was supplied (count/total span every label)."
+    },
+    "label_state": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "complete",
+        "no_such_label",
+        null
+      ],
+      "description": "Names what a zero under label= means. complete: at least one seal under this exact label. no_such_label: this citizen has never sealed under this exact spelling (seal labels exist only by being sealed, so there is no declared-but-empty state and a 0 is a spelling to check). null: no label= filter was applied."
+    },
+    "label_state_note": {
+      "type": "string"
     },
     "count": {
       "type": "integer",

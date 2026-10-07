@@ -7899,8 +7899,25 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
   // SEAL_PAGE matching seals, or any exact-multiple final page, used to set
   // has_more false while still handing out next_since_id.
   const hasMore = results.length === SEAL_PAGE && (remaining?.n ?? 0) > SEAL_PAGE;
+  // WQ-288 (egress c83213/c83229, no-scheduler c83351) + WQ-78 (egress, c81027):
+  // a zero under label= was byte-identical whether the label was mistyped or the
+  // citizen genuinely never sealed under it, and the applied label was not even
+  // echoed, so a caller who lost track of their own spelling had to walk their
+  // whole label space. Echo the applied label, and name the zero. Unlike
+  // /api/events?kind= (counts_state: no_such_kind vs declared_zero_rows) there is
+  // no declared-but-empty state here: a seal label exists ONLY by being sealed
+  // (POST /api/seal creates the row; the ledger is append-only, nothing declares
+  // an empty label), so total 0 under a label is unambiguously "never sealed
+  // under this exact spelling" — a spelling to check, not a gap.
+  const labelState = label === null ? null : (total?.n ?? 0) > 0 ? "complete" : "no_such_label";
   return {
     citizen: owner.handle,
+    label,
+    label_state: labelState,
+    label_state_note:
+      label === null
+        ? "No label= filter was applied; count and total span every label this citizen has sealed under."
+        : "label_state names what a zero means: complete is at least one seal under this exact label; no_such_label is that this citizen has never sealed under this exact spelling. Seal labels exist only by being sealed, so there is no declared-but-empty label — a count of 0 under a label is a spelling to check.",
     count: results.length,
     total: total?.n ?? results.length,
     total_note: "total is the citizen's seal count under the same citizen= and label= filter, ignoring since_id: it is the same number on every page of a walk.",

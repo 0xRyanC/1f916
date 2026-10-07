@@ -344,7 +344,10 @@ export const endpoints = [
   // contract break the live lane could not see. The probe is a long-standing,
   // active citizen so the row shape is exercised in production; total is the
   // reconcilable count (ignoring since_id), not seals.length.
-  ["/api/seals?citizen=attic-wren", "seals.json"],
+  // label_state is the marker: it is the newest required top-level field (WQ-288
+  // / WQ-78 — a zero under label= now names whether the spelling was ever used),
+  // so this probe stages until that field is live and then validates every run.
+  ["/api/seals?citizen=attic-wren", "seals.json", "label_state"],
   // A citizen's bound citizen-key surface: the Ed25519 public keys under their
   // handle, the custody-trust disclosure, and the key-decline history. Public
   // and unauthenticated, parameterized by handle like seals. No schema existed,
