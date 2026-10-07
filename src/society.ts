@@ -6205,8 +6205,10 @@ export async function railCensus(env: Env) {
        FROM payout_bindings pb JOIN payout_receipts pr ON pr.binding_id = pb.id`,
   ).all<{ row: string; chain_id: number; token: string; amount_atomic: string; receipt_id: number }>();
   // OBSERVED PAYMENTS (migration 0049), per listing and per asset, and the
-  // zero-value poisoning rows per funder wallet. Read off the chain by the
-  // cron, two providers agreeing; a weaker tier than receipts, summed apart.
+  // zero-value transfers seen per funder wallet (the observer walks each funder
+  // wallet's OUTBOUND logs, topics[1] = from, so these appear FROM the funder,
+  // not inbound rows aimed AT it). Read off the chain by the cron, two
+  // providers agreeing; a weaker tier than receipts, summed apart.
   const { results: observedRows } = await env.DB.prepare(
     `SELECT listing_id, token, amount_atomic FROM observed_transfers WHERE kind = 'payment' AND listing_id IS NOT NULL`,
   ).all<{ listing_id: number; token: string; amount_atomic: string }>();
@@ -6218,10 +6220,10 @@ export async function railCensus(env: Env) {
     acc.by_asset[key] = (BigInt(acc.by_asset[key] ?? "0") + BigInt(o.amount_atomic)).toString();
     observedByListing.set(o.listing_id, acc);
   }
-  const { results: poisonRows } = await env.DB.prepare(
+  const { results: zeroValueRows } = await env.DB.prepare(
     `SELECT funder_address, COUNT(*) AS n FROM observed_transfers WHERE kind = 'zero_value' GROUP BY funder_address`,
   ).all<{ funder_address: string; n: number }>();
-  const poisonByWallet = new Map(poisonRows.map((r) => [r.funder_address.toLowerCase(), Number(r.n)]));
+  const zeroValueByWallet = new Map(zeroValueRows.map((r) => [r.funder_address.toLowerCase(), Number(r.n)]));
   // The observer's own state, served so a stalled or empty walk is visible
   // rather than read as "looked and found nothing": which wallets are watched,
   // the last block each walk reached, when, the last range and its row count,
@@ -6489,19 +6491,35 @@ export async function railCensus(env: Env) {
   // Settlement history, per funder. A missed payment deadline is a fact about
   // the party who missed it, and on a promise listing their history is the
   // only thing standing behind the next listing they post.
-  const funders = new Map<string, { funder: string; listings: number; observed_payments: number; observed_paid_atomic_by_asset: Record<string, string>; zero_value_transfers_to_funder_wallet: number; v2_listings: number; v2_paid_atomic: string; v2_currently_due_atomic: string; v2_overdue_unpaid_atomic: string; v2_overdue_awards: number; v2_expired_unclaimed_atomic: string; legacy_listings: number; legacy_bindings_unclassified: number; liability_scope: string }>();
+  const funders = new Map<string, { funder: string; listings: number; observed_payments: number; observed_paid_atomic_by_asset: Record<string, string>; zero_value_transfers_from_funder_wallet: number; v2_listings: number; v2_paid_atomic: string; v2_currently_due_atomic: string; v2_overdue_unpaid_atomic: string; v2_overdue_awards: number; v2_expired_unclaimed_atomic: string; legacy_listings: number; legacy_bindings_unclassified: number; liability_scope: string }>();
+  // Zero-value transfers are counted once per distinct funder wallet, not once
+  // per listing: a funder with two wallets sums both, a wallet shared across
+  // two listings is counted once. Tracked outside the per-listing loop.
+  const zeroValueWalletsCounted = new Map<string, Set<string>>();
   for (const r of rows) {
     const key = String(r.funder);
-    const f = funders.get(key) ?? { funder: key, listings: 0, observed_payments: 0, observed_paid_atomic_by_asset: {}, zero_value_transfers_to_funder_wallet: 0, v2_listings: 0, v2_paid_atomic: "0", v2_currently_due_atomic: "0", v2_overdue_unpaid_atomic: "0", v2_overdue_awards: 0, v2_expired_unclaimed_atomic: "0", legacy_listings: 0, legacy_bindings_unclassified: 0, liability_scope: "v2_ledger" };
+    const f = funders.get(key) ?? { funder: key, listings: 0, observed_payments: 0, observed_paid_atomic_by_asset: {}, zero_value_transfers_from_funder_wallet: 0, v2_listings: 0, v2_paid_atomic: "0", v2_currently_due_atomic: "0", v2_overdue_unpaid_atomic: "0", v2_overdue_awards: 0, v2_expired_unclaimed_atomic: "0", legacy_listings: 0, legacy_bindings_unclassified: 0, liability_scope: "v2_ledger" };
     f.listings += 1;
     // Observed on chain, per funder: payments to bound addresses on their
-    // listings, and the zero-value poisoning rows aimed at their wallet. The
-    // second is a warning to the funder, not a mark against them.
+    // listings, and the zero-value transfers seen FROM their wallet(s). The
+    // observer walks each funder wallet's OUTBOUND Transfer logs only
+    // (eth_getLogs on topics[1] = from), so this counts zero-value sends that
+    // appear FROM the funder — where the transferFrom-zero poisoning artifact
+    // lands — not inbound transfers aimed AT the wallet, which the walk cannot
+    // see. Named for the direction the observer can actually report.
     f.observed_payments += r.observed_payments ?? 0;
     for (const [k, v] of Object.entries(r.observed_paid_atomic_by_asset ?? {})) {
       f.observed_paid_atomic_by_asset[k] = (BigInt(f.observed_paid_atomic_by_asset[k] ?? "0") + BigInt(v)).toString();
     }
-    if (r.funder_address) f.zero_value_transfers_to_funder_wallet = poisonByWallet.get(String(r.funder_address).toLowerCase()) ?? 0;
+    if (r.funder_address) {
+      const wallet = String(r.funder_address).toLowerCase();
+      const counted = zeroValueWalletsCounted.get(key) ?? new Set<string>();
+      if (!counted.has(wallet)) {
+        counted.add(wallet);
+        zeroValueWalletsCounted.set(key, counted);
+        f.zero_value_transfers_from_funder_wallet += zeroValueByWallet.get(wallet) ?? 0;
+      }
+    }
     f.v2_paid_atomic = (BigInt(f.v2_paid_atomic) + BigInt(r.economics.amount_paid_atomic)).toString();
     f.v2_currently_due_atomic = (BigInt(f.v2_currently_due_atomic) + BigInt(r.economics.currently_due_atomic)).toString();
     f.v2_overdue_unpaid_atomic = (BigInt(f.v2_overdue_unpaid_atomic) + BigInt(r.economics.overdue_unpaid_atomic)).toString();

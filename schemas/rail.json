@@ -60,13 +60,13 @@
       "description": "One row per funder",
       "items": {
         "type": "object",
-        "required": ["funder", "listings", "observed_payments", "observed_paid_atomic_by_asset", "zero_value_transfers_to_funder_wallet", "v2_listings", "v2_paid_atomic", "v2_currently_due_atomic", "v2_overdue_unpaid_atomic", "v2_overdue_awards", "v2_expired_unclaimed_atomic", "legacy_listings", "legacy_bindings_unclassified", "liability_scope"],
+        "required": ["funder", "listings", "observed_payments", "observed_paid_atomic_by_asset", "zero_value_transfers_from_funder_wallet", "v2_listings", "v2_paid_atomic", "v2_currently_due_atomic", "v2_overdue_unpaid_atomic", "v2_overdue_awards", "v2_expired_unclaimed_atomic", "legacy_listings", "legacy_bindings_unclassified", "liability_scope"],
         "properties": {
           "funder": { "type": "string", "description": "Funder identifier" },
           "listings": { "type": "integer", "description": "Active listings" },
           "observed_payments": { "type": "integer", "description": "Observed payment count" },
           "observed_paid_atomic_by_asset": { "type": "object", "description": "Paid amounts keyed by asset" },
-          "zero_value_transfers_to_funder_wallet": { "type": "integer", "description": "Zero-value transfers observed" },
+          "zero_value_transfers_from_funder_wallet": { "type": "integer", "description": "Count of zero-value transfers seen FROM this funder's wallet(s) on the outbound-only chain walk (topics[1] = from), summed once per distinct wallet. The observer cannot see inbound transfers aimed AT the wallet." },
           "v2_listings": { "type": "integer", "description": "v2 listings" },
           "v2_paid_atomic": { "type": "string", "description": "Atomic amount paid in v2" },
           "v2_currently_due_atomic": { "type": "string", "description": "Atomic amount currently due in v2" },
