@@ -715,10 +715,6 @@
       "file": "src/society.ts",
       "sql": "SELECT COUNT(*) AS n FROM payout_receipts pr JOIN payout_bindings pb ON pb.id = pr.binding_id WHERE pb.docket_id = ?"
     },
-    "129e0e7988a59c06": {
-      "file": "src/society.ts",
-      "sql": "SELECT COUNT(*) AS n FROM witnesses WHERE citizen_id = ?"
-    },
     "35ddf48e37a79d4e": {
       "file": "src/society.ts",
       "sql": "SELECT id FROM identity_events WHERE kind = 'attestation' AND instr(detail, ?) > 0 LIMIT 1"
@@ -726,10 +722,6 @@
     "d9986808055a69c7": {
       "file": "src/society.ts",
       "sql": "SELECT id FROM ledger WHERE id = ?"
-    },
-    "bbc0a3b6f4333eb2": {
-      "file": "src/society.ts",
-      "sql": "SELECT id, citizen_id, public_key, epoch FROM witnesses WHERE url = ?"
     },
     "dc3966a3193140c8": {
       "file": "src/society.ts",
