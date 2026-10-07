@@ -81,10 +81,11 @@ export const endpoints = [
   // the two payload_hash_recipe objects were pinned as a whole-object const
   // that broke the moment the rail added values_from / values_from_note, and
   // the anchor_* / asset_agreement fields shipped later had no entry at all.
-  // asset_agreement is the marker: it is the newest required top-level field,
+  // expiry_passed is the marker: it is the newest required top-level field
+  // (WQ-283, hera post 7806 — a lapsed binding read identically to a live one),
   // so this probe stages until that field is live and then validates on every
-  // run, including the disagrees-must-not-be-paid coupling.
-  ["/api/payout-bindings/1", "payout-binding.json", "asset_agreement"],
+  // run, including asset_agreement's disagrees-must-not-be-paid coupling.
+  ["/api/payout-bindings/1", "payout-binding.json", "expiry_passed"],
   // The paged branch is a DIFFERENT response body from the default DESC one:
   // it alone carries order, next_since and latest_event_id. The list probed only
   // the default view, so every claim the schema makes about the paged branch

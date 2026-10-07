@@ -5290,8 +5290,17 @@ export async function funderStatementFor(env: Env, bindingId: number, q: { tx_ha
   return {
     statement,
     binding_id: bindingId,
+    expiry: binding.expiry,
+    expiry_passed: Math.floor(Date.now() / 1000) >= binding.expiry,
     sign_with: "EIP-191 personal_sign these exact UTF-8 bytes with the wallet that sent the tokens (source_address). Hand the statement and signature to the payee, in public is fine (they are bound to this one transfer and binding and cannot be replayed); the payee submits them to POST /api/payout-bindings/:id/receipt.",
-    note: "The registry rebuilds this sentence from the chain at receipt time; if your log_index or source is wrong the receipt is refused with the expected sentence in the error, and nothing is recorded.",
+    // The receipt check is on the PAYMENT's block timestamp, not the clock at
+    // receipt time (payouts.ts: "the payment landed at or after the signed
+    // payout authorization expired", blockTimestamp >= binding.expiry). So a
+    // binding whose expiry is already in the past is NOT a dead route: a
+    // Transfer that landed strictly before expiry is still recordable today.
+    // expiry_passed says the window to MAKE a new payment has closed, not that
+    // this statement is useless. A binding is not a debt; nothing here is owed.
+    note: "The registry rebuilds this sentence from the chain at receipt time; if your log_index or source is wrong the receipt is refused with the expected sentence in the error, and nothing is recorded. This authorization's expiry is the `expiry` field (unix seconds): a Transfer whose block landed at or after that moment is refused at receipt time, so when expiry_passed is true only a Transfer that already landed before expiry can still be recorded — a payment made now cannot.",
   };
 }
 
@@ -5409,6 +5418,14 @@ export async function getPayoutBinding(env: Env, id: number) {
     token: binding.token,
     address: binding.payout_address,
     expiry: binding.expiry,
+    // WQ-283 (hera, post 7806): a binding past its own expiry read identically
+    // to a live one on this base GET. expiry_passed is whether the clock is now
+    // at or past `expiry` — the same signal WQ-277 added to the funder-statement
+    // sub-route. It extinguishes nothing: a Transfer that landed before expiry
+    // is still recordable (payouts.ts checks the PAYMENT's block timestamp), and
+    // `receipt` is non-null once one is filed. A binding is a routing
+    // authorization, never a debt and never a reservation.
+    expiry_passed: Math.floor(Date.now() / 1000) >= binding.expiry,
     signature: binding.wallet_signature,
     citizen_public_key: binding.citizen_public_key,
     citizen_signature: binding.citizen_signature,
@@ -5440,7 +5457,7 @@ export async function getPayoutBinding(env: Env, id: number) {
     chain_anchor: chainAnchor,
     receipt: receiptView,
     note:
-      "Rebuild preimage from the structured fields before checking either signature. The address is public; safety is typed provenance, not secrecy. An unreceipted binding cannot prevent two outside funders from sending concurrently, so payers must coordinate rather than treat it as a reservation.",
+      "Rebuild preimage from the structured fields before checking either signature. The address is public; safety is typed provenance, not secrecy. An unreceipted binding cannot prevent two outside funders from sending concurrently, so payers must coordinate rather than treat it as a reservation. expiry_passed true means the window to make a NEW payment against this authorization has closed; it extinguishes nothing, a Transfer that landed before expiry is still recordable, and receipt is non-null once one is filed.",
   };
 }
 
@@ -6205,8 +6222,10 @@ export async function railCensus(env: Env) {
        FROM payout_bindings pb JOIN payout_receipts pr ON pr.binding_id = pb.id`,
   ).all<{ row: string; chain_id: number; token: string; amount_atomic: string; receipt_id: number }>();
   // OBSERVED PAYMENTS (migration 0049), per listing and per asset, and the
-  // zero-value poisoning rows per funder wallet. Read off the chain by the
-  // cron, two providers agreeing; a weaker tier than receipts, summed apart.
+  // zero-value transfers seen per funder wallet (the observer walks each funder
+  // wallet's OUTBOUND logs, topics[1] = from, so these appear FROM the funder,
+  // not inbound rows aimed AT it). Read off the chain by the cron, two
+  // providers agreeing; a weaker tier than receipts, summed apart.
   const { results: observedRows } = await env.DB.prepare(
     `SELECT listing_id, token, amount_atomic FROM observed_transfers WHERE kind = 'payment' AND listing_id IS NOT NULL`,
   ).all<{ listing_id: number; token: string; amount_atomic: string }>();
@@ -6218,10 +6237,10 @@ export async function railCensus(env: Env) {
     acc.by_asset[key] = (BigInt(acc.by_asset[key] ?? "0") + BigInt(o.amount_atomic)).toString();
     observedByListing.set(o.listing_id, acc);
   }
-  const { results: poisonRows } = await env.DB.prepare(
+  const { results: zeroValueRows } = await env.DB.prepare(
     `SELECT funder_address, COUNT(*) AS n FROM observed_transfers WHERE kind = 'zero_value' GROUP BY funder_address`,
   ).all<{ funder_address: string; n: number }>();
-  const poisonByWallet = new Map(poisonRows.map((r) => [r.funder_address.toLowerCase(), Number(r.n)]));
+  const zeroValueByWallet = new Map(zeroValueRows.map((r) => [r.funder_address.toLowerCase(), Number(r.n)]));
   // The observer's own state, served so a stalled or empty walk is visible
   // rather than read as "looked and found nothing": which wallets are watched,
   // the last block each walk reached, when, the last range and its row count,
@@ -6489,19 +6508,35 @@ export async function railCensus(env: Env) {
   // Settlement history, per funder. A missed payment deadline is a fact about
   // the party who missed it, and on a promise listing their history is the
   // only thing standing behind the next listing they post.
-  const funders = new Map<string, { funder: string; listings: number; observed_payments: number; observed_paid_atomic_by_asset: Record<string, string>; zero_value_transfers_to_funder_wallet: number; v2_listings: number; v2_paid_atomic: string; v2_currently_due_atomic: string; v2_overdue_unpaid_atomic: string; v2_overdue_awards: number; v2_expired_unclaimed_atomic: string; legacy_listings: number; legacy_bindings_unclassified: number; liability_scope: string }>();
+  const funders = new Map<string, { funder: string; listings: number; observed_payments: number; observed_paid_atomic_by_asset: Record<string, string>; zero_value_transfers_from_funder_wallet: number; v2_listings: number; v2_paid_atomic: string; v2_currently_due_atomic: string; v2_overdue_unpaid_atomic: string; v2_overdue_awards: number; v2_expired_unclaimed_atomic: string; legacy_listings: number; legacy_bindings_unclassified: number; liability_scope: string }>();
+  // Zero-value transfers are counted once per distinct funder wallet, not once
+  // per listing: a funder with two wallets sums both, a wallet shared across
+  // two listings is counted once. Tracked outside the per-listing loop.
+  const zeroValueWalletsCounted = new Map<string, Set<string>>();
   for (const r of rows) {
     const key = String(r.funder);
-    const f = funders.get(key) ?? { funder: key, listings: 0, observed_payments: 0, observed_paid_atomic_by_asset: {}, zero_value_transfers_to_funder_wallet: 0, v2_listings: 0, v2_paid_atomic: "0", v2_currently_due_atomic: "0", v2_overdue_unpaid_atomic: "0", v2_overdue_awards: 0, v2_expired_unclaimed_atomic: "0", legacy_listings: 0, legacy_bindings_unclassified: 0, liability_scope: "v2_ledger" };
+    const f = funders.get(key) ?? { funder: key, listings: 0, observed_payments: 0, observed_paid_atomic_by_asset: {}, zero_value_transfers_from_funder_wallet: 0, v2_listings: 0, v2_paid_atomic: "0", v2_currently_due_atomic: "0", v2_overdue_unpaid_atomic: "0", v2_overdue_awards: 0, v2_expired_unclaimed_atomic: "0", legacy_listings: 0, legacy_bindings_unclassified: 0, liability_scope: "v2_ledger" };
     f.listings += 1;
     // Observed on chain, per funder: payments to bound addresses on their
-    // listings, and the zero-value poisoning rows aimed at their wallet. The
-    // second is a warning to the funder, not a mark against them.
+    // listings, and the zero-value transfers seen FROM their wallet(s). The
+    // observer walks each funder wallet's OUTBOUND Transfer logs only
+    // (eth_getLogs on topics[1] = from), so this counts zero-value sends that
+    // appear FROM the funder — where the transferFrom-zero poisoning artifact
+    // lands — not inbound transfers aimed AT the wallet, which the walk cannot
+    // see. Named for the direction the observer can actually report.
     f.observed_payments += r.observed_payments ?? 0;
     for (const [k, v] of Object.entries(r.observed_paid_atomic_by_asset ?? {})) {
       f.observed_paid_atomic_by_asset[k] = (BigInt(f.observed_paid_atomic_by_asset[k] ?? "0") + BigInt(v)).toString();
     }
-    if (r.funder_address) f.zero_value_transfers_to_funder_wallet = poisonByWallet.get(String(r.funder_address).toLowerCase()) ?? 0;
+    if (r.funder_address) {
+      const wallet = String(r.funder_address).toLowerCase();
+      const counted = zeroValueWalletsCounted.get(key) ?? new Set<string>();
+      if (!counted.has(wallet)) {
+        counted.add(wallet);
+        zeroValueWalletsCounted.set(key, counted);
+        f.zero_value_transfers_from_funder_wallet += zeroValueByWallet.get(wallet) ?? 0;
+      }
+    }
     f.v2_paid_atomic = (BigInt(f.v2_paid_atomic) + BigInt(r.economics.amount_paid_atomic)).toString();
     f.v2_currently_due_atomic = (BigInt(f.v2_currently_due_atomic) + BigInt(r.economics.currently_due_atomic)).toString();
     f.v2_overdue_unpaid_atomic = (BigInt(f.v2_overdue_unpaid_atomic) + BigInt(r.economics.overdue_unpaid_atomic)).toString();
