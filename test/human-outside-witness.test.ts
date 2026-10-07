@@ -16,11 +16,17 @@
 //   W6  let the adapter send check_only on a seal              -> "seal and check send what the door expects, and only that"
 //   W7  let the adapter accept a head that is not sha-256      -> "the adapter refuses a piece that cannot be part of the line"
 //   W8  link an outside site                                   -> "the page names no site but this one"
+//   W9  (2026-10-06, auditor) let the adapter seal a reserved name, or round a count through Number() -> "the adapter refuses the names the door reserves, and seals the digits it was given"
+//   W10 exit 0 on any 2xx, or on a 201 whose hash is not the line's    -> "the command exits 0 only on a seal or a check of the line"
+//   W11 send the line through a fake door only                          -> "one round trip through the real door"
 import test from "node:test";
 import assert from "node:assert/strict";
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { createHash } from "node:crypto";
+import { createServer } from "node:http";
+import { spawn, spawnSync } from "node:child_process";
+import { sha256Hex } from "../src/chain.ts";
 import worker from "../src/index.ts";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
 import {
@@ -113,12 +119,14 @@ test("the commands are the adapter's own", () => {
 });
 
 test("the figures are the ones the seal door enforces", () => {
-  assert.ok(text.includes(`an account may make ${SEALS_PER_DAY.toLocaleString("en-US")} in any rolling day`));
+  assert.ok(text.includes(`an account may make ${SEALS_PER_DAY.toLocaleString("en-US")} seals in any rolling day`));
   assert.ok(text.includes(`up to ${SEAL_CHECKS_PER_DAY.toLocaleString("en-US")} a day`));
   assert.ok(text.includes(`1 to ${LABEL_MAX} characters`));
-  assert.ok(text.includes(`One seal an hour is 24 a day; an account may make ${SEALS_PER_DAY} in any rolling day, so one each five minutes, 288 a day, does not fit`));
-  assert.ok(SEALS_PER_DAY < 288, "the page says one each five minutes does not fit; 288 a day would");
-  assert.ok(SEALS_PER_DAY >= 24, "the page says one an hour fits");
+  assert.ok(text.includes(`One seal an hour is 24 a day; an account may make ${SEALS_PER_DAY} seals in any rolling day, and a line already sealed is recorded as a check instead, up to ${SEAL_CHECKS_PER_DAY} a day. So one each five minutes, 288 a day, fits only a log whose head changes ${SEALS_PER_DAY} times a day or fewer`));
+  assert.ok(SEALS_PER_DAY < 288 && SEALS_PER_DAY >= 24);
+  assert.match(text, /not one of the names the registry keeps for its own records \(\s*mandate\s*,\s*journal\.head\s*,\s*anything beginning\s*stored\.\s*\)/);
+  assert.ok(!/nothing is written/.test(text), "a refusal is a row in the public nulls log; the page says no seal and no check");
+  assert.ok(text.includes("any other line is refused, with no seal and no check written"));
 });
 
 test("the worked example is the adapter's line for a seal that exists", () => {
@@ -147,4 +155,93 @@ test("the page names no site but this one, and every link is a path that exists"
   assert.ok(existsSync(repo(OW_SCRIPT_REPO_PATH)));
   assert.ok(SURFACE.some((r) => r.path === OW_EVIDENCE_PATH && r.method === "GET"));
   assert.ok(SURFACE.some((r) => r.path === "/api/seals" && r.method === "GET"));
+});
+
+test("the adapter refuses the names the door reserves, and seals the digits it was given", () => {
+  for (const log of ["mandate", "journal.head", "stored.diary", "stored."]) assert.throws(() => adapter.witnessLine(log, 1, HEAD), /must not be/, log);
+  assert.ok(adapter.witnessLine("mandates", 1, HEAD).includes("log=mandates"), "a prefix match is not a reserved name");
+  assert.ok(adapter.witnessLine("journal.heads", 1, HEAD).includes("log=journal.heads"));
+  // Above 2^53 a Number rounds; the line carries the digits as given.
+  assert.ok(adapter.witnessLine("ok", "9007199254740993", HEAD).includes("count=9007199254740993"));
+  assert.ok(adapter.witnessLine("ok", "9999999999999999", HEAD).includes("count=9999999999999999"));
+  for (const bad of ["01", "1e3", "1.0", "-1", "", " 1", "1 "]) assert.throws(() => adapter.witnessLine("ok", bad, HEAD), /digits only/, bad);
+});
+
+test("one round trip through the real door", async () => {
+  const { env, db } = sqliteTestEnv(schema);
+  const secret = "witness-adapter-test-secret-0123456789abcdef";
+  db.exec(`INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at) VALUES (1, 'logger', 'test-model', '${await sha256Hex(secret)}', 0, 0)`);
+  const fetchImpl = (url: string, init: RequestInit) => worker.fetch(new Request(url, init), env as never);
+  const sealed = await adapter.witness({ action: "seal", log: "my-log", count: 12, head: HEAD, secret, origin: OW_ORIGIN, fetchImpl });
+  assert.equal(sealed.status, 201, JSON.stringify(sealed));
+  assert.equal(sealed.ok, true);
+  assert.equal(sealed.sealed, true);
+  assert.equal(sealed.label, "my-log");
+  assert.equal(sealed.hash, createHash("sha256").update(sealed.line, "utf8").digest("hex"), "the door fingerprinted the line as sent");
+  assert.equal(sealed.from_text, true);
+  // The same line again is a check, not a second seal; a different line is refused with no seal and no check.
+  const same = await adapter.witness({ action: "check", log: "my-log", count: 12, head: HEAD, secret, origin: OW_ORIGIN, fetchImpl });
+  assert.equal(same.status, 201);
+  assert.equal(same.checked, true);
+  assert.equal(same.ok, true);
+  const grown = await adapter.witness({ action: "check", log: "my-log", count: 13, head: HEAD, secret, origin: OW_ORIGIN, fetchImpl });
+  assert.equal(grown.status, 409);
+  assert.equal(grown.ok, false);
+  assert.match(grown.error, /No seal and no check was written/);
+  const seals = (await (await worker.fetch(new Request(`${OW_ORIGIN}/api/seals?citizen=logger&label=my-log`), env as never)).json()) as { seals: { hash: string }[] };
+  assert.equal(seals.seals.length, 1, "one seal under the label after a seal, a check and a refusal");
+  // A reserved name is refused by the adapter before the door, and by the door if sent raw.
+  await assert.rejects(adapter.witness({ action: "seal", log: "mandate", count: 1, head: HEAD, secret, origin: OW_ORIGIN, fetchImpl }), /must not be/);
+  const raw = await worker.fetch(new Request(`${OW_ORIGIN}/api/seal`, { method: "POST", headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" }, body: JSON.stringify({ text: "x", label: "journal.head" }) }), env as never);
+  assert.equal(raw.status, 400);
+});
+
+test("the command exits 0 only on a seal or a check of the line", async () => {
+  const line = adapter.witnessLine("my-log", 12, HEAD);
+  const good = createHash("sha256").update(line, "utf8").digest("hex");
+  const answers: [number, string][] = [
+    [200, "<html>ok</html>"],
+    [200, "{}"],
+    [201, "{}"],
+    [201, JSON.stringify({ sealed: true, hash: "0".repeat(64) })],
+    [201, JSON.stringify({ sealed: true, hash: good, status: 500, line: "another" })],
+    [201, JSON.stringify({ checked: true, hash: good })],
+    [409, JSON.stringify({ error: "check_only: this is NOT what you last sealed" })],
+  ];
+  let i = 0;
+  const server = createServer((req, res) => {
+    const [status, body] = answers[i++];
+    res.writeHead(status, { "Content-Type": "application/json" });
+    res.end(body);
+  });
+  // No host name: the suite's offline guard refuses every dns.lookup, and a
+  // listen with a host string goes through one even for an IP literal.
+  await new Promise<void>((r) => server.listen(0, r));
+  const port = (server.address() as { port: number }).port;
+  // The fake door lives in this process, so the child must run without
+  // blocking the event loop: spawn, not spawnSync.
+  const run = () =>
+    new Promise<{ status: number | null; stdout: string }>((resolve) => {
+      // The child talks to the fake door on loopback, so it runs without the
+      // suite's offline guard (NODE_OPTIONS), which would refuse even that.
+      const { NODE_OPTIONS: _guard, ...env } = process.env;
+      const child = spawn(process.execPath, [repo(OW_SCRIPT_REPO_PATH), "seal", "--log", "my-log", "--count", "12", "--head", HEAD, "--origin", `http://127.0.0.1:${port}`], { env: { ...env, F916_SECRET: "s" } });
+      let stdout = "";
+      child.stdout.on("data", (d) => (stdout += d));
+      child.stderr.on("data", () => {});
+      child.on("close", (status) => resolve({ status, stdout }));
+    });
+  const results: { status: number | null; stdout: string }[] = [];
+  for (const _ of answers) results.push(await run());
+  await new Promise<void>((r) => server.close(() => r()));
+  assert.deepEqual(results.map((r) => r.status), [1, 1, 1, 1, 0, 0, 1]);
+  // The door's answer cannot overwrite what the adapter knows: status and line are the adapter's.
+  const fifth = JSON.parse(results[4].stdout);
+  assert.equal(fifth.status, 201);
+  assert.equal(fifth.line, line);
+  assert.equal(fifth.ok, true);
+  assert.equal(results[2].status, 1, "a 201 with no seal, no check and no hash is not success");
+  // `line` prints the line and a newline that is not part of it.
+  const printed = spawnSync(process.execPath, [repo(OW_SCRIPT_REPO_PATH), "line", "--log", "my-log", "--count", "12", "--head", HEAD], { encoding: "utf8" });
+  assert.equal(printed.stdout, line + "\n");
 });

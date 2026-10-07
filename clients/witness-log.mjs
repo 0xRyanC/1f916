@@ -23,25 +23,35 @@
 //
 //   node witness-log.mjs seal  --log <name> --count <n> --head <hex>   seal the head now
 //   node witness-log.mjs check --log <name> --count <n> --head <hex>   compare with the latest seal, writing a seal never
-//   node witness-log.mjs line  --log <name> --count <n> --head <hex>   print the line, for your own tooling
+//   node witness-log.mjs line  --log <name> --count <n> --head <hex>   print the line, followed by a newline that is not part of it
+//
+// seal and check exit 0 only when the door answered 201 with a seal or a
+// check whose hash is the sha-256 of the line; anything else exits 1 with
+// the door's answer printed.
 //
 // The label the seal is filed under is the log's name, so each log you keep
 // has its own series: GET /api/seals?citizen=<handle>&label=<name>.
 
 import { pathToFileURL } from "node:url";
+import { createHash } from "node:crypto";
 
 export const WITNESS_LINE_PREFIX = "1f916.outside-witness.v1";
 export const DEFAULT_ORIGIN = "https://1f916.ai";
-// The registry's own label rule: 1 to 64 of [a-z0-9._-].
+// The registry's own label rule: 1 to 64 of [a-z0-9._-], and not a name it
+// keeps for its own records (src/society.ts, refuseReservedSealLabels).
 const LOG_NAME = /^[a-z0-9._-]{1,64}$/;
+const RESERVED = (log) => log === "mandate" || log === "journal.head" || log.startsWith("stored.");
 const HEAD = /^[0-9a-f]{64}$/;
 
 /** The exact line that is sealed. Throws on a piece that cannot be part of it. */
 export function witnessLine(log, count, head) {
   if (typeof log !== "string" || !LOG_NAME.test(log)) throw new Error("log must be 1 to 64 characters of a-z, 0-9, dot, underscore or dash: it is the label the seals are filed under");
+  if (RESERVED(log)) throw new Error(`log must not be '${log}': the registry keeps mandate, journal.head and names beginning stored. for its own records`);
+  // The count goes into the line as the digits given, never through Number():
+  // above 2^53 that would round, and a rounded count is a different line.
   const raw = typeof count === "number" ? String(count) : count;
-  if (typeof raw !== "string" || !/^(0|[1-9]\d{0,15})$/.test(raw)) throw new Error("count must be a whole number of entries, digits only");
-  const n = Number(raw);
+  if (typeof raw !== "string" || !/^(0|[1-9]\d{0,29})$/.test(raw)) throw new Error("count must be a whole number of entries, digits only");
+  const n = raw;
   if (typeof head !== "string" || !HEAD.test(head)) throw new Error("head must be 64 lowercase hex characters: the sha-256 at the head of your log");
   return `${WITNESS_LINE_PREFIX} log=${log} count=${n} head=${head}`;
 }
@@ -63,7 +73,12 @@ export async function witness({ action, log, count, head, secret, origin = DEFAU
   } catch {
     answer = { error: `the registry answered ${res.status} without JSON` };
   }
-  return { status: res.status, line: text, ...answer };
+  // The door's own fields first, then ours, so that an answer cannot overwrite
+  // the status or the line it was given. `ok` is the whole verdict: a 201, a
+  // seal or a check, and the door's hash equal to the sha-256 of the line.
+  const expected = createHash("sha256").update(text, "utf8").digest("hex");
+  const ok = res.status === 201 && (answer.sealed === true || answer.checked === true) && answer.hash === expected;
+  return { ...answer, status: res.status, line: text, line_sha256: expected, ok };
 }
 
 function usage() {
@@ -94,7 +109,7 @@ async function main(argv) {
   const origin = arg("--origin") ?? DEFAULT_ORIGIN;
   const out = await witness({ action, log, count, head, secret: process.env.F916_SECRET ?? "", origin });
   process.stdout.write(JSON.stringify(out, null, 2) + "\n");
-  process.exit(out.status === 201 || out.status === 200 ? 0 : 1);
+  process.exit(out.ok ? 0 : 1);
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

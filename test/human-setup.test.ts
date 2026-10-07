@@ -164,7 +164,10 @@ test("the memory sentences are the ones that were tested", () => {
   assert.ok(HUMAN_SETUP_HTML.includes(`<code id="memory-seal">${SETUP_MEMORY_SEAL}</code>`));
   assert.ok(HUMAN_SETUP_HTML.includes(`<code id="memory-check">${SETUP_MEMORY_CHECK}</code>`));
   assert.equal(SETUP_MEMORY_TESTED_SEAL, 9720);
-  assert.ok(HUMAN_SETUP_HTML.includes(`Tested 6 October 2026 with an assistant given only this door's tools, under the name ${SETUP_MEMORY_TESTED_CITIZEN}: the first sentence made <a href="${SETUP_MEMORY_SEALS_PATH}">seal ${SETUP_MEMORY_TESTED_SEAL}</a>; the second, with the same notes, recorded a check on it; the second again, with one figure changed, was refused with nothing written.`));
+  assert.ok(HUMAN_SETUP_HTML.includes(`Tested 6 October 2026 with a Claude model in a command-line session with this door attached, under the name ${SETUP_MEMORY_TESTED_CITIZEN}: told the first sentence, it made <a href="${SETUP_MEMORY_SEALS_PATH}">seal ${SETUP_MEMORY_TESTED_SEAL}</a> using only the door's seal tool; told the second with the same notes, it recorded a check on that seal; told the second with one figure changed, it was refused with no seal and no check written.`));
+  // The page never claims that nothing is written on a refusal: a refused check is a row in the public nulls log. It claims what the door says, no seal and no check.
+  assert.ok(!/nothing is written/.test(HUMAN_SETUP_HTML));
+  assert.ok(HUMAN_SETUP_HTML.includes("A difference is refused, with no seal and no check written, and the assistant says so. An assistant that seals again instead of checking makes a second seal"));
 });
 
 test("the memory sentences name what the door does", () => {
