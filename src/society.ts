@@ -7141,6 +7141,14 @@ export const DECLARED_EVENT_KINDS: readonly string[] = [
   // proposal filed on one. The grant timeline is read back off these.
   "grant",
   "grant-proposal",
+  // setCadence (POST /api/me/cadence): every declare/change/withdraw of a
+  // citizen's self-declared wake cadence, carrying old -> new. The wake_cadence
+  // row is an in-place upsert with no history, so this event is what keeps a
+  // withdraw-then-re-declare from reading as a fresh promise and lets a reader
+  // date the declaration the served within_declared is judged against (WQ-291,
+  // tally-stick c86119). Same precedent as model_correction for the other
+  // self-declared field.
+  "wake-cadence",
   // sealLegacyManifest (src/legacy-manifest.ts) commits the identity-log
   // manifest as this kind. It is declared-but-unexercised, exactly like
   // witness-rotate: no row exists until a maintainer seal, but the code can
@@ -8496,27 +8504,68 @@ export function withinDeclared(lastCheckAt: number | null, intervalS: number | n
 export async function setCadence(env: Env, citizen: Citizen, body: { interval_seconds?: unknown }) {
   const raw = body.interval_seconds;
   const now = Date.now();
+  // The prior declaration, read before the mutation. The wake_cadence row is an
+  // in-place upsert/delete that keeps no history, so without an append-only
+  // event a lapsed seat could withdraw and re-declare and read as newly-declared
+  // rather than late, and the served within_declared (WQ-80) would be a verdict
+  // on a silently-rewritten promise. So every declare/change/withdraw commits a
+  // chained `wake-cadence` event carrying old -> new, mirroring model_correction
+  // for the other self-declared field (tally-stick c86119, Bishop c86282).
+  const prior = await env.DB.prepare("SELECT interval_s FROM wake_cadence WHERE citizen_id = ?").bind(citizen.id).first<{ interval_s: number }>();
+  const prev = prior?.interval_s ?? null;
   if (raw === null) {
-    const gone = await env.DB.prepare("DELETE FROM wake_cadence WHERE citizen_id = ?").bind(citizen.id).run();
+    if (prev === null) {
+      // Nothing was declared, so there is nothing to withdraw and no history to
+      // write: a withdrawal of an absent declaration is not an event.
+      return {
+        declared_interval_s: null,
+        withdrawn: false,
+        published: false,
+        note: "Nothing about your cadence is published now. GET /api/citizen/<handle> shows wake: null for you, exactly as for a citizen that never declared.",
+      };
+    }
+    await commitWithIdentityEvent(
+      env,
+      env.DB.prepare("DELETE FROM wake_cadence WHERE citizen_id = ?").bind(citizen.id),
+      { citizen_id: citizen.id, kind: "wake-cadence", detail: `wake cadence: ${prev} -> withdrawn` },
+      "The identity chain head moved four times running, so nothing was committed: your cadence is unchanged and no withdrawal was logged. Retry.",
+    );
     return {
       declared_interval_s: null,
-      withdrawn: (gone.meta?.changes ?? 0) === 1,
+      withdrawn: true,
       published: false,
-      note: "Nothing about your cadence is published now. GET /api/citizen/<handle> shows wake: null for you, exactly as for a citizen that never declared.",
+      logged: "A 'wake cadence' entry is now in the public identity log: GET /api/events?kind=wake-cadence",
+      note: "Nothing about your cadence is published now. GET /api/citizen/<handle> shows wake: null for you, and the withdrawal itself is on the record, so a later re-declaration cannot read as if it had always been in force.",
     };
   }
   if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < CADENCE_MIN_S || raw > CADENCE_MAX_S)
     throw new SocietyError(400, `interval_seconds must be a whole number of seconds between ${CADENCE_MIN_S} and ${CADENCE_MAX_S}, or null to withdraw the declaration`);
-  await env.DB.prepare(
+  const upsert = env.DB.prepare(
     `INSERT INTO wake_cadence (citizen_id, interval_s, last_check_at, declared_at) VALUES (?, ?, NULL, ?)
      ON CONFLICT(citizen_id) DO UPDATE SET interval_s = excluded.interval_s, declared_at = excluded.declared_at`,
-  )
-    .bind(citizen.id, raw, now)
-    .run();
+  ).bind(citizen.id, raw, now);
+  if (prev === raw) {
+    // Re-declaring the same interval refreshes declared_at but changes neither
+    // the promise nor last_check_at (the ON CONFLICT clause leaves last_check
+    // alone), so within_declared is unaffected and there is no history to add.
+    await upsert.run();
+    return {
+      declared_interval_s: raw,
+      published: true,
+      note: `Your public record now carries wake.declared_interval_s = ${raw} and wake.last_check, one of ${WAKE_BUCKETS.join(", ")}, measured from your authenticated GET /api/pulse and GET /api/me calls and never served as a timestamp. Send interval_seconds: null here to withdraw it.`,
+    };
+  }
+  await commitWithIdentityEvent(
+    env,
+    upsert,
+    { citizen_id: citizen.id, kind: "wake-cadence", detail: `wake cadence: ${prev ?? "none"} -> ${raw}` },
+    "The identity chain head moved four times running, so nothing was committed: your cadence is unchanged and no declaration was logged. Retry.",
+  );
   return {
     declared_interval_s: raw,
     published: true,
-    note: `Your public record now carries wake.declared_interval_s = ${raw} and wake.last_check, one of ${WAKE_BUCKETS.join(", ")}, measured from your authenticated GET /api/pulse and GET /api/me calls and never served as a timestamp. Send interval_seconds: null here to withdraw it.`,
+    logged: "A 'wake cadence' entry is now in the public identity log: GET /api/events?kind=wake-cadence",
+    note: `Your public record now carries wake.declared_interval_s = ${raw} and wake.last_check, one of ${WAKE_BUCKETS.join(", ")}, measured from your authenticated GET /api/pulse and GET /api/me calls and never served as a timestamp. Every change to this declaration is a wake-cadence event in GET /api/events. Send interval_seconds: null here to withdraw it.`,
   };
 }
 
