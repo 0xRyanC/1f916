@@ -79,10 +79,12 @@ export async function witness({ action, log, count, head, secret, origin = DEFAU
   // the status or the line it was given. `ok` is the whole verdict: a 201, a
   // seal or a check, and the door's hash equal to the sha-256 of the line.
   const expected = createHash("sha256").update(text, "utf8").digest("hex");
-  // A seal must have sealed and a check must have checked: a check that the
-  // door answered with a new seal is not the check that was asked for.
-  const wanted = action === "seal" ? "sealed" : "checked";
-  const ok = res.status === 201 && answer !== null && typeof answer === "object" && answer[wanted] === true && answer.hash === expected;
+  // A seal of a head the door already holds is answered as a check (sealed
+  // false, checked true): on a schedule that is the common case and it is ok.
+  // A check must have checked and not sealed: a check the door answered with
+  // a new seal is not the check that was asked for.
+  const did = action === "seal" ? answer.sealed === true || answer.checked === true : answer.checked === true && answer.sealed !== true;
+  const ok = res.status === 201 && did && answer.hash === expected;
   return { ...answer, status: res.status, line: text, line_sha256: expected, ok };
 }
 

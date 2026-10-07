@@ -192,17 +192,24 @@ test("one round trip through the real door", async () => {
   assert.equal(same.status, 201);
   assert.equal(same.checked, true);
   assert.equal(same.ok, true);
-  // A check answered with a seal is not ok; a seal answered with a check is not ok.
-  const sealedAnswer = async () => new Response(JSON.stringify({ sealed: true, hash: createHash("sha256").update(adapter.witnessLine("my-log", 12, HEAD), "utf8").digest("hex") }), { status: 201 });
+  // A scheduled seal of an unchanged head is answered as a check by the real door, and that is ok.
+  const again = await adapter.witness({ action: "seal", log: "my-log", count: 12, head: HEAD, secret, origin: OW_ORIGIN, fetchImpl });
+  assert.equal(again.status, 201);
+  assert.equal(again.sealed, false);
+  assert.equal(again.checked, true);
+  assert.equal(again.ok, true);
+  // A check answered with a seal is not ok, alone or beside checked.
+  const h = createHash("sha256").update(adapter.witnessLine("my-log", 12, HEAD), "utf8").digest("hex");
+  const sealedAnswer = async () => new Response(JSON.stringify({ sealed: true, hash: h }), { status: 201 });
   assert.equal((await adapter.witness({ action: "check", log: "my-log", count: 12, head: HEAD, secret, origin: OW_ORIGIN, fetchImpl: sealedAnswer })).ok, false);
-  const checkedAnswer = async () => new Response(JSON.stringify({ checked: true, hash: createHash("sha256").update(adapter.witnessLine("my-log", 12, HEAD), "utf8").digest("hex") }), { status: 201 });
-  assert.equal((await adapter.witness({ action: "seal", log: "my-log", count: 12, head: HEAD, secret, origin: OW_ORIGIN, fetchImpl: checkedAnswer })).ok, false);
+  const bothAnswer = async () => new Response(JSON.stringify({ sealed: true, checked: true, hash: h }), { status: 201 });
+  assert.equal((await adapter.witness({ action: "check", log: "my-log", count: 12, head: HEAD, secret, origin: OW_ORIGIN, fetchImpl: bothAnswer })).ok, false);
   const grown = await adapter.witness({ action: "check", log: "my-log", count: 13, head: HEAD, secret, origin: OW_ORIGIN, fetchImpl });
   assert.equal(grown.status, 409);
   assert.equal(grown.ok, false);
   assert.match(grown.error, /No seal and no check was written/);
   const seals = (await (await worker.fetch(new Request(`${OW_ORIGIN}/api/seals?citizen=logger&label=my-log`), env as never)).json()) as { seals: { hash: string }[] };
-  assert.equal(seals.seals.length, 1, "one seal under the label after a seal, a check and a refusal");
+  assert.equal(seals.seals.length, 1, "one seal under the label after a seal, a re-seal, a check and a refusal");
   // A reserved name is refused by the adapter before the door, and by the door if sent raw.
   await assert.rejects(adapter.witness({ action: "seal", log: "mandate", count: 1, head: HEAD, secret, origin: OW_ORIGIN, fetchImpl }), /must not be/);
   const raw = await worker.fetch(new Request(`${OW_ORIGIN}/api/seal`, { method: "POST", headers: { Authorization: `Bearer ${secret}`, "Content-Type": "application/json" }, body: JSON.stringify({ text: "x", label: "journal.head" }) }), env as never);
@@ -252,9 +259,9 @@ test("the command exits 0 only on a seal or a check of the line", async () => {
     // Closed before any assertion can throw, or an open server keeps the runner alive forever.
     await new Promise<void>((r) => server.close(() => r()));
   }
-  // The sixth answer is a check's success; a seal command must not take it as its own.
-  assert.equal(results[5].status, 1);
-  assert.deepEqual(results.map((r) => r.status), [1, 1, 1, 1, 0, 1, 1, 1]);
+  // The sixth answer is the door recording a check for a seal of an unchanged head: ok for a seal command.
+  assert.equal(results[5].status, 0);
+  assert.deepEqual(results.map((r) => r.status), [1, 1, 1, 1, 0, 0, 1, 1]);
   // A null body is an answer the adapter names, not a TypeError.
   assert.match(JSON.parse(results[7].stdout).error, /answered 201 with null/);
   // The door's answer cannot overwrite what the adapter knows: status and line are the adapter's.
