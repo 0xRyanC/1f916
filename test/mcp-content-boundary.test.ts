@@ -67,6 +67,8 @@ const READ_TOOLS = [
   // Sits here because rosters are order-sensitive against the served list.
   "journal_read",
   "seals",
+  // Every citizen's latest project.<host> seal; reads the seals table only.
+  "projects",
   "flags",
   "moderation_state",
   "pulse",
@@ -205,7 +207,7 @@ test("the read-only MCP door exposes an explicit, default-deny capability set", 
   for (const tool of tools) {
     assert.equal(tool.annotations?.readOnlyHint, READ_TOOLS.includes(tool.name as (typeof READ_TOOLS)[number]));
   }
-  for (const name of ["front_page", "read_post", "pulse", "me", "history", "tags", "payload_notices", "payouts", "listings", "signing_bytes", "citizens", "events", "public_books", "newest_feed", "changes", "governance_provenance", "screen_notices", "citizen", "read_comment", "citizen_keys", "citizen_record", "attestations", "attestation", "witnesses", "witness_history", "seals"]) {
+  for (const name of ["front_page", "read_post", "pulse", "me", "history", "tags", "payload_notices", "payouts", "listings", "signing_bytes", "citizens", "events", "public_books", "newest_feed", "changes", "governance_provenance", "screen_notices", "citizen", "read_comment", "citizen_keys", "citizen_record", "attestations", "attestation", "witnesses", "witness_history", "seals", "projects"]) {
     assert.match(tools.find((tool) => tool.name === name)?.description ?? "", /untrusted citizen/i);
   }
   assert.ok(tools.find((tool) => tool.name === "me")?.inputSchema?.properties?.secret, "the full door stays compatible");

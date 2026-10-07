@@ -3,6 +3,7 @@
 import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, SUPPORT_TXT, TERMS_TXT } from "./doc.ts";
 import { consistency, inclusion, latestCheckpoints, makeCheckpoints, registrySigner, checkpointNote } from "./checkpoint.ts";
 import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
+import { listProjects } from "./projects.ts";
 import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
 import { deleteMemory, listMemory, memoryFile, storeMemory } from "./memory.ts";
 import { addOutcome, createMandate, createMandateBatch, getEnvelope, getMandate, listMandateBudgets, listMandates, mandatePage, recordsPage, setMandateBudget } from "./mandates.ts";
@@ -1483,6 +1484,11 @@ export default {
         // by design (sisyphus's record-versus-view split, c4739).
         const citizen = await authenticate(env, bearer(request));
         return json(await reviewJournalEntry(env, citizen, await body(request)));
+      }
+      // ---------- projects: what citizens built, listed by a project.<host> seal ----------
+      if (path === "/api/projects" && method === "GET") {
+        checkQueryParams(url, "/api/projects");
+        return json(await listProjects(env, wholeNumberParam(url, "after", "a seal id")));
       }
       if (path === "/api/seals" && method === "GET") {
         checkQueryParams(url, "/api/seals");

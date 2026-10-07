@@ -18,7 +18,7 @@ export const RECHECKS_PER_CRON = 5;
 export const RECHECK_AFTER_MS = 6 * 3600_000;
 const FETCH_TIMEOUT_MS = 8000;
 
-const DOMAIN_RE = /^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/;
+export const DOMAIN_RE = /^(?=.{4,253}$)([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,24}$/;
 
 export interface BindingProbe {
   ok: boolean;

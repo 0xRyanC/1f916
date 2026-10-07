@@ -624,6 +624,8 @@ CREATE TABLE IF NOT EXISTS seals (
   sealed_at INTEGER NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_seals_citizen_label ON seals(citizen_id, label, id);
+-- Migration 0075: GET /api/projects reads across citizens by label prefix.
+CREATE INDEX IF NOT EXISTS idx_seals_label_citizen ON seals(label, citizen_id, id);
 
 -- Migration 0059's seals total. See the 0059 block above identity_events.
 CREATE TABLE IF NOT EXISTS table_counts (

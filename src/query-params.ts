@@ -43,6 +43,7 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
   "/porch/:day": [],
   "/api/attest": ["from", "identity_from", "identity_expect", "ledger_from", "ledger_expect"],
   "/api/anchors": ["since_id"],
+  "/api/projects": ["after"],
   "/api/mandates": ["citizen", "since_id", "subject"],
   "/api/memory": ["citizen", "label", "before_id"],
   "/records/:handle": ["subject"],

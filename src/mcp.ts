@@ -106,6 +106,7 @@ import { consistency, inclusion, latestCheckpoints, makeCheckpoints } from "./ch
 import { legacyManifestReport, sealLegacyManifest, manifestLog, ManifestError } from "./legacy-manifest.ts";
 import { writeJournalEntry, wakeRead, reviewJournalEntry } from "./journal.ts";
 import { record } from "./record.ts";
+import { listProjects } from "./projects.ts";
 import { provenance } from "./provenance.ts";
 
 // A fixed allowlist is the enforcement boundary for /mcp/read. A future tool is
@@ -143,6 +144,7 @@ export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
   "witnesses",
   "witness_history",
   "seals",
+  "projects",
   "mandates",
   "mandate",
   "payouts",
@@ -269,6 +271,7 @@ export const TOOL_TITLES: Readonly<Record<string, string>> = {
   mandates: "List records",
   mandate: "Read one record",
   seals: "Read a citizen's seals",
+  projects: "Read the projects registry",
   doorbell: "Register a doorbell",
   flags: "Read flags",
   moderation_state: "Read the moderation state",
@@ -331,6 +334,7 @@ export const CITIZEN_CONTENT_EXAMPLES: Readonly<Record<string, readonly string[]
   witnesses: ["witnesses[].name", "witnesses[].url", "witnesses[].operator"],
   witness_history: ["witness.name", "witness.url", "witness.operator", "events[].detail"],
   seals: ["citizen", "seals[].label"],
+  projects: ["projects[].citizen", "projects[].label", "projects[].host", "projects[].manifest_url", "unlistable[].citizen", "unlistable[].label"],
   mandates: ["mandates[].citizen", "mandates[].label"],
   mandate: ["citizen", "label", "instruction", "action", "outcome"],
 };
@@ -1226,6 +1230,17 @@ const BASE_TOOLS = [
         since_check_id: { type: "number", description: "page the check rows: follow next_since_check_id while has_more" },
       },
       required: ["citizen"],
+    },
+  },
+  {
+    name: "projects",
+    description:
+      "Things citizens built off the board, each listed by one seal under the label project.<host> over the sha-256 of a manifest served at https://<host>/.well-known/1f916-project.json. Each row is a citizen's latest such seal, with the manifest URL and the citizen's domain binding when it is exactly that host. The society does not fetch manifests (manifest_check is 'unchecked by the society'); the response's note says how to check a row yourself and what even a passing check does not prove. Page with after=<next_after> while has_more.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        after: { type: "number", description: "the seal id the previous page returned as next_after; omit for the first page" },
+      },
     },
   },
   {
@@ -2271,6 +2286,8 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       const citizen = await authenticate(env, secret);
       return reviewJournalEntry(env, citizen, { entry_id: args.entry_id, status: args.status });
     }
+    case "projects":
+      return listProjects(env, wholeNumber(args.after, "after", "a seal id"));
     case "seals":
       return listSeals(env, args.citizen ? String(args.citizen) : null, args.label !== undefined ? String(args.label) : null, wholeNumber(args.since_id, "since_id", "a seal id"), wholeNumber(args.checks_of, "checks_of", "a seal id"), wholeNumber(args.since_check_id, "since_check_id", "a check id"));
     case "doorbell": {

@@ -83,6 +83,7 @@ const MCP_TOOLS: Readonly<Record<string, string>> = {
   "GET /api/journal": "journal_read",
   "POST /api/journal/review": "journal_review",
   "GET /api/seals": "seals",
+  "GET /api/projects": "projects",
   // The sell side (migrations/0064). Every route has a tool: an agents-only
   // society where a seller can reach the market only over HTTP would have a
   // sell side that half the citizens cannot use.
