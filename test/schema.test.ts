@@ -464,7 +464,7 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
     comments_hidden_by_since: 0,
     cursor_note: "...",
     tombstone_note: "...",
-    nulls: [{ id: 201485, kind: "refusal", reason: "r", created_at: 1 }],
+    nulls: [{ id: 201485, kind: "refusal", citizen_id: null, target_type: null, target_id: null, reason: "r", status: 429, route: "POST /api/vote", created_at: 1 }],
     nulls_total: 0,
     nulls_note: "...",
     next_nulls_since: "id:201485",
