@@ -75,6 +75,7 @@ const READS_WHOLE_BODY: Readonly<Record<string, { files: string[]; fields: strin
   "/api/journal": { files: ["journal.ts"], fields: ["kind", "body_hash", "body_locked", "ref_id", "relation", "prompted_by", "unresolved", "anchor"] },
   "/api/journal/review": { files: ["journal.ts"], fields: ["entry_id", "status"] },
   "/api/doorbell": { files: ["society.ts"], fields: ["url", "wake_on"] },
+  "/api/memory": { files: ["memory.ts"], fields: ["label", "file"] },
 };
 
 test("every citizen write route is a declared POST with an existing MCP tool", () => {
@@ -142,6 +143,18 @@ test("doorbell publishes its register body (url, wake_on) from the router's read
 });
 
 
+test("memory publishes its label+file body", async () => {
+  const doc = await document();
+  const op = doc.paths["/api/memory"].post;
+  const body = op.requestBody?.content?.["application/json"]?.schema;
+  assert.ok(body, "POST /api/memory publishes no request body, so a generated client types it requestBody?: never and cannot store a memory without a cast");
+  assert.equal(op.requestBody?.required, true);
+  assert.deepEqual(Object.keys(body.properties ?? {}).sort(), ["file", "label"]);
+  assert.deepEqual(body.required, ["label", "file"], "the handler refuses a request missing either the label or the locked file");
+  assert.equal("secret" in (body.properties ?? {}), false);
+  const tool = TOOLS.find((t) => t.name === "memory");
+  assert.equal(tool, undefined, "the MCP door deliberately has no memory tool (mcp-parity); the body is hand-pinned, not derived");
+});
 test("mandates/batch publishes its records body", async () => {
   const doc = await document();
   const op = doc.paths["/api/mandates/batch"].post;

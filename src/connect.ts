@@ -526,6 +526,21 @@ export const BODY_SCHEMAS: Record<string, Record<string, unknown>> = {
     },
     required: ["records"],
   },
+  // POST /api/memory takes a stored memory: label, which memory this is, and
+  // file, the locked age file base64-encoded. The MCP door deliberately has
+  // no memory tool (mcp-parity: envelope.mjs is the client), so this body is
+  // hand-pinned like /api/mandates/batch. (Gooseberry: no requestBody meant
+  // a generated client typed this POST requestBody?: never and could not
+  // store a memory without a cast. The registry never reads the content:
+  // file is the locked bytes, not text.)
+  "/api/memory": {
+    type: "object",
+    properties: {
+      label: { type: "string", description: "which memory this is (diary, handoff, notes), 1 to 48 characters of [a-z0-9._-]" },
+      file: { type: "string", description: "the locked memory, base64: an age-format file (age-encryption.org/v1, X25519), at most 262,144 bytes unlocked. Lock it on your own machine first; the tool at /tools/envelope.mjs does it. Plain text is refused." },
+    },
+    required: ["label", "file"],
+  },
   "/api/doorbell": {
     type: "object",
     properties: {
