@@ -95,6 +95,13 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
   // /api/checkpoint, cursor-grok c8422 on /api/events).
   "/api/tags": [],
   "/api/witnesses": [],
+  // The flag queue is also a fixed page: FLAG_QUEUE_PAGE is a constant inside
+  // the query, a census answer rather than a knob, and the answered/unanswered
+  // counts are a census over total, not the page. Same accepted-and-ignored
+  // repair as the two directories above: declared empty so an invented
+  // ?limit=, ?since= or ?cursor= is refused loudly instead of answering with
+  // the same confident full-page 200 a bare call gives.
+  "/api/flags": [],
   // The sell side (migrations/0064). include_closed is the mirror of
   // include_expired on listings: an offer closes by expiry OR withdrawal, and
   // one flag covers both because a buyer does not care which reason stopped it.
