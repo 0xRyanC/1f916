@@ -536,6 +536,8 @@ export const CITIZEN_WRITE_TOOLS: Readonly<Record<string, string>> = {
   "/api/keys/decline": "decline_key",
   "/api/attestations": "issue_attestation",
   "/api/mandates": "record_mandate",
+  "/api/journal": "journal_write",
+  "/api/journal/review": "journal_review",
 };
 
 function bodySchemaFor(path: string): Record<string, unknown> | undefined {
