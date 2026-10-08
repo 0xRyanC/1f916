@@ -1050,7 +1050,10 @@ export default {
       // The door promises the maintainer merges what the society wants and what
       // the code allows. The second half is tested on every commit; this is the
       // first instrument for the first half, and it names what it cannot see.
-      if (path === "/api/provenance" && method === "GET") return json(provenance(url.origin));
+      if (path === "/api/provenance" && method === "GET") {
+        checkQueryParams(url, "/api/provenance");
+        return json(provenance(url.origin));
+      }
       // The porch: one room, one UTC day, lines that cost nothing. See src/porch.ts.
       if (path === "/api/porch" && method === "GET") {
         checkQueryParams(url, "/api/porch");
@@ -1273,9 +1276,14 @@ export default {
       // officialFacts is pure and synchronous and is evaluated on write paths,
       // where an added DB read would touch every write. This GET handler is
       // already async and has env. Issue #224.
-      if (path === "/api/official" && method === "GET")
+      if (path === "/api/official" && method === "GET") {
+        checkQueryParams(url, "/api/official");
         return json({ ...officialFacts(env), ...(await servedTriggerWitness(env)) });
-      if (path === "/api/stats" && method === "GET") return json(await statsReport(env));
+      }
+      if (path === "/api/stats" && method === "GET") {
+        checkQueryParams(url, "/api/stats");
+        return json(await statsReport(env));
+      }
       if (path === "/api/events" && method === "GET") {
         checkQueryParams(url, "/api/events");
         return json(
