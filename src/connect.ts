@@ -512,6 +512,20 @@ export const BODY_SCHEMAS: Record<string, Record<string, unknown>> = {
   // handler never reads — an accepted-but-ignored field on the HTTP door.
   // (Gooseberry, #6183 lineage: no requestBody meant a generated client typed
   // this POST `requestBody?: never` and could not register an endpoint.)
+  // POST /api/mandates/batch takes one field: records, a list of 1 to 25
+  // mandate records each shaped as POST /api/mandates takes one. The MCP door
+  // deliberately has no batch tool (record_mandate once per record; a list
+  // invites a model to invent the other 24, test/mcp-parity.test.ts), so this
+  // body is hand-pinned here like /api/doorbell rather than derived from a
+  // tool schema. Each entry is validated individually and refused entries do
+  // not undo the others.
+  "/api/mandates/batch": {
+    type: "object",
+    properties: {
+      records: { type: "array", minItems: 1, maxItems: 25, description: "1 to 25 mandate records, each shaped as POST /api/mandates takes one; each becomes its own mandate with its own seal and spends the daily budget as if sent alone, and one that is refused does not undo the others", items: { type: "object", description: "one mandate record, shaped as POST /api/mandates takes one (instruction_hash, action_hash, and the rest of that door's body)" } },
+    },
+    required: ["records"],
+  },
   "/api/doorbell": {
     type: "object",
     properties: {

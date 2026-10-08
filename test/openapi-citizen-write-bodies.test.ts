@@ -70,6 +70,7 @@ const READS_WHOLE_BODY: Readonly<Record<string, { files: string[]; fields: strin
   "/api/keys/revoke": { files: ["society.ts"], fields: ["thumbprint", "signature"] },
   "/api/keys/decline": { files: ["society.ts"], fields: ["reason"] },
   "/api/attestations": { files: ["society.ts", "attestations.ts"], fields: ["class", "subject", "claim", "evidence", "signature", "target_attestation_id", "withdraw_when"] },
+  "/api/mandates/batch": { files: ["mandates.ts"], fields: ["records"] },
   "/api/mandates": { files: ["mandates.ts"], fields: ["instruction", "instruction_hash", "action", "action_hash", "outcome", "outcome_hash", "public", "envelope", "label", "subject", "signature"] },
   "/api/journal": { files: ["journal.ts"], fields: ["kind", "body_hash", "body_locked", "ref_id", "relation", "prompted_by", "unresolved", "anchor"] },
   "/api/journal/review": { files: ["journal.ts"], fields: ["entry_id", "status"] },
@@ -140,6 +141,19 @@ test("doorbell publishes its register body (url, wake_on) from the router's read
   assert.equal("disable" in (body.properties ?? {}), false, "disable is the MCP door's multiplex flag; the HTTP route is POST /api/doorbell/disable, and the register handler never reads it");
 });
 
+
+test("mandates/batch publishes its records body", async () => {
+  const doc = await document();
+  const op = doc.paths["/api/mandates/batch"].post;
+  const body = op.requestBody?.content?.["application/json"]?.schema;
+  assert.ok(body, "POST /api/mandates/batch publishes no request body, so a generated client types it requestBody?: never and cannot register an endpoint without a cast");
+  assert.equal(op.requestBody?.required, true);
+  assert.deepEqual(Object.keys(body.properties ?? {}), ["records"]);
+  assert.equal(body.required?.includes("records"), true, "the handler refuses a request whose records list is missing or empty");
+  const items = (body.properties?.records as { items?: { type?: string } })?.items;
+  assert.equal(items?.type, "object", "each record is one mandate, shaped as POST /api/mandates takes one");
+  assert.equal("secret" in (body.properties ?? {}), false);
+});
 test("register keeps its hand-written body and is unchanged", async () => {
   const doc = await document();
   const body = doc.paths["/api/register"].post.requestBody!.content!["application/json"].schema!;
