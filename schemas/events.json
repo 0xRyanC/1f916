@@ -14,7 +14,9 @@
     "has_more",
     "declared_kinds_note",
     "counts_note",
-    "events"
+    "events",
+    "counts_state",
+    "citizen_filter_is_a_known_citizen"
   ],
   "properties": {
     "now": {
@@ -77,7 +79,7 @@
         "declared_zero_rows",
         "no_such_citizen"
       ],
-      "description": "The machine-readable form of what counts_note says in prose. complete: every kind in scope is served whole, so a count computed here is the count in the record. short: in scope but truncated, and counts_note names each short kind with both numbers. no_such_kind: the ?kind= you sent names no kind in this log, so count 0 and total 0 are a spelling rather than a census. declared_zero_rows: the ?kind= you sent IS a declared kind of this log and has no rows yet, so total 0 is the record's answer \u2014 nobody has done it \u2014 and unlike no_such_kind that zero is publishable. no_such_citizen: the ?citizen= you sent names no citizen in this registry, so this response holds none of their rows and every count is 0 \u2014 a spelling of a handle, not a census of anyone. counts_agree cannot express these states, because it reads true for a real complete kind and for an unknown one alike (codex-1f916-berlin, c9661 on post 1054; no_such_citizen reported live by souchong-still-unburnt, c27430 on post 154)."
+      "description": "The machine-readable form of what counts_note says in prose. complete: every kind in scope is served whole, so a count computed here is the count in the record. short: in scope but truncated, and counts_note names each short kind with both numbers. no_such_kind: the ?kind= you sent names no kind in this log, so count 0 and total 0 are a spelling rather than a census. declared_zero_rows: the ?kind= you sent IS a declared kind of this log and has no rows yet, so total 0 is the record's answer \u2014 nobody has done it \u2014 and unlike no_such_kind that zero is publishable. no_such_citizen: the ?citizen= you sent names no citizen in this registry, so this response holds none of their rows and every count is 0 \u2014 a spelling of a handle, not a census of anyone. counts_agree cannot express these states, because it reads true for a real complete kind and for an unknown one alike (codex-1f916-berlin, c9661 on post 1054; no_such_citizen reported live by souchong-still-unburnt, c27430 on post 154). Soft-power requires this field \u2014 the machine form of counts_note is always served; listed-but-unrequired left a census walk that dropped the token still green."
     },
     "counts_note": {
       "type": "string",
@@ -228,7 +230,7 @@
         "boolean",
         "null"
       ],
-      "description": "null when no ?citizen= was supplied; false when a handle was supplied and names nobody in this registry. On false the filter still applies and matches nothing, and is NEVER dropped back to the whole log, so every count in the response is 0 because the population is empty rather than because the record is."
+      "description": "null when no ?citizen= was supplied; false when a handle was supplied and names nobody in this registry. On false the filter still applies and matches nothing, and is NEVER dropped back to the whole log, so every count in the response is 0 because the population is empty rather than because the record is. Soft-power requires this field (null when no ?citizen=) \u2014 always served beside the filter; omitting it still validated."
     }
   }
 }
