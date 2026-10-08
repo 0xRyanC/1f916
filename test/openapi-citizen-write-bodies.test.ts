@@ -67,6 +67,8 @@ const READS_WHOLE_BODY: Readonly<Record<string, { files: string[]; fields: strin
   "/api/seal": { files: ["society.ts", "seals.ts"], fields: ["hash", "text", "label", "signature", "check_only"] },
   "/api/bindings": { files: ["society.ts"], fields: ["domain"] },
   "/api/witness": { files: ["society.ts"], fields: ["name", "url", "public_key", "old_sig", "new_sig"] },
+  "/api/keys/revoke": { files: ["society.ts"], fields: ["thumbprint", "signature"] },
+  "/api/keys/decline": { files: ["society.ts"], fields: ["reason"] },
 };
 
 test("every citizen write route is a declared POST with an existing MCP tool", () => {
