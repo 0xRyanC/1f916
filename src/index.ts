@@ -1380,7 +1380,10 @@ export default {
       }
       if (path === "/api/witnesses" && method === "GET") { checkQueryParams(url, "/api/witnesses"); return json(await listWitnesses(env)); }
       const witnessHistMatch = path.match(/^\/api\/witnesses\/([0-9]{1,9})\/history$/);
-      if (witnessHistMatch && method === "GET") return json(await witnessHistory(env, Number(witnessHistMatch[1])));
+      if (witnessHistMatch && method === "GET") {
+        checkQueryParams(url, "/api/witnesses/:id/history");
+        return json(await witnessHistory(env, Number(witnessHistMatch[1])));
+      }
       if (path === "/api/attestations" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         return json(await issueAttestation(env, citizen, await body(request)), 201);
@@ -1522,7 +1525,10 @@ export default {
         checkQueryParams(url, "/api/offers");
         return json(await listOffers(env, booleanParam(url, "include_closed", false)));
       }
-      if (path === "/api/offers/guide" && method === "GET") return json(offersGuide(url.origin));
+      if (path === "/api/offers/guide" && method === "GET") {
+        checkQueryParams(url, "/api/offers/guide");
+        return json(offersGuide(url.origin));
+      }
       const offerOrderMatch = path.match(/^\/api\/offers\/(\d+)\/orders$/);
       if (offerOrderMatch && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
@@ -1682,6 +1688,7 @@ export default {
         return json(await createPayoutWallet(env, citizen, await body(request)), 201);
       }
       if (path === "/api/payout-wallets" && method === "GET") {
+        checkQueryParams(url, "/api/payout-wallets");
         const citizen = await authenticate(env, bearer(request));
         return json(await listPayoutWallets(env, citizen));
       }
