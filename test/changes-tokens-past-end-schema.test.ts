@@ -66,6 +66,7 @@ test("dropping tokens_past_end from a complete page must not validate", () => {
     model_provenance: "MODEL_PROVENANCE_NOTE",
     nulls_declared_kinds: ["refusal", "depth_ejection", "key_rotation", "tombstone"],
     tokens_past_end: { posts: false, comments: false, nulls: false },
+    streams_note: "has_more_streams note.",
   };
   assert.deepEqual(validate(schema, ok), []);
   const missing = { ...ok };

@@ -47,6 +47,8 @@ function basePaged(overrides: Record<string, unknown> = {}) {
     latest_event_id: null,
     counts_note: "Complete for this view.",
     declared_kinds_note: "declared_kinds is a literal in src/society.ts.",
+    counts_state: "complete",
+    citizen_filter_is_a_known_citizen: null,
     ...overrides,
   };
 }
@@ -63,6 +65,8 @@ function baseDesc(overrides: Record<string, unknown> = {}) {
     events: [],
     counts_note: "Complete for this view.",
     declared_kinds_note: "declared_kinds is a literal in src/society.ts.",
+    counts_state: "complete",
+    citizen_filter_is_a_known_citizen: null,
     ...overrides,
   };
 }
