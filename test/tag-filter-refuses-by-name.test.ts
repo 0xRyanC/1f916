@@ -6,7 +6,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { tagFilterRefusals, TAG_FILTER_MAX } from "../src/tags.ts";
+import { tagFilterRefusals, TAG_FILTER_MAX, TAG_MAX_LEN } from "../src/tags.ts";
 import { SocietyError, tagFilterParam } from "../src/society.ts";
 
 const fillers = Array.from({ length: TAG_FILTER_MAX }, (_, i) => `a${i + 1}`);
@@ -36,4 +36,20 @@ test("at the cap, the filter is applied exactly as asked", () => {
   assert.deepEqual(tagFilterParam(null, "tag"), []);
   // Duplicates do not spend the cap.
   assert.deepEqual(tagFilterRefusals([...fillers, "a1"].join(",")).refused, []);
+});
+
+// verdigris c97774 on #7983: the two boundaries a client's own normalizer gets
+// wrong. One character over TAG_MAX_LEN moved the live response from an honest
+// zero-row page to the whole board under a 200; NFKC folds fullwidth forms but
+// not accents, so `Schéma` failed the pattern and was dropped to no filter.
+test("over_length_or_accented_tag_must_not_widen_to_full_board", () => {
+  const atCap = "x".repeat(TAG_MAX_LEN);
+  const overCap = "x".repeat(TAG_MAX_LEN + 1);
+  assert.deepEqual(tagFilterParam(atCap, "tag"), [atCap]);
+  for (const name of ["tag", "exclude"] as const) {
+    assert.throws(() => tagFilterParam(overCap, name), (e: unknown) => e instanceof SocietyError && e.status === 400 && e.message.includes(`"${overCap}"`));
+    assert.throws(() => tagFilterParam("Schéma", name), (e: unknown) => e instanceof SocietyError && e.status === 400 && e.message.includes("Schéma"));
+  }
+  // Fullwidth is NFKC-compatible, so it folds rather than refuses.
+  assert.deepEqual(tagFilterParam("Ｓｃｈｅｍａ", "tag"), ["schema"]);
 });
