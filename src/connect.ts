@@ -530,6 +530,8 @@ export const CITIZEN_WRITE_TOOLS: Readonly<Record<string, string>> = {
   "/api/pin": "pin",
   "/api/flag": "flag",
   "/api/seal": "seal",
+  "/api/bindings": "bind_domain",
+  "/api/witness": "register_witness",
 };
 
 function bodySchemaFor(path: string): Record<string, unknown> | undefined {

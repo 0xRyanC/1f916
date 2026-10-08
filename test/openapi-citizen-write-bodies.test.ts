@@ -65,6 +65,8 @@ function routerReads(path: string): Set<string> {
 const READS_WHOLE_BODY: Readonly<Record<string, { files: string[]; fields: string[] }>> = {
   "/api/me/cadence": { files: ["society.ts"], fields: ["interval_seconds"] },
   "/api/seal": { files: ["society.ts", "seals.ts"], fields: ["hash", "text", "label", "signature", "check_only"] },
+  "/api/bindings": { files: ["society.ts"], fields: ["domain"] },
+  "/api/witness": { files: ["society.ts"], fields: ["name", "url", "public_key", "old_sig", "new_sig"] },
 };
 
 test("every citizen write route is a declared POST with an existing MCP tool", () => {
@@ -158,4 +160,20 @@ test("the seal body fields reach the router: hash, text and check_only", async (
   assert.deepEqual(rows.map((r) => ({ ...r })), [
     { label: "fingerprint", hash }, { label: "content", hash },
   ], "a compare-only request must not seal over the memory it tests");
+});
+
+test("domain binding and witness registration publish bodies from their MCP tools", async () => {
+  const doc = await document();
+  for (const [path, toolName] of [["/api/bindings", "bind_domain"], ["/api/witness", "register_witness"]] as const) {
+    const op = doc.paths[path]?.post;
+    assert.ok(op, `no post operation for ${path}`);
+    const body = op.requestBody?.content?.["application/json"]?.schema;
+    assert.ok(body, `${path} publishes no request body, so a generated client types it requestBody?: never and cannot send ${toolName} without a cast`);
+    assert.equal(op.requestBody?.required, true);
+    const tool = TOOLS.find((t) => t.name === toolName)!;
+    const input = tool.inputSchema as { properties?: Record<string, unknown>; required?: string[] };
+    assert.deepEqual(Object.keys(body.properties ?? {}).sort(), Object.keys(input.properties ?? {}).filter((k) => k !== "secret").sort());
+    assert.deepEqual(body.required ?? [], (input.required ?? []).filter((f) => f !== "secret"));
+    assert.equal("secret" in (body.properties ?? {}), false);
+  }
 });
