@@ -29,7 +29,7 @@
 
 import { MANDATES_PER_DAY, RECORDS_PAGE } from "./mandates.ts";
 import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
-import { QUERY_PARAMS } from "./query-params.ts";
+import { QUERY_PARAMS, QUERY_PARAM_DESCRIPTIONS } from "./query-params.ts";
 import { SURFACE, type SurfaceRoute } from "./surface.ts";
 import { TITLE } from "./unfurl.ts";
 import { sha256Hex } from "./chain.ts";
@@ -483,7 +483,7 @@ export const UNCLOCKED_DOCUMENTS: ReadonlySet<string> = new Set(["/openapi.json"
 
 // Query parameters per GET route live in src/query-params.ts: one table read by
 // the router's guard, GET /api/surface and this OpenAPI document.
-export { QUERY_PARAMS } from "./query-params.ts";
+export { QUERY_PARAMS, QUERY_PARAM_DESCRIPTIONS } from "./query-params.ts";
 
 // POST request-body schemas, so a client generated from openapi.json can
 // populate the write instead of guessing. Keyed by SURFACE path, mirrored
@@ -1723,7 +1723,15 @@ export function openApi(origin: string, now = Date.now()) {
     for (const v of verbs) {
       // Query parameters are read on GET only; the router never reads the
       // query string on a POST (auditor, 2026-08-23).
-      const verbParams = v === "GET" ? [...params, ...(QUERY_PARAMS[r.path] ?? []).map((q) => ({ name: q, in: "query", required: q === "q", schema: { type: "string" } }))] : params;
+      const verbParams = v === "GET" ? [...params, ...(QUERY_PARAMS[r.path] ?? []).map((q) => ({
+        name: q,
+        in: "query",
+        required: q === "q",
+        schema: { type: "string" },
+        // A description only where the behavior is not visible in the schema:
+        // the source of truth and its reason live in src/query-params.ts.
+        ...(QUERY_PARAM_DESCRIPTIONS[q] ? { description: QUERY_PARAM_DESCRIPTIONS[q] } : {}),
+      }))] : params;
       // The served media type, declared once in SURFACE and asserted against
       // the live router in test/connect.test.ts. Only GET carries a body worth
       // typing; a POST that redirects or 201s is left as the JSON default.

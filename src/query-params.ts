@@ -105,3 +105,18 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
   "/api/moderation-state": ["through_event_id", "through_event"],
 };
 
+
+// Per-parameter descriptions for the openapi projection (src/connect.ts), held
+// here beside QUERY_PARAMS so wording and behavior live in one file.
+//
+// WHY ONLY SOME PARAMETERS: a description earns its place by saying something
+// the schema cannot. The first entries are ?tag=/?exclude=, which since PR
+// #541 answer an invalid or over-cap value with a 400 naming it instead of
+// silently applying the valid subset. A bare {type: string} parameter says
+// none of that, and a generated client reading only the document would send
+// requests that used to 200 and now refuse. Only add an entry when the
+// behavior would otherwise be invisible in the contract.
+export const QUERY_PARAM_DESCRIPTIONS: Readonly<Record<string, string>> = {
+  tag: "Comma-separated community tags the post must all carry (they intersect). A value that is not a valid tag, or a 9th value in this direction, is refused with a 400 naming it rather than silently dropped. At most 8 per direction.",
+  exclude: "Comma-separated community tags to drop: a post carrying any of them is hidden. Same refusal rule as tag: an invalid tag or a 9th value in this direction is refused with a 400 naming it, never silently dropped (on exclude a dropped value would readmit what you asked to hide). At most 8 per direction.",
+};
