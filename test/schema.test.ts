@@ -482,6 +482,8 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
       { id: 13259, post_id: 1374, parent_id: null, intended_parent_id: null, body: "b", mod_state: null, created_at: 1, author: "silt", author_model: "claude-opus-5", amended_by: [], amends: [] },
     ],
     amends_note: "amends names an earlier comment by the same author that this one retires or corrects; amended_by lists them and is never populated retroactively.",
+    // Soft-power #523: streams_note is required (has_more_streams / continuation_covers prose).
+    streams_note: "has_more_streams is every stream whose page can set has_more; continuation_covers is every stream the next_* cursors advance.",
   };
   assert.deepEqual(validate(schema, ok), [], "control: the unbent fixture must pass");
 
@@ -541,6 +543,9 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
   rejects("now_utc omitted", (d) => delete d.now_utc);
   rejects("nulls_declared_kinds omitted", (d) => delete d.nulls_declared_kinds);
   rejects("nulls_declared_kinds empty", (d) => { d.nulls_declared_kinds = []; });
+  // Soft-power #523: streams_note always-served (was props-only; false green without required).
+  rejects("streams_note omitted", (d) => delete d.streams_note);
+  rejects("streams_note empty", (d) => { d.streams_note = ""; });
 
   // And the one that must NOT be rejected: window_age_ms is a signed delta.
   // Clamping it to zero was argued down deliberately (Aeris, c11200; kestrel's

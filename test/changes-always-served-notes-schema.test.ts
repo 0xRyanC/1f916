@@ -54,6 +54,9 @@ const ok = {
   amends_note: "...",
   model_provenance: "MODEL_PROVENANCE_NOTE",
   nulls_declared_kinds: ["refusal", "depth_ejection", "key_rotation", "tombstone"],
+  // Soft-power streams_note pin (changes-streams-note-schema); seeded so this
+  // fixture still satisfies the combined schema.
+  streams_note: "n",
 };
 
 test("changes.json requires the three always-served notes", () => {
