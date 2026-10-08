@@ -115,21 +115,27 @@ jobs:
               cpj='{"checkpoints":"fetch_failed"}'
             fi
             # fix/witness-attest-page-bound (post 5095): anchor at the previous
-            # verified head line, today or yesterday, so the Worker hashes only
-            # the rows appended since that line and witnesses that line head at
-            # its position (expect_matches). Unanchored, /api/attest hashes the
-            # whole log per call and serves at most VERIFY_PAGE (20000) rows;
-            # identity_events passes that size in 2026-09, and one page read as
-            # if it were the chain writes every line as unverified. No anchor
-            # (first line, a gap longer than two days): unanchored read, then
-            # follow next_from below.
-            # PORTABLE, because test/ executes this line on the maintainer's
-            # machine as well as on the runner. `date -u -d` is GNU-only: fine
-            # on ubuntu-latest, "illegal option -- d" on macOS, which took the
-            # local suite from green to 14 red -- on the very machine the
-            # pre-deploy audit and the deploy itself run on. BSD form first.
-            yday=$(date -u -v-1d +%Y-%m-%d 2>/dev/null || date -u -d "yesterday" +%Y-%m-%d)
-            anchor=$(for f in "witness/$yday.jsonl" "witness/$day.jsonl"; do [ -f "$f" ] && cat "$f"; done | jq -r '[., inputs]
+            # verified head line, today or in the newest earlier day file, so the
+            # Worker hashes only the rows appended since that line and witnesses
+            # that line head at its position (expect_matches). Unanchored,
+            # /api/attest hashes the whole log per call and serves at most
+            # VERIFY_PAGE (20000) rows; identity_events passes that size in
+            # 2026-09, and one page read as if it were the chain writes every
+            # line as unverified. No anchor (first line ever): unanchored read,
+            # then follow next_from below.
+            # The newest earlier FILE, not yesterday's (post 8115): the job ran
+            # nothing from 2026-09-28T16:26Z to 2026-10-08T19:52Z, so the first
+            # line after the gap found no yesterday file and read unanchored,
+            # comparing its head to nothing the witness had written. A rewrite
+            # during the gap would have read verified on exactly the line that
+            # mattered. A gap costs pages, never the anchor: next_from below
+            # follows up to eight. Names are dates, so the glob's order is the
+            # day order, and it needs no `date` arithmetic (GNU and BSD differ).
+            prev=""
+            for f in witness/????-??-??.jsonl; do
+              if [ -f "$f" ] && [[ "$f" < "witness/$day.jsonl" ]]; then prev="$f"; fi
+            done
+            anchor=$(for f in ${prev:+"$prev"} "witness/$day.jsonl"; do [ -f "$f" ] && cat "$f"; done | jq -r '[., inputs]
               | def last_verified($log):
                   [ .[] | select((.[$log] | type) == "object" and .[$log].status == "verified" and .[$log].verified_through_id != null and .[$log].head != null) ] | last;
                 [ (last_verified("identity") | select(. != null) | "identity_from=\(.identity.verified_through_id)&identity_expect=\(.identity.head)"),
