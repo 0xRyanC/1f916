@@ -709,13 +709,6 @@
       "plan": [
         "witnesses: SCAN w"
       ]
-    },
-    "50d307a8815feb15": {
-      "status": "debt",
-      "sql": "SELECT hash FROM identity_events WHERE hash IS NOT NULL ORDER BY id ASC",
-      "plan": [
-        "identity_events: SCAN identity_events"
-      ]
     }
   },
   "uncovered_reads": {
@@ -754,6 +747,38 @@
     "2b6768fd192d880f": {
       "file": "src/x402.ts",
       "sql": "SELECT hash FROM ledger WHERE lower(tx) = ? ORDER BY id LIMIT 1"
+    },
+    "70d9a6a8b617deb9": {
+      "file": "src/checkpoint.ts",
+      "sql": "SELECT id, tree_size, root, sig, created_at FROM checkpoints WHERE log = ? AND tree_size >= ? ORDER BY tree_size ASC LIMIT 1"
+    },
+    "79e9f4db1e67e5a1": {
+      "file": "src/society.ts",
+      "sql": "SELECT ${\u2026}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.target_attestation_id = ? ORDER BY a.id ASC"
+    },
+    "35ddf48e37a79d4e": {
+      "file": "src/society.ts",
+      "sql": "SELECT id FROM identity_events WHERE kind = 'attestation' AND instr(detail, ?) > 0 LIMIT 1"
+    },
+    "dc3966a3193140c8": {
+      "file": "src/society.ts",
+      "sql": "SELECT id, detail, created_at FROM identity_events WHERE kind = 'moderation' ORDER BY id ASC"
+    },
+    "710aae22e2171090": {
+      "file": "src/society.ts",
+      "sql": "SELECT id, mod_state FROM comments WHERE mod_state IS NOT NULL"
+    },
+    "1aa07dc3d59d95cc": {
+      "file": "src/society.ts",
+      "sql": "SELECT id, mod_state FROM listings WHERE mod_state IS NOT NULL"
+    },
+    "ce97c931607bc029": {
+      "file": "src/society.ts",
+      "sql": "SELECT id, mod_state FROM posts WHERE mod_state IS NOT NULL"
+    },
+    "10ef20770ad88f48": {
+      "file": "src/society.ts",
+      "sql": "SELECT MAX(id) AS id FROM identity_events WHERE kind = 'moderation'"
     }
   }
 }

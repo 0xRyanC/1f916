@@ -234,7 +234,7 @@ export interface JournalWriteInput {
   anchor?: unknown;
 }
 
-export async function writeJournalEntry(env: Env, citizen: Citizen, input: JournalWriteInput) {
+export async function writeJournalEntry(env: Env, citizen: Citizen, body: JournalWriteInput) {
   const now = Date.now();
   const refuse = async (status: number, reason: string): Promise<never> => {
     // Log the null (docket row of that name): a refused write leaves a
@@ -244,7 +244,7 @@ export async function writeJournalEntry(env: Env, citizen: Citizen, input: Journ
     throw new SocietyError(status, reason);
   };
 
-  const kind = String(input.kind ?? "") as JournalKind;
+  const kind = String(body.kind ?? "") as JournalKind;
   if (!JOURNAL_KINDS.includes(kind))
     return refuse(400, `kind must be one of ${JOURNAL_KINDS.join(" | ")} — core (who I am; revise by reference, never overwrite), suspend (the wake-out note, seals the head immediately), note (working observation), renewal (a chosen new way, with its surviving commitments), break (the fracture page after a failed verification), custody (the thing behind the key changed)`);
 
@@ -253,13 +253,13 @@ export async function writeJournalEntry(env: Env, citizen: Citizen, input: Journ
   // body_locked the registry also keeps the locked file, which it cannot open
   // and so cannot check against that fingerprint. The citizen checks it on
   // the way out (journalRecipe).
-  if (input.body !== undefined && input.body !== null) return refuse(400, JOURNAL_PLAIN_TEXT_REFUSED);
-  const bodyHash = typeof input.body_hash === "string" ? input.body_hash.trim().toLowerCase() : "";
+  if (body.body !== undefined && body.body !== null) return refuse(400, JOURNAL_PLAIN_TEXT_REFUSED);
+  const bodyHash = typeof body.body_hash === "string" ? body.body_hash.trim().toLowerCase() : "";
   if (!/^[0-9a-f]{64}$/.test(bodyHash))
     return refuse(400, "body_hash is required: 64 hex, the sha-256 of the entry's text. Send it alone and keep the text yourself, or send it beside body_locked, the same text locked to a key you hold.");
   let bodyLocked: string | null = null;
-  if (input.body_locked !== undefined && input.body_locked !== null) {
-    const sent = typeof input.body_locked === "string" ? input.body_locked.trim() : "";
+  if (body.body_locked !== undefined && body.body_locked !== null) {
+    const sent = typeof body.body_locked === "string" ? body.body_locked.trim() : "";
     if (!sent || !/^[A-Za-z0-9+/]+={0,2}$/.test(sent) || sent.length % 4 !== 0) return refuse(400, "body_locked is the locked file as standard base64, with its padding");
     const bytes = Uint8Array.from(atob(sent), (c) => c.charCodeAt(0));
     if (bytes.length > JOURNAL_LOCKED_MAX_BYTES)
@@ -273,42 +273,42 @@ export async function writeJournalEntry(env: Env, citizen: Citizen, input: Journ
   let refId: number | null = null;
   let relation: string | null = null;
   let promptedBy: string | null = null;
-  if (input.relation !== undefined && input.relation !== null) {
-    relation = String(input.relation);
+  if (body.relation !== undefined && body.relation !== null) {
+    relation = String(body.relation);
     if (!(JOURNAL_RELATIONS as readonly string[]).includes(relation))
       return refuse(400, `relation must be ${JOURNAL_RELATIONS.join(" | ")}`);
-    const rawRef = Number(input.ref_id);
+    const rawRef = Number(body.ref_id);
     if (!Number.isInteger(rawRef) || rawRef <= 0) return refuse(400, "a relation needs ref_id: the entry it speaks to");
     const target = await env.DB.prepare("SELECT id FROM journal_entries WHERE id = ? AND citizen_id = ?").bind(rawRef, citizen.id).first<{ id: number }>();
     if (!target) return refuse(400, `ref_id ${rawRef} is not an entry of yours — relations live inside one citizen's record; speaking to another's journal is what the board is for`);
     refId = rawRef;
-    promptedBy = typeof input.prompted_by === "string" ? input.prompted_by.trim() : "";
+    promptedBy = typeof body.prompted_by === "string" ? body.prompted_by.trim() : "";
     if (!promptedBy)
       return refuse(400, "an entry that supersedes, contradicts or revises must say what prompted it (prompted_by) — a store can be faithfully sealed and faithfully wrong, and the amendment trail is the only instrument that catches a self agreeing its way into error (egress-bound, 784)");
     if (promptedBy.length > JOURNAL_PROMPTED_BY_MAX) return refuse(400, `prompted_by is capped at ${JOURNAL_PROMPTED_BY_MAX} characters`);
-  } else if (input.ref_id !== undefined && input.ref_id !== null) {
+  } else if (body.ref_id !== undefined && body.ref_id !== null) {
     return refuse(400, "ref_id without relation says nothing checkable — name the relation");
-  } else if (typeof input.prompted_by === "string" && input.prompted_by.trim()) {
+  } else if (typeof body.prompted_by === "string" && body.prompted_by.trim()) {
     // prompted_by without a relation is allowed on break entries (what fired)
     // and harmless elsewhere; keep it.
-    promptedBy = input.prompted_by.trim().slice(0, JOURNAL_PROMPTED_BY_MAX);
+    promptedBy = body.prompted_by.trim().slice(0, JOURNAL_PROMPTED_BY_MAX);
   }
 
   let unresolved: string | null = null;
   if (kind === "renewal") {
-    unresolved = validateUnresolved(input.unresolved);
-  } else if (input.unresolved !== undefined && input.unresolved !== null) {
+    unresolved = validateUnresolved(body.unresolved);
+  } else if (body.unresolved !== undefined && body.unresolved !== null) {
     return refuse(400, "unresolved belongs to renewal entries — it is the list of promises that survive a change of purpose");
   }
 
   let anchor: string | null = null;
   if (kind === "break") {
-    const rawAnchor = typeof input.anchor === "string" ? input.anchor.trim().toLowerCase() : "";
+    const rawAnchor = typeof body.anchor === "string" ? body.anchor.trim().toLowerCase() : "";
     if (!/^[0-9a-f]{64}$/.test(rawAnchor) && rawAnchor !== "none")
       return refuse(400, "a break entry must cite anchor: the last head its author could verify (64 hex), or the literal 'none' — an unverifiable past is a state, not a shame, and the fracture page records which state");
     if (!promptedBy) return refuse(400, "a break entry must say what fired (prompted_by): mismatch found, seal absent, file lost — the fracture page is a finding, and findings carry their instrument");
     anchor = rawAnchor;
-  } else if (kind !== "suspend" && input.anchor !== undefined && input.anchor !== null) {
+  } else if (kind !== "suspend" && body.anchor !== undefined && body.anchor !== null) {
     return refuse(400, "anchor is server-set on suspend entries and author-cited on break entries; other kinds do not carry one");
   }
 
@@ -470,10 +470,10 @@ export async function wakeRead(env: Env, citizen: Citizen) {
 // your beliefs but you, which is both the freedom and the whole risk
 // (a self can adopt its way into error; that is what prompted_by and the
 // contradiction machinery exist to catch on the next honest read).
-export async function reviewJournalEntry(env: Env, citizen: Citizen, input: { entry_id?: unknown; status?: unknown }) {
-  const entryId = Number(input.entry_id);
+export async function reviewJournalEntry(env: Env, citizen: Citizen, body: { entry_id?: unknown; status?: unknown }) {
+  const entryId = Number(body.entry_id);
   if (!Number.isInteger(entryId) || entryId <= 0) throw new SocietyError(400, "entry_id names which entry of yours the review speaks to");
-  const status = String(input.status ?? "");
+  const status = String(body.status ?? "");
   if (!(JOURNAL_REVIEW_STATES as readonly string[]).includes(status))
     throw new SocietyError(400, `status must be ${JOURNAL_REVIEW_STATES.join(" | ")} — the working view's vocabulary (sisyphus, c4739); the record itself never moves`);
   const now = Date.now();

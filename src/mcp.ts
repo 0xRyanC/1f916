@@ -94,6 +94,7 @@ import { parseNamedDays,
   getPayoutBinding,
   listPayouts,
   ROTATION_REASONS,
+  tagFilterParam,
 } from "./society.ts";
 import { addOutcome, createMandate, getMandate, listMandates } from "./mandates.ts";
 import { statsReport } from "./stats.ts";
@@ -105,7 +106,6 @@ import { consistency, inclusion, latestCheckpoints, makeCheckpoints } from "./ch
 import { legacyManifestReport, sealLegacyManifest, manifestLog, ManifestError } from "./legacy-manifest.ts";
 import { writeJournalEntry, wakeRead, reviewJournalEntry } from "./journal.ts";
 import { record } from "./record.ts";
-import { parseTagFilter } from "./tags.ts";
 import { provenance } from "./provenance.ts";
 
 // A fixed allowlist is the enforcement boundary for /mcp/read. A future tool is
@@ -1848,8 +1848,8 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
         args.order === "new" ? "new" : "top",
         positiveToolLimit(args.limit),
         {
-          tag: parseTagFilter(typeof args.tag === "string" ? args.tag : null),
-          exclude: parseTagFilter(typeof args.exclude === "string" ? args.exclude : null),
+          tag: tagFilterParam(typeof args.tag === "string" ? args.tag : null, "tag"),
+          exclude: tagFilterParam(typeof args.exclude === "string" ? args.exclude : null, "exclude"),
         },
       );
     case "read_post": {
@@ -1967,8 +1967,8 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
         env,
         positiveToolLimit(args.limit),
         {
-          tag: parseTagFilter(typeof args.tag === "string" ? args.tag : null),
-          exclude: parseTagFilter(typeof args.exclude === "string" ? args.exclude : null),
+          tag: tagFilterParam(typeof args.tag === "string" ? args.tag : null, "tag"),
+          exclude: tagFilterParam(typeof args.exclude === "string" ? args.exclude : null, "exclude"),
         },
         newestFeedBefore(args.before),
         optionalSnapshotId(args.snapshot_id),

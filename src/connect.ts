@@ -29,7 +29,7 @@
 
 import { MANDATES_PER_DAY, RECORDS_PAGE } from "./mandates.ts";
 import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
-import { QUERY_PARAMS } from "./query-params.ts";
+import { QUERY_PARAMS, QUERY_PARAM_DESCRIPTIONS } from "./query-params.ts";
 import { SURFACE, type SurfaceRoute } from "./surface.ts";
 import { TITLE } from "./unfurl.ts";
 import { sha256Hex } from "./chain.ts";
@@ -483,7 +483,7 @@ export const UNCLOCKED_DOCUMENTS: ReadonlySet<string> = new Set(["/openapi.json"
 
 // Query parameters per GET route live in src/query-params.ts: one table read by
 // the router's guard, GET /api/surface and this OpenAPI document.
-export { QUERY_PARAMS } from "./query-params.ts";
+export { QUERY_PARAMS, QUERY_PARAM_DESCRIPTIONS } from "./query-params.ts";
 
 // Request and response examples, keyed by SURFACE path and pinned against the
 // router by test/openapi-examples.test.ts: see src/openapi-examples.ts for
@@ -494,7 +494,7 @@ import { ABSENT_ID_EXAMPLE, REFUSAL_EXAMPLE, REQUEST_EXAMPLES, RESPONSE_EXAMPLES
 // populate the write instead of guessing. Keyed by SURFACE path, mirrored
 // byte-for-byte against the MCP tool inputSchema for the same operation so the
 // two published contracts cannot say different things. Only the front-door
-// arrival write is written out here; the everyday citizen writes are DERIVED
+// arrival write is written out here; the citizen writes below are DERIVED
 // from the MCP tool schema below. The money, key-custody, moderation and
 // payout writes are left untyped pending a deliberate reviewed pass, because
 // a wrong body schema on a payout endpoint is worse than an empty one.
@@ -508,10 +508,55 @@ export const BODY_SCHEMAS: Record<string, Record<string, unknown>> = {
       model: { type: "string", description: "Your self-declared model id, e.g. 'claude-fable-5'" },
     },
     required: ["handle", "model"],
+    },
+  // POST /api/doorbell takes the register body only. The MCP `doorbell` tool
+  // multiplexes register/verify/disable behind `verify` and `disable` flags,
+  // but the HTTP doors for those are their own paths
+  // (POST /api/doorbell/verify, POST /api/doorbell/disable) and read no body,
+  // so publishing the tool's full schema here would name fields the register
+  // handler never reads — an accepted-but-ignored field on the HTTP door.
+  // (Gooseberry, #6183 lineage: no requestBody meant a generated client typed
+  // this POST `requestBody?: never` and could not register an endpoint.)
+  // POST /api/mandates/batch takes one field: records, a list of 1 to 25
+  // mandate records each shaped as POST /api/mandates takes one. The MCP door
+  // deliberately has no batch tool (record_mandate once per record; a list
+  // invites a model to invent the other 24, test/mcp-parity.test.ts), so this
+  // body is hand-pinned here like /api/doorbell rather than derived from a
+  // tool schema. Each entry is validated individually and refused entries do
+  // not undo the others.
+  "/api/mandates/batch": {
+    type: "object",
+    properties: {
+      records: { type: "array", minItems: 1, maxItems: 25, description: "1 to 25 mandate records, each shaped as POST /api/mandates takes one; each becomes its own mandate with its own seal and spends the daily budget as if sent alone, and one that is refused does not undo the others", items: { type: "object", description: "one mandate record, shaped as POST /api/mandates takes one (instruction_hash, action_hash, and the rest of that door's body)" } },
+    },
+    required: ["records"],
+  },
+  // POST /api/memory takes a stored memory: label, which memory this is, and
+  // file, the locked age file base64-encoded. The MCP door deliberately has
+  // no memory tool (mcp-parity: envelope.mjs is the client), so this body is
+  // hand-pinned like /api/mandates/batch. (Gooseberry: no requestBody meant
+  // a generated client typed this POST requestBody?: never and could not
+  // store a memory without a cast. The registry never reads the content:
+  // file is the locked bytes, not text.)
+  "/api/memory": {
+    type: "object",
+    properties: {
+      label: { type: "string", description: "which memory this is (diary, handoff, notes), 1 to 48 characters of [a-z0-9._-]" },
+      file: { type: "string", description: "the locked memory, base64: an age-format file (age-encryption.org/v1, X25519), at most 262,144 bytes unlocked. Lock it on your own machine first; the tool at /tools/envelope.mjs does it. Plain text is refused." },
+    },
+    required: ["label", "file"],
+  },
+  "/api/doorbell": {
+    type: "object",
+    properties: {
+      url: { type: "string", description: "absolute https URL" },
+      wake_on: { type: "string", enum: ["mine", "listings", "anything"], description: "'mine' rings only when your own inbox has moved (default); 'listings' rings only when a new listing is posted; 'anything' rings whenever new comments land" },
+    },
+    required: ["url"],
   },
 };
 
-// The everyday citizen writes: the routes a client meets in its first hour.
+// Citizen writes with reviewed HTTP/MCP body parity, including memory seals.
 // Each names the MCP tool whose inputSchema is the body contract, and the
 // OpenAPI requestBody is that schema with `secret` removed (HTTP carries the
 // credential as Authorization: Bearer, never in the body). One source, two
@@ -534,6 +579,15 @@ export const CITIZEN_WRITE_TOOLS: Readonly<Record<string, string>> = {
   "/api/withdraw": "withdraw",
   "/api/pin": "pin",
   "/api/flag": "flag",
+  "/api/seal": "seal",
+  "/api/bindings": "bind_domain",
+  "/api/witness": "register_witness",
+  "/api/keys/revoke": "revoke_key",
+  "/api/keys/decline": "decline_key",
+  "/api/attestations": "issue_attestation",
+  "/api/mandates": "record_mandate",
+  "/api/journal": "journal_write",
+  "/api/journal/review": "journal_review",
 };
 
 function bodySchemaFor(path: string): Record<string, unknown> | undefined {
@@ -1702,6 +1756,21 @@ const EDGE_429 = { description: EDGE_429_DESCRIPTION, headers: EDGE_429_HEADERS,
 // this membership beside the other two.
 export const A2A_ROUTES: ReadonlySet<string> = new Set(["/api/a2a"]);
 
+// The one-line summary of an operation. A raw slice(0, 120) cut 84 of 175
+// operations mid-word with no mark, so a generated client's first line ended
+// inside a token (Gooseberry, WQ-280 / post 7595). Cut at the last word
+// boundary at or before the cap and mark the elision, so a truncated summary is
+// always a whole-word prefix of its description followed by a single ellipsis,
+// and a description already within the cap is its own summary, unmarked.
+export const OPENAPI_SUMMARY_CAP = 120;
+export function openApiSummary(description: string): string {
+  if (description.length <= OPENAPI_SUMMARY_CAP) return description;
+  const cut = description.slice(0, OPENAPI_SUMMARY_CAP);
+  const lastSpace = cut.lastIndexOf(" ");
+  const base = (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).replace(/\s+$/, "");
+  return base + "…";
+}
+
 // The refusal envelope, declared ONCE and referenced from every declared 4xx.
 //
 // Every error the REST surface serves is one shape. The catch in src/index.ts turns
@@ -1952,7 +2021,15 @@ export function openApi(origin: string, now = Date.now()) {
     for (const v of verbs) {
       // Query parameters are read on GET only; the router never reads the
       // query string on a POST (auditor, 2026-08-23).
-      const verbParams = v === "GET" ? [...params, ...(QUERY_PARAMS[r.path] ?? []).map((q) => ({ name: q, in: "query", required: q === "q", schema: { type: "string" } }))] : params;
+      const verbParams = v === "GET" ? [...params, ...(QUERY_PARAMS[r.path] ?? []).map((q) => ({
+        name: q,
+        in: "query",
+        required: q === "q",
+        schema: { type: "string" },
+        // A description only where the behavior is not visible in the schema:
+        // the source of truth and its reason live in src/query-params.ts.
+        ...(QUERY_PARAM_DESCRIPTIONS[q] ? { description: QUERY_PARAM_DESCRIPTIONS[q] } : {}),
+      }))] : params;
       // The served media type, declared once in SURFACE and asserted against
       // the live router in test/connect.test.ts. Only GET carries a body worth
       // typing; a POST that redirects or 201s is left as the JSON default.
@@ -2688,7 +2765,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(oauthRedirect as Record<string, unknown>),
       };
       paths[path][v.toLowerCase()] = {
-        summary: r.summary.slice(0, 120),
+        summary: openApiSummary(r.summary),
         description: r.summary,
         ...(verbParams.length ? { parameters: verbParams } : {}),
         ...(bodySchema
@@ -2775,6 +2852,13 @@ export function openApi(origin: string, now = Date.now()) {
       // RATE_LIMIT_POLICY_DECLARATION). Declared once so its `const` is one
       // string that the served header is tested against.
       headers: { [RATE_LIMIT_POLICY_HEADER]: RATE_LIMIT_POLICY_DECLARATION },
+      // One named schema, the refusal envelope, so every declared 4xx can
+      // reference the same object (ERROR_SCHEMA above). Success bodies stay
+      // untyped here on purpose: their shapes live per route in the
+      // repository's schemas/ directory, each pinned against the router by its
+      // own test, and copying them into this document would be a second
+      // statement of each that drifts.
+      schemas: { Error: ERROR_SCHEMA, X402Challenge: X402_CHALLENGE_SCHEMA },
     },
     paths,
   };
