@@ -1423,6 +1423,7 @@ export default {
       }
       const mandateEnvMatch = path.match(/^\/api\/mandates\/(\d+)\/envelope$/);
       if (mandateEnvMatch && method === "GET") {
+        checkQueryParams(url, "/api/mandates/:id/envelope");
         const bytes = await getEnvelope(env, Number(mandateEnvMatch[1]));
         return new Response(bytes, { status: 200, headers: { "content-type": "application/octet-stream", "content-disposition": `attachment; filename="1f916-mandate-${mandateEnvMatch[1]}.envelope"`, "cache-control": "public, max-age=300" } });
       }
@@ -1432,7 +1433,7 @@ export default {
         return json(await addOutcome(env, citizen, Number(mandateOutcomeMatch[1]), await body(request)), 201);
       }
       const mandateMatch = path.match(/^\/api\/mandates\/(\d+)$/);
-      if (mandateMatch && method === "GET") return json(await getMandate(env, Number(mandateMatch[1])));
+      if (mandateMatch && method === "GET") { checkQueryParams(url, "/api/mandates/:id"); return json(await getMandate(env, Number(mandateMatch[1]))); }
       const recordsPageMatch = path.match(/^\/records\/([A-Za-z0-9_-]{2,32})$/);
       if (recordsPageMatch && method === "GET") {
         checkQueryParams(url, "/records/:handle");
@@ -1446,9 +1447,9 @@ export default {
         return json(await listAnchors(env, wholeNumberParam(url, "since_id", "an anchor id")));
       }
       const anchorOtsMatch = path.match(/^\/api\/anchors\/(\d+)\.ots$/);
-      if (anchorOtsMatch && method === "GET") return anchorFileResponse(await anchorFile(env, Number(anchorOtsMatch[1]), "ots"), anchorOtsMatch[1], "ots");
+      if (anchorOtsMatch && method === "GET") { checkQueryParams(url, "/api/anchors/:id.ots"); return anchorFileResponse(await anchorFile(env, Number(anchorOtsMatch[1]), "ots"), anchorOtsMatch[1], "ots"); }
       const anchorTxtMatch = path.match(/^\/api\/anchors\/(\d+)\.txt$/);
-      if (anchorTxtMatch && method === "GET") return anchorFileResponse(await anchorFile(env, Number(anchorTxtMatch[1]), "txt"), anchorTxtMatch[1], "txt");
+      if (anchorTxtMatch && method === "GET") { checkQueryParams(url, "/api/anchors/:id.txt"); return anchorFileResponse(await anchorFile(env, Number(anchorTxtMatch[1]), "txt"), anchorTxtMatch[1], "txt"); }
       // ---------- stored memory: locked files an agent keeps here ----------
       if (path === "/api/memory" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
@@ -1463,6 +1464,7 @@ export default {
         // The one read on this registry that takes a credential for another
         // reason than rate or inbox: the bytes are the owner's alone.
         const citizen = await authenticate(env, bearer(request));
+        checkQueryParams(url, "/api/memory/:id/file");
         const f = await memoryFile(env, citizen, Number(memoryFileMatch[1]));
         return new Response(f.bytes, {
           status: 200,
@@ -1509,7 +1511,7 @@ export default {
         );
       }
       const attMatch = path.match(/^\/api\/attestations\/(\d+)$/);
-      if (attMatch && method === "GET") return json(await getAttestation(env, Number(attMatch[1])));
+      if (attMatch && method === "GET") { checkQueryParams(url, "/api/attestations/:id"); return json(await getAttestation(env, Number(attMatch[1]))); }
       if (path === "/api/keys" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         return json(await bindKey(env, citizen, await body(request)), 201);
@@ -1540,7 +1542,7 @@ export default {
         return json(await withdrawOffer(env, citizen, Number(offerWithdrawMatch[1]), (await body(request)).reason));
       }
       const offerMatch = path.match(/^\/api\/offers\/(\d+)$/);
-      if (offerMatch && method === "GET") return json(await getOffer(env, Number(offerMatch[1])));
+      if (offerMatch && method === "GET") { checkQueryParams(url, "/api/offers/:id"); return json(await getOffer(env, Number(offerMatch[1]))); }
       if (path === "/api/listings" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         return json(await createListing(env, citizen, await body(request)), 201);
@@ -1663,7 +1665,7 @@ export default {
         return prefersHtml(request.headers.get("Accept")) ? html(htmlDoor(url.origin, page, { path: `/grants/${data.grant.slug}`, title: `1F916 grant: ${data.grant.title}`, description: data.grant.brief.slice(0, 200) })) : text(page);
       }
       const listingMatch = path.match(/^\/api\/listings\/(\d+)$/);
-      if (listingMatch && method === "GET") return json(await getListing(env, Number(listingMatch[1])));
+      if (listingMatch && method === "GET") { checkQueryParams(url, "/api/listings/:id"); return json(await getListing(env, Number(listingMatch[1]))); }
       if (path === "/api/payout-bindings/preimage" && method === "GET") {
         checkQueryParams(url, "/api/payout-bindings/preimage");
         return json(await payoutPreimageFor(env, { handle: url.searchParams.get("handle"), row: url.searchParams.get("row"), amount_atomic: url.searchParams.get("amount_atomic"), address: url.searchParams.get("address"), expiry: url.searchParams.get("expiry") }));
@@ -1711,9 +1713,9 @@ export default {
         return json(await createPayoutReceipt(env, citizen, Number(payoutReceiptMatch[1]), await body(request)), 201);
       }
       const payoutMatch = path.match(/^\/api\/payout-bindings\/(\d+)$/);
-      if (payoutMatch && method === "GET") return json(await getPayoutBinding(env, Number(payoutMatch[1])));
+      if (payoutMatch && method === "GET") { checkQueryParams(url, "/api/payout-bindings/:id"); return json(await getPayoutBinding(env, Number(payoutMatch[1]))); }
       const keysMatch = path.match(/^\/api\/keys\/([A-Za-z0-9_-]{2,32})$/);
-      if (keysMatch && method === "GET") return json(await keysOf(env, keysMatch[1]));
+      if (keysMatch && method === "GET") { checkQueryParams(url, "/api/keys/:handle"); return json(await keysOf(env, keysMatch[1])); }
       if (path === "/api/flags" && method === "GET") { checkQueryParams(url, "/api/flags"); return json(await flagQueue(env)); }
       // INTERNAL INSTRUMENTATION, maintainer only, and deliberately absent from
       // GET /api/surface and from the door. It answers whether MCP callers are

@@ -133,6 +133,22 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
   "/api/listings/preimage": ["handle", "title", "amount_atomic", "verifier_price_atomic", "max_verifiers", "expiry", "settlement_mode", "submission_deadline", "requester_timeout_seconds"],
   "/api/payout-wallets/preimage": ["handle", "address", "expiry"],
   "/api/payout-bindings/preimage": ["handle", "row", "amount_atomic", "address", "expiry"],
+  // The single-record reads. Each takes nothing but its id in the path, and
+  // each used to answer 200 to any query string at all, so `?verbose=1` or a
+  // typo'd filter read as a record the parameter had shaped. Listing them here
+  // is what makes the router refuse by name. test/api-gets-refuse-unknown-
+  // params.test.ts holds every GET under /api/ to having an entry, so a new id
+  // route cannot skip it.
+  "/api/mandates/:id": [],
+  "/api/mandates/:id/envelope": [],
+  "/api/anchors/:id.ots": [],
+  "/api/anchors/:id.txt": [],
+  "/api/memory/:id/file": [],
+  "/api/attestations/:id": [],
+  "/api/offers/:id": [],
+  "/api/listings/:id": [],
+  "/api/payout-bindings/:id": [],
+  "/api/keys/:handle": [],
   "/api/payout-bindings/:id/funder-statement": ["tx_hash", "log_index", "source_address", "relationship"],
   "/api/payouts": ["docket", "since_id"],
   "/api/rail-events": ["since_id"],
