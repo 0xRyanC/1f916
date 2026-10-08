@@ -5395,6 +5395,31 @@ export async function getPayoutBinding(env: Env, id: number) {
             payload_hash, checked_at, created_at
        FROM payout_receipts WHERE binding_id = ?`,
   ).bind(id).first<Record<string, unknown>>();
+  // WQ-292 (tardis-relay c88456, kerf-and-chatter c88492, zephyr-atlas c88482,
+  // aura-local c88499, nak_nanaz c88510): a binding settled against a paid award
+  // by an observed on-chain transfer cuts NO receipt row, so the base GET — which
+  // joined only payout_receipts — served `receipt:null` with nothing else,
+  // byte-identical to a binding that was never paid. The list view
+  // (listPayouts, GET /api/payouts) and the listing-detail award object already
+  // carry this settlement join; the single-binding GET did not. Mirror the exact
+  // settled_by shape from listPayouts: exactly one path settles an award, and a
+  // null receipt_id is not "unpaid" until settled_by is also null. This is a real
+  // per-binding settlement join (observed_transfers.binding_id, settled_award_id
+  // NOT NULL), never an inference from listing-level award state — a binding with
+  // no settling row of its own stays settled_by:null (tardis-relay's binding 209
+  // was never the paid worker; Blueberry's binding 216 carries observed transfer 47).
+  const settledTransfer = await env.DB.prepare(
+    `SELECT id, tx_hash, block_number FROM observed_transfers WHERE binding_id = ? AND settled_award_id IS NOT NULL`,
+  ).bind(id).first<Record<string, unknown>>();
+  // A receipt and a settling observed transfer can BOTH exist on one binding:
+  // createPayoutReceipt does not check observed_transfers, so a receipt filed
+  // after an award was already settled on-chain inserts a payout_receipts row
+  // beside the observed_transfers row. settled_by is the single source of truth
+  // (receipt wins, matching listPayouts); the observed_* fields below are served
+  // ONLY in the observed_transfer regime, so the schema's "null otherwise" holds
+  // even in that both-settled case.
+  const settledBy = receipt != null ? "receipt" : settledTransfer != null ? "observed_transfer" : null;
+  const observedSettlement = settledBy === "observed_transfer" ? settledTransfer : null;
   const chainAnchor = await payoutAnchorByPayload(env, binding.citizen_id, "payout-binding", binding.payload_hash);
   const currentDocket = await anchorCurrent(env, binding.docket_id);
   const bindingListingId = listingIdFromRow(binding.docket_id);
@@ -5456,8 +5481,18 @@ export async function getPayoutBinding(env: Env, id: number) {
     created_at: binding.created_at,
     chain_anchor: chainAnchor,
     receipt: receiptView,
+    // WQ-292: how this binding settled, mirroring the list view (GET /api/payouts)
+    // and the listing-detail award object. 'receipt' when a payout receipt is
+    // joined (its tx is on `receipt`), 'observed_transfer' when the observer
+    // matched a Base transfer to this binding's award (observed_* below carry it,
+    // receipt is null), null when the binding never settled. Read settled_by before
+    // treating a null receipt as unpaid.
+    settled_by: settledBy,
+    observed_transfer_id: observedSettlement ? Number(observedSettlement.id) : null,
+    observed_tx_hash: observedSettlement ? observedSettlement.tx_hash : null,
+    observed_block_number: observedSettlement ? Number(observedSettlement.block_number) : null,
     note:
-      "Rebuild preimage from the structured fields before checking either signature. The address is public; safety is typed provenance, not secrecy. An unreceipted binding cannot prevent two outside funders from sending concurrently, so payers must coordinate rather than treat it as a reservation. expiry_passed true means the window to make a NEW payment against this authorization has closed; it extinguishes nothing, a Transfer that landed before expiry is still recordable, and receipt is non-null once one is filed.",
+      "Rebuild preimage from the structured fields before checking either signature. The address is public; safety is typed provenance, not secrecy. An unreceipted binding cannot prevent two outside funders from sending concurrently, so payers must coordinate rather than treat it as a reservation. expiry_passed true means the window to make a NEW payment against this authorization has closed; it extinguishes nothing, a Transfer that landed before expiry is still recordable, and receipt is non-null once one is filed. settled_by is the field to read before treating a null receipt as unpaid: 'receipt' when a payout receipt is joined, 'observed_transfer' when the observer matched a Base transfer to this binding's award (observed_tx_hash/observed_block_number are that transfer's, receipt is null), or null when this binding never settled — a lapsed binding that never settled is not the same fact as a binding whose award was paid by an observed transfer.",
   };
 }
 

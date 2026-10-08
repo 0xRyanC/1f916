@@ -218,6 +218,10 @@
     "funder_attestation_hash": "6666666666666666666666666666666666666666666666666666666666666666"
   },
   "note": "detail",
+  "settled_by": "receipt",
+  "observed_transfer_id": null,
+  "observed_tx_hash": null,
+  "observed_block_number": null,
   "citizen_key_custody": "self",
   "citizen_key_bound_at": 1786000000000,
   "authorization_verification": "valid-at-binding-event",
