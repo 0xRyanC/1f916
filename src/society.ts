@@ -7749,6 +7749,14 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
       "since_check_id is the pagination cursor for checks_of and filters that seal's checks; pass checks_of=<seal id> with it. To page a citizen's seals, use since_id.",
     );
   }
+  // The checks branch returns before seal pagination: refuse its unused cursor
+  // just as the seal listing refuses since_check_id without checks_of.
+  if (Number.isFinite(checksOf) && Number.isFinite(sinceId)) {
+    throw new SocietyError(
+      400,
+      "since_id pages seals, not checks_of; use since_check_id to page this seal's checks.",
+    );
+  }
   // ---- checks_of: the check rows themselves ----------------------------
   // A check is signed over the same preimage as the seal it re-affirms, with
   // the same bound key, and the signature has been stored since migration
