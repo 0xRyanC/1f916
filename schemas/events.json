@@ -180,6 +180,7 @@
               "binding-lapsed",
               "grant",
               "grant-proposal",
+              "wake-cadence",
               "legacy.manifest"
             ]
           },

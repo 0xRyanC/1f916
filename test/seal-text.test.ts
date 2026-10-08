@@ -24,6 +24,8 @@
 //   - drop the cap: 16,001 characters seal, red.
 //   - drop the non-string refusal: a number sent as text beside a valid hash
 //     seals the hash, red.
+//   - read the seal budget before deciding seal or check again: an unchanged
+//     hash on a spent budget is refused 429, and so is a malformed one, red.
 //   - make the door ignore check_only (`if (true) return await sealMemory`):
 //     a difference inserts a second seal, and a look on a spent budget is
 //     refused 429, red.
@@ -243,6 +245,29 @@ test("check_only with nothing sealed under the label is refused, writes nothing 
   assert.deepEqual(written(db), { seals: 0, checks: 0, events: 0 });
 });
 
+test("check_only with nothing sent to compare is refused as itself, not as a bad hash", async () => {
+  const { env, db, citizen } = fixture();
+  // Live, 2026-10-06: a check_only with neither hash nor text fell through to
+  // the seal-door fingerprint rule and answered the generic "hash must be 64
+  // hex chars" 400, a message that never mentions check_only and tells the
+  // caller to compute a fingerprint it never intended to send.
+  for (const body of [
+    { label: "notes", check_only: true },
+    { label: "notes", check_only: true, text: "" },
+    { label: "notes", check_only: true, hash: "" },
+    { label: "notes", check_only: true, hash: null, text: null },
+  ] as never[]) {
+    const e = await refusal(() => sealOrCompare(env, citizen, body));
+    assert.equal(e.status, 400);
+    assert.match(e.message, /check_only needs something to compare/);
+    assert.doesNotMatch(e.message, /hash must be 64 hex/);
+  }
+  assert.deepEqual(written(db), { seals: 0, checks: 0, events: 0 });
+  // Without check_only the same bodies keep the seal-door refusals.
+  await rejects400(() => sealOrCompare(env, citizen, { label: "notes" }), /send the content as text instead/);
+  await rejects400(() => sealOrCompare(env, citizen, { label: "notes", text: "" }), /text is empty/);
+});
+
 test("check_only still answers when the day's seal budget is spent", async () => {
   const { env, db, citizen } = fixture();
   const now = Date.now();
@@ -258,6 +283,23 @@ test("check_only still answers when the day's seal budget is spent", async () =>
   const match = (await sealOrCompare(env, citizen, { hash: last, label: "bulk", check_only: true })) as Record<string, unknown>;
   assert.equal(match.checked, true);
   assert.equal(count(db, "seals"), SEALS_PER_DAY);
+});
+
+test("an unchanged hash is a check on a spent seal budget, and a malformed one is named, not counted", async () => {
+  const { env, db, citizen } = fixture();
+  const now = Date.now();
+  const insert = db.prepare("INSERT INTO seals (citizen_id, hash, label, sealed_at) VALUES (1, ?, 'bulk', ?)");
+  for (let i = 0; i < SEALS_PER_DAY; i++) insert.run(sha(`bulk-${i}`), now - 1000);
+  // Without check_only too: re-sending the latest fingerprint writes a check,
+  // which has its own budget, so the spent seal budget has nothing to refuse.
+  const last = sha(`bulk-${SEALS_PER_DAY - 1}`);
+  const resent = (await sealOrCompare(env, citizen, { hash: last, label: "bulk" })) as Record<string, unknown>;
+  assert.equal(resent.checked, true);
+  assert.equal(count(db, "seals"), SEALS_PER_DAY);
+  await rejects400(() => sealOrCompare(env, citizen, { hash: "nope", label: "bulk" }), /64 hex chars/);
+  // A real seal is still refused.
+  const spent = await refusal(() => sealOrCompare(env, citizen, { hash: sha("new"), label: "bulk" }));
+  assert.equal(spent.status, 429);
 });
 
 test("check_only does not open the reserved labels: a look under them is refused like a seal", async () => {
@@ -308,7 +350,7 @@ test("check_only that is neither true nor false is refused and writes nothing, h
   await sealOrCompare(env, citizen, { text: original, label: "core" });
   const before = written(db);
   for (const bad of [1, 0, "True", "TRUE", "yes", "on", "1", " true ", "", [true], { a: 1 }] as unknown[]) {
-    await rejects400(() => sealOrCompare(env, citizen, { text: tampered, label: "core", check_only: bad }), /check_only must be true or false/);
+    await rejects400(() => sealOrCompare(env, citizen, { text: tampered, label: "core", check_only: bad }), /check_only must be true or false.*No seal and no check was written$/);
     assert.deepEqual(written(db), before, `check_only: ${JSON.stringify(bad)} wrote something`);
   }
   const newest = db.prepare("SELECT hash FROM seals WHERE citizen_id = 1 AND label = 'core' ORDER BY id DESC LIMIT 1").get() as { hash: string };
@@ -376,4 +418,40 @@ test("a bad signature is explained to the caller in full and to the public log w
   const ok = (await sealOrCompare(env, citizen, { text, label, signature: right })) as Record<string, unknown>;
   assert.equal(ok.sealed, true);
   assert.equal(ok.signed, true);
+});
+
+// Round 1 of the second deploy audit, 2026-10-06: the guard for "check_only
+// with nothing to compare" tested `typeof text === "string"`, so a text of
+// 123, [] or {} counted as nothing sent. The caller was told to "send the
+// content as text" when it had sent text of the wrong type, and the public
+// reason said nothing was sent. A wrong type is something sent, and
+// validateSeal is where it is named.
+test("check_only with a text that is not a string is told the text must be a string, not that nothing was sent", async () => {
+  const { env, db, citizen } = fixture();
+  for (const bad of [123, [], {}, true] as unknown[]) {
+    const e = await refusal(() => sealOrCompare(env, citizen, { label: "notes", check_only: true, text: bad }));
+    assert.equal(e.status, 400);
+    assert.match(e.message, /text must be a string/);
+    assert.doesNotMatch(e.message, /check_only needs something to compare/);
+    assert.doesNotMatch(nullReasonFor(e), /nothing sent to compare with/);
+  }
+  assert.deepEqual(written(db), { seals: 0, checks: 0, events: 0 });
+});
+
+// The corrections below were each made because a served sentence claimed
+// more than the code does. None was pinned, so each could be reverted with
+// the suite green (second deploy audit, 2026-10-06). Killing mutation: put
+// any of the old phrases back, red.
+test("served sentences on the seal door say what is not written and how text is fingerprinted, and not the phrases they replaced", () => {
+  const society = readFileSync(fileURLToPath(new URL("../src/society.ts", import.meta.url)), "utf8");
+  const route = SURFACE_SRC.split("\n").find((l) => l.includes('path: "/api/seal"') && l.includes('method: "POST"')) ?? "";
+  assert.ok(route.includes("A check_only with neither `hash` nor `text` to compare is refused with 400 and writes no seal and no check."));
+  assert.ok(!/writes nothing/.test(route), "a refused write is counted in the nulls log, so 'writes nothing' is not true");
+  assert.match(society, /check_only must be true or false\. Anything else is refused rather than guessed at: [^"]*No seal and no check was written"/);
+  assert.ok(!/it was sent to test\. Nothing was written/.test(society));
+  assert.match(SEAL_FROM_TEXT_NOTE, /over the UTF-8 bytes of the text as it received it/);
+  assert.ok(!/exactly as sent/.test(SEAL_FROM_TEXT_NOTE), "the registry cannot vouch for bytes before they were decoded");
+  const tool = MCP.slice(MCP.indexOf('name: "seal",'), MCP.indexOf('name: "record_mandate",'));
+  assert.match(tool, /fingerprinted over the UTF-8 bytes of the text as received, and not stored/);
+  assert.ok(!/exactly as sent/.test(tool));
 });

@@ -22,13 +22,28 @@
 //   - treat a 200 with no valid cosignature as cosigned: red.
 //   - drop the future-timestamp refusal: a cosignature dated next year is
 //     accepted, red.
+//   - drop the canonical-base64 check: a re-encoded line is accepted, red.
+//   - report a witness AT this size as ahead (`>=` for `>`): nothing is sent
+//     and no cosignature comes back, red.
+//   - drop the zero-timestamp refusal, or the refusal of a clock that is not
+//     a number: each is accepted, red.
+//   - drop the answer-length bound: an oversized 200 is parsed, red.
+//   - drop the key-length check in parseWitnessVkey: a 31-byte key is read,
+//     red.
+//   - drop the key-type guard in verifyCosignatureV1: the ML-DSA key's line
+//     reaches importKey and throws, red.
+//   - weaken the clock check to Number.isNaN: an infinite clock passes, red.
+//   - apply the answer bound to every status: a 404 with a long body is
+//     malformed instead of unknown-log, red.
+//   - drop the catch around verification in submitCheckpoint: a key the
+//     runtime cannot import throws out of the submit, red.
 
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createHash, generateKeyPairSync, sign as edSign, verify as edVerify, type KeyObject } from "node:crypto";
 import { consistencyProof, merkleRoot, verifyConsistency } from "../src/merkle.ts";
 import { checkpointBody, formatNote, noteKeyId } from "../src/note.ts";
-import { MAX_PROOF_LINES, addCheckpointBody, parseWitnessVkey, readWitnessAnswer, submitCheckpoint, verifyCosignatureV1, type SubmitArgs } from "../src/tlog-witness.ts";
+import { MAX_ANSWER_CHARS, MAX_PROOF_LINES, addCheckpointBody, parseWitnessVkey, readWitnessAnswer, submitCheckpoint, verifyCosignatureV1, type SubmitArgs } from "../src/tlog-witness.ts";
 
 const sha = (b: Buffer | string) => createHash("sha256").update(b).digest();
 const rawPublic = (k: KeyObject) => Buffer.from(k.export({ format: "jwk" }).x as string, "base64url");
@@ -331,4 +346,103 @@ test("a witness that does not know the log, and a network that fails, are report
   const r = await submitCheckpoint(await args(new FakeWitness(), 5, 0, { fetchImpl: down }));
   assert.equal(r.kind, "network-error");
   if (r.kind === "network-error") assert.match(r.message, /ETIMEDOUT/);
+});
+
+// The notes below come from the second deploy audit, 2026-10-06: each guard
+// existed and had no test that would notice it gone.
+test("a verifier key of the wrong length or with a name that cannot be a key name is refused, and an ML-DSA key is read but never verifies here", async () => {
+  const w = new FakeWitness();
+  const short = Buffer.concat([Buffer.from([0x04]), w.pub.subarray(0, 31)]);
+  const shortId = sha(Buffer.concat([Buffer.from(w.name + "\n"), short])).subarray(0, 4).toString("hex");
+  await assert.rejects(() => parseWitnessVkey(`${w.name}+${shortId}+${short.toString("base64")}`), /32 bytes/);
+  await assert.rejects(() => parseWitnessVkey(w.vkey().replace(w.name, "has space")), /printable, with no space/);
+  // A post-quantum cosigner key: 1,312 bytes under type 0x06.
+  const pq = Buffer.alloc(1312, 9);
+  const pqId = sha(Buffer.concat([Buffer.from("pq.example/w\n"), Buffer.from([0x06]), pq])).subarray(0, 4);
+  const pqKey = await parseWitnessVkey(`pq.example/w+${pqId.toString("hex")}+${Buffer.concat([Buffer.from([0x06]), pq]).toString("base64")}`);
+  assert.equal(pqKey.type, 0x06);
+  const body = bodyOf(await noteAt(5));
+  // A line of the Ed25519 length under this key's name and id, with a real
+  // timestamp: the only thing that refuses it is that the key is not an
+  // Ed25519 key. (With timestamp zero it would be refused for that instead.)
+  const pqTime = Buffer.alloc(8);
+  pqTime.writeBigUInt64BE(BigInt(NOW_S));
+  assert.equal(await verifyCosignatureV1(`— pq.example/w ${Buffer.concat([pqId, pqTime, Buffer.alloc(64)]).toString("base64")}`, pqKey, body, NOW_MS), null);
+  await assert.rejects(() => parseWitnessVkey(`pq.example/w+${pqId.toString("hex")}+${Buffer.concat([Buffer.from([0x06]), pq.subarray(0, 100)]).toString("base64")}`), /1312 bytes/);
+});
+
+test("a cosignature in base64 that is not the canonical encoding of its bytes is refused", async () => {
+  const w = new FakeWitness();
+  const key = await parseWitnessVkey(w.vkey());
+  const body = bodyOf(await noteAt(5));
+  const good = w.cosign(body);
+  const b64 = good.split(" ")[2];
+  // 76 bytes leave one byte over, so the text ends "X==" and X carries four
+  // unused bits. Setting one of them decodes to the same bytes.
+  assert.ok(b64.endsWith("=="));
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  const last = b64[b64.length - 3];
+  const twin = alphabet[alphabet.indexOf(last) | 1];
+  assert.notEqual(twin, last, "the canonical form must have that bit clear, or this is not a second encoding");
+  const reencoded = b64.slice(0, -3) + twin + "==";
+  assert.deepEqual(Buffer.from(reencoded, "base64"), Buffer.from(b64, "base64"), "same bytes, different text");
+  assert.deepEqual(await verifyCosignatureV1(good, key, body, NOW_MS), { timestamp: NOW_S });
+  assert.equal(await verifyCosignatureV1(`— ${w.name} ${reencoded}`, key, body, NOW_MS), null);
+});
+
+test("a witness at exactly this size is asked again and signs again; only a witness past it is ahead", async () => {
+  const w = new FakeWitness();
+  assert.equal((await submitCheckpoint(await args(w, 9, 0))).kind, "cosigned");
+  const again = await submitCheckpoint(await args(w, 9, 9));
+  assert.equal(again.kind, "cosigned");
+  if (again.kind === "cosigned") assert.deepEqual({ oldSize: again.oldSize, attempts: again.attempts }, { oldSize: 9, attempts: 1 });
+  assert.equal(w.requests.length, 2);
+  assert.ok(w.requests[1].startsWith("old 9\n\n"), "the same size takes no proof");
+  assert.deepEqual(await submitCheckpoint(await args(w, 9, 10)), { kind: "witness-ahead", size: 9, witnessSize: 10, attempts: 0 });
+  assert.equal(w.requests.length, 2);
+});
+
+test("a zero timestamp, a clock that is not a number, and an answer too long to be an answer are all refused", async () => {
+  const w = new FakeWitness();
+  const key = await parseWitnessVkey(w.vkey());
+  const body = bodyOf(await noteAt(5));
+  // Correctly signed at time zero: the signature holds, the timestamp does not.
+  assert.equal(await verifyCosignatureV1(w.cosign(body, 0), key, body, NOW_MS), null);
+  assert.equal(await verifyCosignatureV1(w.cosign(body, 0), key, body), null);
+  // A next-year timestamp must not slip through because the clock is NaN.
+  const future = w.cosign(body, NOW_S + 365 * 86400);
+  assert.equal(await verifyCosignatureV1(future, key, body, Number.NaN), null);
+  assert.equal(await verifyCosignatureV1(w.cosign(body), key, body, Number.NaN), null);
+  // An infinite clock would put every timestamp in the past.
+  assert.equal(await verifyCosignatureV1(future, key, body, Number.POSITIVE_INFINITY), null);
+  assert.equal(await verifyCosignatureV1(w.cosign(body), key, body, Number.NEGATIVE_INFINITY), null);
+  // An oversized 200: valid lines repeated past the bound.
+  const line = w.cosign(body) + "\n";
+  const huge = line.repeat(Math.ceil((MAX_ANSWER_CHARS + 1) / line.length));
+  assert.ok(huge.length > MAX_ANSWER_CHARS);
+  const fetchImpl: SubmitArgs["fetchImpl"] = async () => ({ status: 200, text: async () => huge });
+  const r = await submitCheckpoint(await args(new FakeWitness(), 5, 0, { fetchImpl }));
+  assert.equal(r.kind, "refused");
+  if (r.kind === "refused") assert.equal(r.answer.kind, "malformed");
+});
+
+// Third audit round, 2026-10-06: the bound on an answer applied to every
+// status, so a long error page turned "unknown log" into "malformed"; and a
+// verifier that threw would have thrown out of the submit.
+test("only an answer whose body is parsed is bounded, and a line the runtime cannot check is set aside without throwing", async () => {
+  const long = "x".repeat(MAX_ANSWER_CHARS + 500);
+  const notFound: SubmitArgs["fetchImpl"] = async () => ({ status: 404, text: async () => long });
+  assert.deepEqual(await submitCheckpoint(await args(new FakeWitness(), 5, 0, { fetchImpl: notFound })), { kind: "refused", answer: { kind: "unknown-log" }, attempts: 1 });
+  const conflict: SubmitArgs["fetchImpl"] = async () => ({ status: 409, text: async () => long });
+  const c = await submitCheckpoint(await args(new FakeWitness(), 5, 0, { fetchImpl: conflict }));
+  assert.equal(c.kind, "refused");
+  if (c.kind === "refused") assert.equal(c.answer.kind, "malformed");
+  // A key object whose public key the runtime cannot import, reached by a
+  // line under its own name and id: importKey throws, and the line is simply
+  // not verified.
+  const w = new FakeWitness();
+  const real = await parseWitnessVkey(w.vkey());
+  const broken = { ...real, publicKey: real.publicKey.subarray(0, 31) };
+  const r = await submitCheckpoint(await args(w, 5, 0, { key: broken }));
+  assert.equal(r.kind, "no-valid-cosignature");
 });

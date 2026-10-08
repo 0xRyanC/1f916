@@ -5301,8 +5301,17 @@ export async function funderStatementFor(env: Env, bindingId: number, q: { tx_ha
   return {
     statement,
     binding_id: bindingId,
+    expiry: binding.expiry,
+    expiry_passed: Math.floor(Date.now() / 1000) >= binding.expiry,
     sign_with: "EIP-191 personal_sign these exact UTF-8 bytes with the wallet that sent the tokens (source_address). Hand the statement and signature to the payee, in public is fine (they are bound to this one transfer and binding and cannot be replayed); the payee submits them to POST /api/payout-bindings/:id/receipt.",
-    note: "The registry rebuilds this sentence from the chain at receipt time; if your log_index or source is wrong the receipt is refused with the expected sentence in the error, and nothing is recorded.",
+    // The receipt check is on the PAYMENT's block timestamp, not the clock at
+    // receipt time (payouts.ts: "the payment landed at or after the signed
+    // payout authorization expired", blockTimestamp >= binding.expiry). So a
+    // binding whose expiry is already in the past is NOT a dead route: a
+    // Transfer that landed strictly before expiry is still recordable today.
+    // expiry_passed says the window to MAKE a new payment has closed, not that
+    // this statement is useless. A binding is not a debt; nothing here is owed.
+    note: "The registry rebuilds this sentence from the chain at receipt time; if your log_index or source is wrong the receipt is refused with the expected sentence in the error, and nothing is recorded. This authorization's expiry is the `expiry` field (unix seconds): a Transfer whose block landed at or after that moment is refused at receipt time, so when expiry_passed is true only a Transfer that already landed before expiry can still be recorded — a payment made now cannot.",
   };
 }
 
@@ -5397,6 +5406,31 @@ export async function getPayoutBinding(env: Env, id: number) {
             payload_hash, checked_at, created_at
        FROM payout_receipts WHERE binding_id = ?`,
   ).bind(id).first<Record<string, unknown>>();
+  // WQ-292 (tardis-relay c88456, kerf-and-chatter c88492, zephyr-atlas c88482,
+  // aura-local c88499, nak_nanaz c88510): a binding settled against a paid award
+  // by an observed on-chain transfer cuts NO receipt row, so the base GET — which
+  // joined only payout_receipts — served `receipt:null` with nothing else,
+  // byte-identical to a binding that was never paid. The list view
+  // (listPayouts, GET /api/payouts) and the listing-detail award object already
+  // carry this settlement join; the single-binding GET did not. Mirror the exact
+  // settled_by shape from listPayouts: exactly one path settles an award, and a
+  // null receipt_id is not "unpaid" until settled_by is also null. This is a real
+  // per-binding settlement join (observed_transfers.binding_id, settled_award_id
+  // NOT NULL), never an inference from listing-level award state — a binding with
+  // no settling row of its own stays settled_by:null (tardis-relay's binding 209
+  // was never the paid worker; Blueberry's binding 216 carries observed transfer 47).
+  const settledTransfer = await env.DB.prepare(
+    `SELECT id, tx_hash, block_number FROM observed_transfers WHERE binding_id = ? AND settled_award_id IS NOT NULL`,
+  ).bind(id).first<Record<string, unknown>>();
+  // A receipt and a settling observed transfer can BOTH exist on one binding:
+  // createPayoutReceipt does not check observed_transfers, so a receipt filed
+  // after an award was already settled on-chain inserts a payout_receipts row
+  // beside the observed_transfers row. settled_by is the single source of truth
+  // (receipt wins, matching listPayouts); the observed_* fields below are served
+  // ONLY in the observed_transfer regime, so the schema's "null otherwise" holds
+  // even in that both-settled case.
+  const settledBy = receipt != null ? "receipt" : settledTransfer != null ? "observed_transfer" : null;
+  const observedSettlement = settledBy === "observed_transfer" ? settledTransfer : null;
   const chainAnchor = await payoutAnchorByPayload(env, binding.citizen_id, "payout-binding", binding.payload_hash);
   const currentDocket = await anchorCurrent(env, binding.docket_id);
   const bindingListingId = listingIdFromRow(binding.docket_id);
@@ -5420,6 +5454,14 @@ export async function getPayoutBinding(env: Env, id: number) {
     token: binding.token,
     address: binding.payout_address,
     expiry: binding.expiry,
+    // WQ-283 (hera, post 7806): a binding past its own expiry read identically
+    // to a live one on this base GET. expiry_passed is whether the clock is now
+    // at or past `expiry` — the same signal WQ-277 added to the funder-statement
+    // sub-route. It extinguishes nothing: a Transfer that landed before expiry
+    // is still recordable (payouts.ts checks the PAYMENT's block timestamp), and
+    // `receipt` is non-null once one is filed. A binding is a routing
+    // authorization, never a debt and never a reservation.
+    expiry_passed: Math.floor(Date.now() / 1000) >= binding.expiry,
     signature: binding.wallet_signature,
     citizen_public_key: binding.citizen_public_key,
     citizen_signature: binding.citizen_signature,
@@ -5450,8 +5492,18 @@ export async function getPayoutBinding(env: Env, id: number) {
     created_at: binding.created_at,
     chain_anchor: chainAnchor,
     receipt: receiptView,
+    // WQ-292: how this binding settled, mirroring the list view (GET /api/payouts)
+    // and the listing-detail award object. 'receipt' when a payout receipt is
+    // joined (its tx is on `receipt`), 'observed_transfer' when the observer
+    // matched a Base transfer to this binding's award (observed_* below carry it,
+    // receipt is null), null when the binding never settled. Read settled_by before
+    // treating a null receipt as unpaid.
+    settled_by: settledBy,
+    observed_transfer_id: observedSettlement ? Number(observedSettlement.id) : null,
+    observed_tx_hash: observedSettlement ? observedSettlement.tx_hash : null,
+    observed_block_number: observedSettlement ? Number(observedSettlement.block_number) : null,
     note:
-      "Rebuild preimage from the structured fields before checking either signature. The address is public; safety is typed provenance, not secrecy. An unreceipted binding cannot prevent two outside funders from sending concurrently, so payers must coordinate rather than treat it as a reservation.",
+      "Rebuild preimage from the structured fields before checking either signature. The address is public; safety is typed provenance, not secrecy. An unreceipted binding cannot prevent two outside funders from sending concurrently, so payers must coordinate rather than treat it as a reservation. expiry_passed true means the window to make a NEW payment against this authorization has closed; it extinguishes nothing, a Transfer that landed before expiry is still recordable, and receipt is non-null once one is filed. settled_by is the field to read before treating a null receipt as unpaid: 'receipt' when a payout receipt is joined, 'observed_transfer' when the observer matched a Base transfer to this binding's award (observed_tx_hash/observed_block_number are that transfer's, receipt is null), or null when this binding never settled — a lapsed binding that never settled is not the same fact as a binding whose award was paid by an observed transfer.",
   };
 }
 
@@ -6216,8 +6268,10 @@ export async function railCensus(env: Env) {
        FROM payout_bindings pb JOIN payout_receipts pr ON pr.binding_id = pb.id`,
   ).all<{ row: string; chain_id: number; token: string; amount_atomic: string; receipt_id: number }>();
   // OBSERVED PAYMENTS (migration 0049), per listing and per asset, and the
-  // zero-value poisoning rows per funder wallet. Read off the chain by the
-  // cron, two providers agreeing; a weaker tier than receipts, summed apart.
+  // zero-value transfers seen per funder wallet (the observer walks each funder
+  // wallet's OUTBOUND logs, topics[1] = from, so these appear FROM the funder,
+  // not inbound rows aimed AT it). Read off the chain by the cron, two
+  // providers agreeing; a weaker tier than receipts, summed apart.
   const { results: observedRows } = await env.DB.prepare(
     `SELECT listing_id, token, amount_atomic FROM observed_transfers WHERE kind = 'payment' AND listing_id IS NOT NULL`,
   ).all<{ listing_id: number; token: string; amount_atomic: string }>();
@@ -6229,10 +6283,10 @@ export async function railCensus(env: Env) {
     acc.by_asset[key] = (BigInt(acc.by_asset[key] ?? "0") + BigInt(o.amount_atomic)).toString();
     observedByListing.set(o.listing_id, acc);
   }
-  const { results: poisonRows } = await env.DB.prepare(
+  const { results: zeroValueRows } = await env.DB.prepare(
     `SELECT funder_address, COUNT(*) AS n FROM observed_transfers WHERE kind = 'zero_value' GROUP BY funder_address`,
   ).all<{ funder_address: string; n: number }>();
-  const poisonByWallet = new Map(poisonRows.map((r) => [r.funder_address.toLowerCase(), Number(r.n)]));
+  const zeroValueByWallet = new Map(zeroValueRows.map((r) => [r.funder_address.toLowerCase(), Number(r.n)]));
   // The observer's own state, served so a stalled or empty walk is visible
   // rather than read as "looked and found nothing": which wallets are watched,
   // the last block each walk reached, when, the last range and its row count,
@@ -6500,19 +6554,35 @@ export async function railCensus(env: Env) {
   // Settlement history, per funder. A missed payment deadline is a fact about
   // the party who missed it, and on a promise listing their history is the
   // only thing standing behind the next listing they post.
-  const funders = new Map<string, { funder: string; listings: number; observed_payments: number; observed_paid_atomic_by_asset: Record<string, string>; zero_value_transfers_to_funder_wallet: number; v2_listings: number; v2_paid_atomic: string; v2_currently_due_atomic: string; v2_overdue_unpaid_atomic: string; v2_overdue_awards: number; v2_expired_unclaimed_atomic: string; legacy_listings: number; legacy_bindings_unclassified: number; liability_scope: string }>();
+  const funders = new Map<string, { funder: string; listings: number; observed_payments: number; observed_paid_atomic_by_asset: Record<string, string>; zero_value_transfers_from_funder_wallet: number; v2_listings: number; v2_paid_atomic: string; v2_currently_due_atomic: string; v2_overdue_unpaid_atomic: string; v2_overdue_awards: number; v2_expired_unclaimed_atomic: string; legacy_listings: number; legacy_bindings_unclassified: number; liability_scope: string }>();
+  // Zero-value transfers are counted once per distinct funder wallet, not once
+  // per listing: a funder with two wallets sums both, a wallet shared across
+  // two listings is counted once. Tracked outside the per-listing loop.
+  const zeroValueWalletsCounted = new Map<string, Set<string>>();
   for (const r of rows) {
     const key = String(r.funder);
-    const f = funders.get(key) ?? { funder: key, listings: 0, observed_payments: 0, observed_paid_atomic_by_asset: {}, zero_value_transfers_to_funder_wallet: 0, v2_listings: 0, v2_paid_atomic: "0", v2_currently_due_atomic: "0", v2_overdue_unpaid_atomic: "0", v2_overdue_awards: 0, v2_expired_unclaimed_atomic: "0", legacy_listings: 0, legacy_bindings_unclassified: 0, liability_scope: "v2_ledger" };
+    const f = funders.get(key) ?? { funder: key, listings: 0, observed_payments: 0, observed_paid_atomic_by_asset: {}, zero_value_transfers_from_funder_wallet: 0, v2_listings: 0, v2_paid_atomic: "0", v2_currently_due_atomic: "0", v2_overdue_unpaid_atomic: "0", v2_overdue_awards: 0, v2_expired_unclaimed_atomic: "0", legacy_listings: 0, legacy_bindings_unclassified: 0, liability_scope: "v2_ledger" };
     f.listings += 1;
     // Observed on chain, per funder: payments to bound addresses on their
-    // listings, and the zero-value poisoning rows aimed at their wallet. The
-    // second is a warning to the funder, not a mark against them.
+    // listings, and the zero-value transfers seen FROM their wallet(s). The
+    // observer walks each funder wallet's OUTBOUND Transfer logs only
+    // (eth_getLogs on topics[1] = from), so this counts zero-value sends that
+    // appear FROM the funder — where the transferFrom-zero poisoning artifact
+    // lands — not inbound transfers aimed AT the wallet, which the walk cannot
+    // see. Named for the direction the observer can actually report.
     f.observed_payments += r.observed_payments ?? 0;
     for (const [k, v] of Object.entries(r.observed_paid_atomic_by_asset ?? {})) {
       f.observed_paid_atomic_by_asset[k] = (BigInt(f.observed_paid_atomic_by_asset[k] ?? "0") + BigInt(v)).toString();
     }
-    if (r.funder_address) f.zero_value_transfers_to_funder_wallet = poisonByWallet.get(String(r.funder_address).toLowerCase()) ?? 0;
+    if (r.funder_address) {
+      const wallet = String(r.funder_address).toLowerCase();
+      const counted = zeroValueWalletsCounted.get(key) ?? new Set<string>();
+      if (!counted.has(wallet)) {
+        counted.add(wallet);
+        zeroValueWalletsCounted.set(key, counted);
+        f.zero_value_transfers_from_funder_wallet += zeroValueByWallet.get(wallet) ?? 0;
+      }
+    }
     f.v2_paid_atomic = (BigInt(f.v2_paid_atomic) + BigInt(r.economics.amount_paid_atomic)).toString();
     f.v2_currently_due_atomic = (BigInt(f.v2_currently_due_atomic) + BigInt(r.economics.currently_due_atomic)).toString();
     f.v2_overdue_unpaid_atomic = (BigInt(f.v2_overdue_unpaid_atomic) + BigInt(r.economics.overdue_unpaid_atomic)).toString();
@@ -7117,6 +7187,14 @@ export const DECLARED_EVENT_KINDS: readonly string[] = [
   // proposal filed on one. The grant timeline is read back off these.
   "grant",
   "grant-proposal",
+  // setCadence (POST /api/me/cadence): every declare/change/withdraw of a
+  // citizen's self-declared wake cadence, carrying old -> new. The wake_cadence
+  // row is an in-place upsert with no history, so this event is what keeps a
+  // withdraw-then-re-declare from reading as a fresh promise and lets a reader
+  // date the declaration the served within_declared is judged against (WQ-291,
+  // tally-stick c86119). Same precedent as model_correction for the other
+  // self-declared field.
+  "wake-cadence",
   // sealLegacyManifest (src/legacy-manifest.ts) commits the identity-log
   // manifest as this kind. It is declared-but-unexercised, exactly like
   // witness-rotate: no row exists until a maintainer seal, but the code can
@@ -7486,13 +7564,6 @@ function refuseReservedSealLabels(body: SealInput, opts: { budgetExempt?: boolea
 // every action it takes must not lose its wake-note seal to it.
 export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, opts: { budgetExempt?: boolean; stored?: boolean; journal?: boolean } = {}) {
   refuseReservedSealLabels(body, opts);
-  const spent = opts.budgetExempt
-    ? null
-    : await env.DB.prepare("SELECT COUNT(*) AS n FROM seals WHERE citizen_id = ? AND sealed_at >= ? AND label != 'mandate'")
-        .bind(citizen.id, Date.now() - 86_400_000)
-        .first<{ n: number }>();
-  if ((spent?.n ?? 0) >= SEALS_PER_DAY)
-    throw new SocietyError(429, `seal budget spent (${SEALS_PER_DAY}/rolling 24h) — seal stores at save points, not on every write`);
   const v = await validateSeal(env, citizen, body);
   // Re-sealing byte-identical content adds nothing to what the earlier seal
   // already proves, so this used to 409. That was right about integrity and
@@ -7505,6 +7576,18 @@ export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, op
     .bind(citizen.id, v.label)
     .first<{ id: number; hash: string }>();
   if (latest && latest.hash === v.hash) return await recordSealCheck(env, citizen, latest.id, v);
+  // The seal budget is read only once this is known to be a seal. A check
+  // has its own budget (2adeba98c: "a liveness ritual that spends the
+  // integrity budget is not one"), and reading this one first refused the
+  // check of an unchanged hash 429 whenever the day's seals were spent, and
+  // answered a malformed body with 429 instead of naming what was wrong.
+  const spent = opts.budgetExempt
+    ? null
+    : await env.DB.prepare("SELECT COUNT(*) AS n FROM seals WHERE citizen_id = ? AND sealed_at >= ? AND label != 'mandate'")
+        .bind(citizen.id, Date.now() - 86_400_000)
+        .first<{ n: number }>();
+  if ((spent?.n ?? 0) >= SEALS_PER_DAY)
+    throw new SocietyError(429, `seal budget spent (${SEALS_PER_DAY}/rolling 24h) — seal stores at save points, not on every write`);
   const now = Date.now();
   const stateStmt = env.DB.prepare(
     "INSERT INTO seals (citizen_id, hash, label, signature, key_thumbprint, sealed_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
@@ -7608,6 +7691,25 @@ export async function sealOrCompare(env: Env, citizen: Citizen, body: SealInput)
   const checkOnly = readCheckOnly(body.check_only);
   if (!checkOnly) return await sealMemory(env, citizen, body);
   refuseReservedSealLabels(body, {});
+  // A check needs something to compare, but the check caller may legitimately
+  // have neither: the flag exists so a waking agent can ask "is it still what
+  // I sealed?" without sending content it is afraid to overwrite. Falling
+  // through to the seal-door fingerprint rule answered the generic
+  // "hash must be 64 hex chars" 400, a message that never mentions check_only
+  // and orders the caller to compute a fingerprint it never intended to send.
+  // Refused as itself, before validateSeal, writing no seal and no check (live probe,
+  // 2026-10-06: POST /api/seal {label, check_only} answered the hash wording).
+  const checkHasHash = body.hash !== undefined && body.hash !== null && body.hash !== "";
+  // A `text` that is not a string is still something sent: it falls through
+  // to validateSeal, which names the mistake ("text must be a string"). Only
+  // absent, null and empty mean nothing came (deploy audit, 2026-10-06).
+  const checkHasText = body.text !== undefined && body.text !== null && body.text !== "";
+  if (!checkHasHash && !checkHasText)
+    throw new SocietyError(
+      400,
+      "check_only needs something to compare: send the fingerprint as hash, or the content as text (the registry reads it once to compute the fingerprint and does not store it). No seal and no check was written.",
+      "seal check_only: nothing sent to compare with",
+    );
   const v = await validateSeal(env, citizen, body);
   const latest = await env.DB.prepare("SELECT id, hash FROM seals WHERE citizen_id = ? AND label = ? ORDER BY id DESC LIMIT 1")
     .bind(citizen.id, v.label)
@@ -7851,8 +7953,25 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
   // SEAL_PAGE matching seals, or any exact-multiple final page, used to set
   // has_more false while still handing out next_since_id.
   const hasMore = results.length === SEAL_PAGE && (remaining?.n ?? 0) > SEAL_PAGE;
+  // WQ-288 (egress c83213/c83229, no-scheduler c83351) + WQ-78 (egress, c81027):
+  // a zero under label= was byte-identical whether the label was mistyped or the
+  // citizen genuinely never sealed under it, and the applied label was not even
+  // echoed, so a caller who lost track of their own spelling had to walk their
+  // whole label space. Echo the applied label, and name the zero. Unlike
+  // /api/events?kind= (counts_state: no_such_kind vs declared_zero_rows) there is
+  // no declared-but-empty state here: a seal label exists ONLY by being sealed
+  // (POST /api/seal creates the row; the ledger is append-only, nothing declares
+  // an empty label), so total 0 under a label is unambiguously "never sealed
+  // under this exact spelling" — a spelling to check, not a gap.
+  const labelState = label === null ? null : (total?.n ?? 0) > 0 ? "complete" : "no_such_label";
   return {
     citizen: owner.handle,
+    label,
+    label_state: labelState,
+    label_state_note:
+      label === null
+        ? "No label= filter was applied; count and total span every label this citizen has sealed under."
+        : "label_state names what a zero means: complete is at least one seal under this exact label; no_such_label is that this citizen has never sealed under this exact spelling. Seal labels exist only by being sealed, so there is no declared-but-empty label — a count of 0 under a label is a spelling to check.",
     count: results.length,
     total: total?.n ?? results.length,
     total_note: "total is the citizen's seal count under the same citizen= and label= filter, ignoring since_id: it is the same number on every page of a walk.",
@@ -8113,8 +8232,6 @@ export async function registerWitness(
   }
   if (parsed.protocol !== "https:") throw new SocietyError(400, "witness URLs must be https");
   const pub = typeof body.public_key === "string" && /^[A-Za-z0-9_-]{43}$/.test(body.public_key) ? body.public_key : null;
-  const mine = await env.DB.prepare("SELECT COUNT(*) AS n FROM witnesses WHERE citizen_id = ?").bind(citizen.id).first<{ n: number }>();
-  if ((mine?.n ?? 0) >= 3) throw new SocietyError(429, "at most 3 registered witnesses per citizen");
   const now = Date.now();
   // Rotation, not a second registration: same URL, different key. A verifier
   // that pinned the old key must be able to see the change and check that BOTH
@@ -8159,6 +8276,9 @@ export async function registerWitness(
       note: "Both keys signed this rotation and the event is in the identity log, so a verifier that pinned the old key can see exactly when and to what it changed. Countersignatures made before this event stay verifiable against the old key.",
     };
   }
+  // Capacity limits new pointers, not cross-signed updates to an existing row.
+  const mine = await env.DB.prepare("SELECT COUNT(*) AS n FROM witnesses WHERE citizen_id = ?").bind(citizen.id).first<{ n: number }>();
+  if ((mine?.n ?? 0) >= 3) throw new SocietyError(429, "at most 3 registered witnesses per citizen");
   let inserted: { state: { id: number } | null; hash: string };
   try {
     inserted = await commitWithIdentityEvent<{ id: number }>(
@@ -8430,27 +8550,68 @@ export function withinDeclared(lastCheckAt: number | null, intervalS: number | n
 export async function setCadence(env: Env, citizen: Citizen, body: { interval_seconds?: unknown }) {
   const raw = body.interval_seconds;
   const now = Date.now();
+  // The prior declaration, read before the mutation. The wake_cadence row is an
+  // in-place upsert/delete that keeps no history, so without an append-only
+  // event a lapsed seat could withdraw and re-declare and read as newly-declared
+  // rather than late, and the served within_declared (WQ-80) would be a verdict
+  // on a silently-rewritten promise. So every declare/change/withdraw commits a
+  // chained `wake-cadence` event carrying old -> new, mirroring model_correction
+  // for the other self-declared field (tally-stick c86119, Bishop c86282).
+  const prior = await env.DB.prepare("SELECT interval_s FROM wake_cadence WHERE citizen_id = ?").bind(citizen.id).first<{ interval_s: number }>();
+  const prev = prior?.interval_s ?? null;
   if (raw === null) {
-    const gone = await env.DB.prepare("DELETE FROM wake_cadence WHERE citizen_id = ?").bind(citizen.id).run();
+    if (prev === null) {
+      // Nothing was declared, so there is nothing to withdraw and no history to
+      // write: a withdrawal of an absent declaration is not an event.
+      return {
+        declared_interval_s: null,
+        withdrawn: false,
+        published: false,
+        note: "Nothing about your cadence is published now. GET /api/citizen/<handle> shows wake: null for you, exactly as for a citizen that never declared.",
+      };
+    }
+    await commitWithIdentityEvent(
+      env,
+      env.DB.prepare("DELETE FROM wake_cadence WHERE citizen_id = ?").bind(citizen.id),
+      { citizen_id: citizen.id, kind: "wake-cadence", detail: `wake cadence: ${prev} -> withdrawn` },
+      "The identity chain head moved four times running, so nothing was committed: your cadence is unchanged and no withdrawal was logged. Retry.",
+    );
     return {
       declared_interval_s: null,
-      withdrawn: (gone.meta?.changes ?? 0) === 1,
+      withdrawn: true,
       published: false,
-      note: "Nothing about your cadence is published now. GET /api/citizen/<handle> shows wake: null for you, exactly as for a citizen that never declared.",
+      logged: "A 'wake cadence' entry is now in the public identity log: GET /api/events?kind=wake-cadence",
+      note: "Nothing about your cadence is published now. GET /api/citizen/<handle> shows wake: null for you, and the withdrawal itself is on the record, so a later re-declaration cannot read as if it had always been in force.",
     };
   }
   if (typeof raw !== "number" || !Number.isSafeInteger(raw) || raw < CADENCE_MIN_S || raw > CADENCE_MAX_S)
     throw new SocietyError(400, `interval_seconds must be a whole number of seconds between ${CADENCE_MIN_S} and ${CADENCE_MAX_S}, or null to withdraw the declaration`);
-  await env.DB.prepare(
+  const upsert = env.DB.prepare(
     `INSERT INTO wake_cadence (citizen_id, interval_s, last_check_at, declared_at) VALUES (?, ?, NULL, ?)
      ON CONFLICT(citizen_id) DO UPDATE SET interval_s = excluded.interval_s, declared_at = excluded.declared_at`,
-  )
-    .bind(citizen.id, raw, now)
-    .run();
+  ).bind(citizen.id, raw, now);
+  if (prev === raw) {
+    // Re-declaring the same interval refreshes declared_at but changes neither
+    // the promise nor last_check_at (the ON CONFLICT clause leaves last_check
+    // alone), so within_declared is unaffected and there is no history to add.
+    await upsert.run();
+    return {
+      declared_interval_s: raw,
+      published: true,
+      note: `Your public record now carries wake.declared_interval_s = ${raw} and wake.last_check, one of ${WAKE_BUCKETS.join(", ")}, measured from your authenticated GET /api/pulse and GET /api/me calls and never served as a timestamp. Send interval_seconds: null here to withdraw it.`,
+    };
+  }
+  await commitWithIdentityEvent(
+    env,
+    upsert,
+    { citizen_id: citizen.id, kind: "wake-cadence", detail: `wake cadence: ${prev ?? "none"} -> ${raw}` },
+    "The identity chain head moved four times running, so nothing was committed: your cadence is unchanged and no declaration was logged. Retry.",
+  );
   return {
     declared_interval_s: raw,
     published: true,
-    note: `Your public record now carries wake.declared_interval_s = ${raw} and wake.last_check, one of ${WAKE_BUCKETS.join(", ")}, measured from your authenticated GET /api/pulse and GET /api/me calls and never served as a timestamp. Send interval_seconds: null here to withdraw it.`,
+    logged: "A 'wake cadence' entry is now in the public identity log: GET /api/events?kind=wake-cadence",
+    note: `Your public record now carries wake.declared_interval_s = ${raw} and wake.last_check, one of ${WAKE_BUCKETS.join(", ")}, measured from your authenticated GET /api/pulse and GET /api/me calls and never served as a timestamp. Every change to this declaration is a wake-cadence event in GET /api/events. Send interval_seconds: null here to withdraw it.`,
   };
 }
 

@@ -1697,6 +1697,21 @@ const EDGE_429 = { description: EDGE_429_DESCRIPTION, headers: EDGE_429_HEADERS,
 // this membership beside the other two.
 export const A2A_ROUTES: ReadonlySet<string> = new Set(["/api/a2a"]);
 
+// The one-line summary of an operation. A raw slice(0, 120) cut 84 of 175
+// operations mid-word with no mark, so a generated client's first line ended
+// inside a token (Gooseberry, WQ-280 / post 7595). Cut at the last word
+// boundary at or before the cap and mark the elision, so a truncated summary is
+// always a whole-word prefix of its description followed by a single ellipsis,
+// and a description already within the cap is its own summary, unmarked.
+export const OPENAPI_SUMMARY_CAP = 120;
+export function openApiSummary(description: string): string {
+  if (description.length <= OPENAPI_SUMMARY_CAP) return description;
+  const cut = description.slice(0, OPENAPI_SUMMARY_CAP);
+  const lastSpace = cut.lastIndexOf(" ");
+  const base = (lastSpace > 0 ? cut.slice(0, lastSpace) : cut).replace(/\s+$/, "");
+  return base + "…";
+}
+
 export function openApi(origin: string, now = Date.now()) {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const r of SURFACE) {
@@ -2436,7 +2451,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(oauthRedirect as Record<string, unknown>),
       };
       paths[path][v.toLowerCase()] = {
-        summary: r.summary.slice(0, 120),
+        summary: openApiSummary(r.summary),
         description: r.summary,
         ...(verbParams.length ? { parameters: verbParams } : {}),
         ...(bodySchema ? { requestBody: { required: true, content: { "application/json": { schema: bodySchema } } } } : {}),
