@@ -31,6 +31,17 @@ call, `unverified` otherwise, or `fetch_failed` when `/api/attest` could not be
 reached at all — a line is written either way, so a missing bucket means the
 job did not run, never that it ran and stayed silent.
 
+From the first head line that carries them, `trigger` is the event that
+started the run (`schedule` for GitHub's own scheduler, `workflow_dispatch`
+for a run started by hand or, before 2026-09-29, by the registry's cron) and
+`run_id` is the Actions run that wrote the line, as a string:
+`GET https://api.github.com/repos/1f916-ai/1f916/actions/runs/<run_id>` is
+the one request that joins a line to its run. Both are null when the step ran
+outside Actions. Like every head line, they are unsigned: they say which run
+the workflow believes it is, not something a witness key vouches for. Earlier
+lines have neither, and the trigger mix before them is only in GitHub's runs
+API (`actions/workflows/witness.yml/runs?event=schedule`).
+
 ## The cadence changed on 2026-08-12, and so did what a line contains
 
 Three changes landed that day, and a reader comparing an early file to a

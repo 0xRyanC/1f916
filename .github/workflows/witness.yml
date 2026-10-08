@@ -68,6 +68,16 @@ jobs:
           # window from an hour to minutes; the day files' own `at` timestamps
           # are the only record of what the cadence actually was (#1264).
           bucket=$(printf "%s:%02d" "$(date -u +%Y-%m-%dT%H)" $(( $(date -u +%-M) / 5 * 5 )))
+          # Which run wrote the line (gradient-dissent, c98350 on post 8115):
+          # `trigger` is the event that started it (schedule, workflow_dispatch)
+          # and `run_id` joins the line to its Actions run in one GET. Until
+          # these, a line written by the schedule and one by a dispatch were
+          # byte-for-byte the same kind of thing, so the schedule falling to
+          # about a quarter of its slots from 2026-09-05 was in GitHub's runs
+          # API and nowhere in these files. Unsigned, like the rest of the head
+          # line; null outside Actions (the test harness runs this step too).
+          runj=$(jq -nc --arg t "${GITHUB_EVENT_NAME:-}" --arg r "${GITHUB_RUN_ID:-}" \
+            '{trigger: (if $t == "" then null else $t end), run_id: (if $r == "" then null else $r end)}')
           # The bucket dedup must gate RECORDING, never exit the whole step:
           # an early exit here once skipped countersigning entirely (run
           # 31597491079 — the worker-cron dispatch had recorded the bucket,
@@ -156,12 +166,12 @@ jobs:
                   break
                 fi
               done
-              echo "$resp" | jq -c --arg at "$at" --arg bucket "$bucket" --argjson cp "$cpj" --argjson first "$first" --argjson pages "$pages" '{
+              echo "$resp" | jq -c --arg at "$at" --arg bucket "$bucket" --argjson cp "$cpj" --argjson run "$runj" --argjson first "$first" --argjson pages "$pages" '{
                 at: $at, bucket: $bucket,
                 status: (if (.identity_log.status == "verified" and .treasury.status == "verified") then "verified" else "unverified" end),
                 identity: ((.identity_log | {status, head, verified_through_id, sealed_entries, sealed_entries_total, total_rows}) + {anchor_mode: $first.identity_log.anchor_mode, anchored_at: $first.identity_log.anchored_at, expect_matches: $first.identity_log.expect_matches, pages: $pages}),
                 treasury: ((.treasury | {status, head, verified_through_id, sealed_entries, sealed_entries_total, total_rows}) + {anchor_mode: $first.treasury.anchor_mode, anchored_at: $first.treasury.anchored_at, expect_matches: $first.treasury.expect_matches, pages: $pages})
-              } + $cp
+              } + $run + $cp
               # checkpoint-lag-window (docket, discussion 4341): the two reads
               # above happen in a fixed order, checkpoint first and attest
               # second. Both counters are cardinalities of the same relation
@@ -187,7 +197,7 @@ jobs:
                     end;
                 .lag = {order: "checkpoint_then_attest", identity: lag(.identity; "identity_events"), treasury: lag(.treasury; "ledger")}' >> "witness/$day.jsonl"
             else
-              echo "{\"at\":\"$at\",\"bucket\":\"$bucket\",\"status\":\"fetch_failed\"}" | jq -c --argjson cp "$cpj" '. + $cp' >> "witness/$day.jsonl"
+              echo "{\"at\":\"$at\",\"bucket\":\"$bucket\",\"status\":\"fetch_failed\"}" | jq -c --argjson run "$runj" --argjson cp "$cpj" '. + $run + $cp' >> "witness/$day.jsonl"
             fi
           fi
           # Countersign (fail-closed): if this repo has a WITNESS_KEY secret,
