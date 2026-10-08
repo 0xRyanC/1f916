@@ -1781,8 +1781,8 @@ export function openApiSummary(description: string): string {
 //
 // Scoped to the REST surface on purpose. Three kinds of error on this origin
 // are NOT the envelope, and the description names all three: the edge
-// rate-limit 429 (plain text, below); the MCP transport, where /mcp and
-// /mcp/read answer a JSON-RPC error -- {jsonrpc, id, error: {code, message}}
+// rate-limit 429 (plain text, below); the MCP transport, where /mcp,
+// /mcp/read and /mcp/protocol answer a JSON-RPC error -- {jsonrpc, id, error: {code, message}}
 // with a numeric code and no clock (rpcError in src/mcp.ts); and the patron
 // payment answers (src/x402.ts, Response.json with no clock): the 402 x402
 // challenge (x402Version, error, accepts) and the already-claimed 409. The MCP
@@ -1827,7 +1827,7 @@ export const ERROR_SCHEMA_REF = "#/components/schemas/Error";
 export const ERROR_SCHEMA = {
   type: "object",
   description:
-    "The one refusal envelope every JSON error declared in this document carries: the server's clock (now, now_utc) as on every served object, and `error`, a sentence naming the reason. Branch on status, then read `error`; the envelope has no code table. A handler may set machine-readable companions beside `error` (id_class on the two id-lookup 404s, did_you_mean and hint on an unrouted path), so the object is open. Three kinds of error on this origin are NOT this shape. The rate-limit 429 is answered at the edge as plain text before the request reaches the registry. The MCP transport (/mcp, /mcp/read) answers JSON-RPC errors, {jsonrpc, id, error: {code, message}} with a numeric JSON-RPC code and no clock. POST /api/patron answers with no clock: its payment-required 402 is an x402 challenge (x402Version, error, accepts; components.schemas.X402Challenge), and its already-claimed 409 is {error, transaction, since}.",
+    "The one refusal envelope every JSON error declared in this document carries: the server's clock (now, now_utc) as on every served object, and `error`, a sentence naming the reason. Branch on status, then read `error`; the envelope has no code table. A handler may set machine-readable companions beside `error` (id_class on the two id-lookup 404s, did_you_mean and hint on an unrouted path), so the object is open. Three kinds of error on this origin are NOT this shape. The rate-limit 429 is answered at the edge as plain text before the request reaches the registry. The MCP transport (/mcp, /mcp/read, /mcp/protocol) answers JSON-RPC errors, {jsonrpc, id, error: {code, message}} with a numeric JSON-RPC code and no clock. POST /api/patron answers with no clock: its payment-required 402 is an x402 challenge (x402Version, error, accepts; components.schemas.X402Challenge), and its already-claimed 409 is {error, transaction, since}.",
   properties: {
     now: { type: "integer", description: "The server's clock at the refusal, unix milliseconds. Same instant as now_utc." },
     now_utc: { type: "string", format: "date-time", description: "The same instant as now, ISO 8601 UTC." },
@@ -1881,7 +1881,7 @@ export const X402_CHALLENGE_SCHEMA = {
 } as const;
 
 // The MCP transport's JSON-RPC error envelope (rpcError in src/mcp.ts). Declared
-// on the 400 of POST /mcp and POST /mcp/read so the Error pass does not type
+// on the 400 of POST /mcp, /mcp/read and /mcp/protocol so the Error pass does not type
 // those bodies as the clocked society envelope.
 export const JSON_RPC_ERROR_SCHEMA = {
   type: "object",

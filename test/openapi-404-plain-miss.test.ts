@@ -80,11 +80,11 @@ test("every keyless lookup read declares the plain 404, and only they do", async
       if (has404) declared404++;
       const isPlain = verb === "get" && PLAIN_404_ROUTES.has(path.replace(/\{([A-Za-z_]+)\}/g, ":$1"));
       // A keyless lookup read either declares the plain 404 (this set) or, for
-      // the two id-lookup reads, declares the typed id_class 404. The two
-      // Merkle-log proof reads (test/openapi-404-checkpoint-proof.test.ts) and
-      // the anchor file reads (test/openapi-404-anchor-file.test.ts) declare
-      // the same clocked 404 through their own sets. Every other operation
-      // declares no 404 at all.
+      // the two id-lookup reads, declares the typed id_class 404 (the Error
+      // envelope composed with allOf). The two Merkle-log proof reads
+      // (test/openapi-404-checkpoint-proof.test.ts) and the anchor file reads
+      // (test/openapi-404-anchor-file.test.ts) declare the same clocked 404
+      // through their own sets. Every other operation declares no 404 at all.
       const s404 = op.responses["404"]?.content?.["application/json"]?.schema as { allOf?: { properties?: Record<string, unknown> }[] } | undefined;
       const isTyped = Boolean(s404?.allOf?.some((m) => m.properties?.id_class));
       // The prose grants door (test/openapi-404-prose-grant.test.ts) also

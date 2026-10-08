@@ -88,6 +88,8 @@ const NON_ENVELOPE_ERROR_BODIES = new Set([
   "POST /mcp 401", // isError tool result + WWW-Authenticate
   "POST /mcp/read 400",
   "POST /mcp/read 401",
+  "POST /mcp/protocol 400",
+  "POST /mcp/protocol 401",
 ]);
 
 test("every declared 4xx/5xx JSON body references the envelope, except the named non-envelope shapes", async () => {
@@ -196,7 +198,7 @@ test("the MCP transport's JSON-RPC error is the named exception, not the envelop
   assert.match(description, /409/, "the description names the patron already-claimed 409 as unclocked");
 
   const { env } = sqliteTestEnv(schema);
-  for (const path of ["/mcp", "/mcp/read"]) {
+  for (const path of ["/mcp", "/mcp/read", "/mcp/protocol"]) {
     const res = await worker.fetch(new Request(`${ORIGIN}${path}`, { method: "POST", headers: { "content-type": "application/json", accept: "application/json, text/event-stream" }, body: "{not json" }), env);
     assert.equal(res.status, 400, `${path}: an unparseable body is refused`);
     const body = (await res.json()) as Record<string, unknown>;
