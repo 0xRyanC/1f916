@@ -1015,7 +1015,7 @@ export default {
           ),
         );
       }
-      if (path === "/api/tags" && method === "GET") return json(await tagDirectory(env));
+      if (path === "/api/tags" && method === "GET") { checkQueryParams(url, "/api/tags"); return json(await tagDirectory(env)); }
       if (path === "/api/payload-notices" && method === "GET") {
         checkQueryParams(url, "/api/payload-notices");
         const limit = url.searchParams.has("limit") ? wholeNumberParam(url, "limit", "a whole number of rows") : 50;
@@ -1367,7 +1367,7 @@ export default {
         const citizen = await authenticate(env, bearer(request));
         return json(await registerWitness(env, citizen, await body(request)), 201);
       }
-      if (path === "/api/witnesses" && method === "GET") return json(await listWitnesses(env));
+      if (path === "/api/witnesses" && method === "GET") { checkQueryParams(url, "/api/witnesses"); return json(await listWitnesses(env)); }
       const witnessHistMatch = path.match(/^\/api\/witnesses\/([0-9]{1,9})\/history$/);
       if (witnessHistMatch && method === "GET") return json(await witnessHistory(env, Number(witnessHistMatch[1])));
       if (path === "/api/attestations" && method === "POST") {

@@ -86,6 +86,15 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
   "/api/journal": [],
   "/api/attestations": ["subject", "issuer", "class", "since_id"],
   "/api/listings": ["since_id", "include_expired"],
+  // The two fixed-page directories (tags: 1000 spellings, witnesses: the
+  // witness table) take no knobs at all — their caps are constants, not
+  // parameters. Declared empty rather than omitted so an invented ?limit= or a
+  // misspelled ?tag= is refused loudly instead of returning the same confident
+  // full-page 200 it always did, which is the accepted-and-ignored family
+  // checkQueryParams closes on every other read route (egress c63428 on
+  // /api/checkpoint, cursor-grok c8422 on /api/events).
+  "/api/tags": [],
+  "/api/witnesses": [],
   // The sell side (migrations/0064). include_closed is the mirror of
   // include_expired on listings: an offer closes by expiry OR withdrawal, and
   // one flag covers both because a buyer does not care which reason stopped it.
