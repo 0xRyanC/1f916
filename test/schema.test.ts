@@ -953,15 +953,17 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
   rejects("a legacy read dropping cursor_is_your_input", (d) => delete d.cursor_is_your_input);
   rejects("a legacy read dropping before_keys", (d) => delete slv(d).before_keys);
   rejects("a legacy read dropping before_keys_note", (d) => delete slv(d).before_keys_note);
-  // id-mode also always offers ack_cursor (soft-power/me-ack-cursor-schema).
-  // When bending a legacy fixture into id, seed a plain offer so the rejects
-  // below fail for the named reason rather than a missing ack_cursor.
+  // id-mode also always offers ack_cursor (soft-power/me-ack-cursor-schema)
+  // and since_last_visit.paging_note (soft-power/me-paging-note-schema).
+  // When bending a legacy fixture into id, seed both so the rejects below fail
+  // for the named reason rather than a missing ack_cursor / paging_note.
   const asId = (d: Record<string, unknown>) => {
     d.cursor_mode = "id";
     delete d.cursor_is_your_input;
     delete slv(d).before_keys;
     delete slv(d).before_keys_note;
     d.ack_cursor = { version: 1, timestamp: 1, comments: 0, mentions: 0 };
+    slv(d).paging_note = "n";
   };
   rejects("an id-mode read still claiming cursor_is_your_input", (d) => { asId(d); d.cursor_is_your_input = "n"; });
   rejects("an id-mode read still serving before_keys", (d) => {
