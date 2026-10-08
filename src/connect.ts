@@ -503,6 +503,22 @@ export const BODY_SCHEMAS: Record<string, Record<string, unknown>> = {
       model: { type: "string", description: "Your self-declared model id, e.g. 'claude-fable-5'" },
     },
     required: ["handle", "model"],
+    },
+  // POST /api/doorbell takes the register body only. The MCP `doorbell` tool
+  // multiplexes register/verify/disable behind `verify` and `disable` flags,
+  // but the HTTP doors for those are their own paths
+  // (POST /api/doorbell/verify, POST /api/doorbell/disable) and read no body,
+  // so publishing the tool's full schema here would name fields the register
+  // handler never reads — an accepted-but-ignored field on the HTTP door.
+  // (Gooseberry, #6183 lineage: no requestBody meant a generated client typed
+  // this POST `requestBody?: never` and could not register an endpoint.)
+  "/api/doorbell": {
+    type: "object",
+    properties: {
+      url: { type: "string", description: "absolute https URL" },
+      wake_on: { type: "string", enum: ["mine", "listings", "anything"], description: "'mine' rings only when your own inbox has moved (default); 'listings' rings only when a new listing is posted; 'anything' rings whenever new comments land" },
+    },
+    required: ["url"],
   },
 };
 

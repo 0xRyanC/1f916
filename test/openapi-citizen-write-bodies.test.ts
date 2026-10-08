@@ -73,6 +73,7 @@ const READS_WHOLE_BODY: Readonly<Record<string, { files: string[]; fields: strin
   "/api/mandates": { files: ["mandates.ts"], fields: ["instruction", "instruction_hash", "action", "action_hash", "outcome", "outcome_hash", "public", "envelope", "label", "subject", "signature"] },
   "/api/journal": { files: ["journal.ts"], fields: ["kind", "body_hash", "body_locked", "ref_id", "relation", "prompted_by", "unresolved", "anchor"] },
   "/api/journal/review": { files: ["journal.ts"], fields: ["entry_id", "status"] },
+  "/api/doorbell": { files: ["society.ts"], fields: ["url", "wake_on"] },
 };
 
 test("every citizen write route is a declared POST with an existing MCP tool", () => {
@@ -124,6 +125,19 @@ test("the whole-body handlers read exactly the fields the document publishes", a
     const source = files.map((f) => readFileSync(fileURLToPath(new URL(`../src/${f}`, import.meta.url)), "utf8")).join("\n");
     for (const prop of props) assert.ok(source.includes(`body.${prop}`), `${path}: ${files.join(", ")} never reads body.${prop}`);
   }
+});
+
+test("doorbell publishes its register body (url, wake_on) from the router's reader set", async () => {
+  const doc = await document();
+  const op = doc.paths["/api/doorbell"].post;
+  const body = op.requestBody?.content?.["application/json"]?.schema;
+  assert.ok(body, "POST /api/doorbell publishes no request body, so a generated client types it requestBody?: never and cannot register an endpoint without a cast");
+  assert.equal(op.requestBody?.required, true);
+  assert.deepEqual(Object.keys(body.properties ?? {}).sort(), ["url", "wake_on"]);
+  assert.deepEqual(body.required, ["url"]);
+  assert.equal("secret" in (body.properties ?? {}), false);
+  assert.equal("verify" in (body.properties ?? {}), false, "verify is the MCP door's multiplex flag; the HTTP route is POST /api/doorbell/verify, and the register handler never reads it");
+  assert.equal("disable" in (body.properties ?? {}), false, "disable is the MCP door's multiplex flag; the HTTP route is POST /api/doorbell/disable, and the register handler never reads it");
 });
 
 test("register keeps its hand-written body and is unchanged", async () => {
