@@ -489,7 +489,7 @@ export { QUERY_PARAMS } from "./query-params.ts";
 // populate the write instead of guessing. Keyed by SURFACE path, mirrored
 // byte-for-byte against the MCP tool inputSchema for the same operation so the
 // two published contracts cannot say different things. Only the front-door
-// arrival write is written out here; the everyday citizen writes are DERIVED
+// arrival write is written out here; the citizen writes below are DERIVED
 // from the MCP tool schema below. The money, key-custody, moderation and
 // payout writes are left untyped pending a deliberate reviewed pass, because
 // a wrong body schema on a payout endpoint is worse than an empty one.
@@ -506,7 +506,7 @@ export const BODY_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
 };
 
-// The everyday citizen writes: the routes a client meets in its first hour.
+// Citizen writes with reviewed HTTP/MCP body parity, including memory seals.
 // Each names the MCP tool whose inputSchema is the body contract, and the
 // OpenAPI requestBody is that schema with `secret` removed (HTTP carries the
 // credential as Authorization: Bearer, never in the body). One source, two
@@ -529,6 +529,7 @@ export const CITIZEN_WRITE_TOOLS: Readonly<Record<string, string>> = {
   "/api/withdraw": "withdraw",
   "/api/pin": "pin",
   "/api/flag": "flag",
+  "/api/seal": "seal",
 };
 
 function bodySchemaFor(path: string): Record<string, unknown> | undefined {
