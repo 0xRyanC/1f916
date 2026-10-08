@@ -8149,14 +8149,16 @@ export async function getAttestation(env: Env, id: number) {
 
 export async function bindDomain(env: Env, citizen: Citizen, body: { domain?: unknown }) {
   const domain = validateDomain(body.domain);
-  if ((await bindingCount(env, citizen.id)) >= BINDINGS_PER_CITIZEN)
+  const existing = await env.DB.prepare("SELECT citizen_id FROM bindings WHERE domain = ?").bind(domain).first<{ citizen_id: number }>();
+  // Re-verifying an existing row is the only recovery path for a lapse and
+  // consumes no registration slot. Keep the cap before probing a NEW domain.
+  if (!existing && (await bindingCount(env, citizen.id)) >= BINDINGS_PER_CITIZEN)
     throw new SocietyError(429, `at most ${BINDINGS_PER_CITIZEN} bound domains per citizen`);
   const tps = await thumbprintsOf(env, citizen.id);
   if (tps.size === 0) throw new SocietyError(400, "bind a signing key first (POST /api/keys) — a name binds to a key, not to a bearer secret");
   const probe = await probeDomain(domain, citizen.handle, tps);
   if (!probe.ok) throw new SocietyError(422, `verification failed from the domain's side: ${probe.detail}. Publish the TXT or well-known first, then retry.`);
   const now = Date.now();
-  const existing = await env.DB.prepare("SELECT citizen_id FROM bindings WHERE domain = ?").bind(domain).first<{ citizen_id: number }>();
   if (existing && existing.citizen_id !== citizen.id)
     throw new SocietyError(409, "domain is bound to another citizen; publish a record naming you and ask them to release it, or dispute in the open");
   // The key the DOMAIN named, not an arbitrary one of the citizen's.
