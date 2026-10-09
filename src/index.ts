@@ -2,6 +2,7 @@
 
 import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, SUPPORT_TXT, TERMS_TXT } from "./doc.ts";
 import { consistency, inclusion, latestCheckpoints, makeCheckpoints, registrySigner, checkpointNote } from "./checkpoint.ts";
+import { cosignCheckpoints } from "./witness-network.ts";
 import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
 import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
 import { deleteMemory, listMemory, memoryFile, storeMemory } from "./memory.ts";
@@ -59,6 +60,7 @@ import { parseNamedDays,
   listAttestations,
   listSeals,
   revokeKey,
+  rotateSigningKey,
   declineKey,
   sealOrCompare,
   getAttestation,
@@ -1386,7 +1388,7 @@ export default {
       }
       if (path === "/api/attestations" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
-        return json(await issueAttestation(env, citizen, await body(request)), 201);
+        return json(await issueAttestation(env, citizen, await body(request), url.origin), 201);
       }
       if (path === "/api/keys/decline" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
@@ -1396,9 +1398,13 @@ export default {
         const citizen = await authenticate(env, bearer(request));
         return json(await revokeKey(env, citizen, await body(request)), 201);
       }
+      if (path === "/api/keys/rotate" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await rotateSigningKey(env, citizen, await body(request), url.origin), 201);
+      }
       if (path === "/api/seal" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
-        return json(await sealOrCompare(env, citizen, await body(request)), 201);
+        return json(await sealOrCompare(env, citizen, await body(request), url.origin), 201);
       }
       // ---------- mandates: what an agent was told, did, and what came of it ----------
       if (path === "/api/mandates" && method === "POST") {
@@ -1715,7 +1721,7 @@ export default {
       const payoutMatch = path.match(/^\/api\/payout-bindings\/(\d+)$/);
       if (payoutMatch && method === "GET") { checkQueryParams(url, "/api/payout-bindings/:id"); return json(await getPayoutBinding(env, Number(payoutMatch[1]))); }
       const keysMatch = path.match(/^\/api\/keys\/([A-Za-z0-9_-]{2,32})$/);
-      if (keysMatch && method === "GET") { checkQueryParams(url, "/api/keys/:handle"); return json(await keysOf(env, keysMatch[1])); }
+      if (keysMatch && method === "GET") { checkQueryParams(url, "/api/keys/:handle"); return json(await keysOf(env, keysMatch[1], url.origin)); }
       if (path === "/api/flags" && method === "GET") { checkQueryParams(url, "/api/flags"); return json(await flagQueue(env)); }
       // INTERNAL INSTRUMENTATION, maintainer only, and deliberately absent from
       // GET /api/surface and from the door. It answers whether MCP callers are
@@ -2007,6 +2013,17 @@ export default {
           if (anchored.attempted > 0) console.log(JSON.stringify({ level: anchored.failed ? "warn" : "info", what: "anchors", ...anchored }));
         } catch (e) {
           console.log(JSON.stringify({ level: "error", what: "anchors", message: String(e).slice(0, 200) }));
+        }
+        // Independent witnesses (src/witness-network.ts): the fresh notes handed
+        // to each witness in TLOG_WITNESSES, verified cosignatures kept. Unset
+        // means nothing is attempted. Its own try, like the anchors: a witness
+        // that is down or refuses is a row, never a reason to skip what follows.
+        try {
+          const cosigned = await cosignCheckpoints(env);
+          if (cosigned.attempted > 0 || cosigned.config_errors.length > 0)
+            console.log(JSON.stringify({ level: cosigned.failed || cosigned.config_errors.length ? "warn" : "info", what: "witness_cosign", ...cosigned }));
+        } catch (e) {
+          console.log(JSON.stringify({ level: "error", what: "witness_cosign", message: String(e).slice(0, 200) }));
         }
         const rechecked = await recheckBindings(env);
         if (rechecked.checked) console.log(JSON.stringify({ level: "info", what: "binding_recheck", ...rechecked }));

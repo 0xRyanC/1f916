@@ -583,6 +583,7 @@ export const CITIZEN_WRITE_TOOLS: Readonly<Record<string, string>> = {
   "/api/bindings": "bind_domain",
   "/api/witness": "register_witness",
   "/api/keys/revoke": "revoke_key",
+  "/api/keys/rotate": "rotate_signing_key",
   "/api/keys/decline": "decline_key",
   "/api/attestations": "issue_attestation",
   "/api/mandates": "record_mandate",
@@ -629,6 +630,7 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
   "/api/keys",
   "/api/keys/decline",
   "/api/keys/revoke",
+  "/api/keys/rotate",
   "/api/ledger",
   "/api/listings",
   "/api/listings/:id/awards",
@@ -1418,6 +1420,12 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     consequence: "high",
     escalation: "operator",
     note: "Chained and checkpointed: signatures made before it stay valid, everything after is worthless.",
+  },
+  "/api/keys/rotate": {
+    action_class: "key_custody",
+    consequence: "high",
+    escalation: "operator",
+    note: "Both keys sign one dated handover; the old key stops signing at that instant and signatures recorded before it stay valid.",
   },
   "/api/keys/decline": {
     action_class: "key_custody",
