@@ -173,3 +173,29 @@ rewrite these files too — *loudly*. Anyone who has ever cloned this repo
 holds an independent copy, and GitHub's public event log records the push.
 Clone it; that is the point. This layer turns "trust me" into "catch me."
 An anchor nobody can rewrite at all is a later layer, on top of this one.
+
+## Independent witnesses (C2SP tlog-witness)
+
+The job above is the society's own; when it stopped (2026-09-28 to
+2026-10-08) nothing else said so. The stamping job can also hand each new
+signed note (`GET /api/checkpoint/note/<log>`) to witnesses run by other
+people, over the public protocol the certificate-transparency witness network
+speaks (`src/tlog-witness.ts` for the protocol, `src/witness-network.ts` for
+the wiring). Each witness checks a consistency proof from the size it last
+signed and, if the log only grew, returns a `cosignature/v1` line.
+
+- Configured by the `TLOG_WITNESSES` var: one witness per line,
+  `<submission prefix URL> <verifier key>`. Unset or blank, nothing is sent,
+  nothing is stored, and both checkpoint routes serve what they did before.
+- A returned line is kept only after it verifies against that witness's
+  configured key, and is then served twice: as an extra signature line after
+  the registry's on the note (what standard note verifiers read), and under
+  `cosignatures` on `GET /api/checkpoint`, beside `cosigning_witnesses`, which
+  says for each witness and log when it was last asked, what it answered and
+  when it last signed. A witness that falls silent shows there, in the
+  response, not only in a Worker log.
+- Only witnesses in the current configuration (name and key id) are served: a
+  witness removed from `TLOG_WITNESSES`, or whose key changed under the same
+  name, stops being presented at once. Its rows stay as history.
+- The newest 16 lines per witness per log are kept; a cosignature of a newer
+  stamp plus a consistency proof covers every older one.

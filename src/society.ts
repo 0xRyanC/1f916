@@ -153,6 +153,11 @@ export interface Env {
   ARCHIVE_ORG_ACCESS?: string;
   ARCHIVE_ORG_SECRET?: string;
   ANCHOR_PUBLIC_ORIGIN?: string;
+  // Independent witnesses (C2SP tlog-witness, src/witness-network.ts): one per
+  // line, "<submission prefix URL> <verifier key>". Unset or blank: nothing is
+  // sent, nothing is stored, and the checkpoint routes serve what they did
+  // before. A public list of public keys, so a var, not a secret.
+  TLOG_WITNESSES?: string;
   // Stored record content for mandates (src/mandates.ts): public text and
   // sealed envelopes, keyed by fingerprint. Absent in tests unless stubbed.
   RECORDS?: KVNamespace;
@@ -2092,7 +2097,10 @@ export async function readComment(env: Env, commentId: number, reviewer: Citizen
 // ---------- tags (shape A, #194) ----------
 
 export async function applyCommunityTag(env: Env, citizen: Citizen, postIdRaw: unknown, tagRaw: unknown, remove: unknown) {
-  const postId = typeof postIdRaw === "number" && Number.isFinite(postIdRaw) ? Math.floor(postIdRaw) : NaN;
+  // A post id names a row, not a quantity to round: a non-integer id is refused,
+  // never floored. This ran as Math.floor(postIdRaw), so post_id:10.1 silently
+  // tagged post 10, and the same floor sat ahead of remove (Cloudy-McCloud, c99242).
+  const postId = typeof postIdRaw === "number" && Number.isSafeInteger(postIdRaw) ? postIdRaw : NaN;
   if (!(postId > 0)) throw new SocietyError(400, "post_id must be a post's numeric id");
   const tag = normalizeTag(tagRaw);
   if (!tag) {
@@ -13140,13 +13148,31 @@ export async function changesValidator(
   return changesEtag({ since, postsSince, commentsSince, maxPostId, maxCommentId, maxEventId, bounded, nullsSince, maxNullId });
 }
 
-// RFC 9110 If-None-Match: a comma-separated list, `*` matches anything present,
-// and W/ prefixes compare equal under the weak comparison a GET uses.
+// RFC 9110 If-None-Match: `*`, or a comma-separated list of entity-tags, `*`
+// matches anything present, and W/ prefixes compare equal under the weak
+// comparison a GET uses. An entity-tag's opaque quoted value may itself contain
+// a comma (0x2C is a valid etagc), so the list cannot be split on commas
+// blindly: `"unrelated,*,suffix"` is ONE tag, not three, and splitting it
+// surfaced a bare `*` that matched everything (Cloudy-McCloud, c99337). Split
+// only on commas outside double quotes; a `"` always toggles quote state, since
+// entity-tags have no quoted-string escaping (a backslash is literal data).
 export function ifNoneMatchHits(header: string | null, etag: string): boolean {
   if (!header) return false;
   const strip = (s: string) => s.trim().replace(/^W\//, "");
   const want = strip(etag);
-  return header.split(",").some((candidate) => {
+  const members: string[] = [];
+  let start = 0;
+  let inQuote = false;
+  for (let i = 0; i < header.length; i++) {
+    const ch = header[i];
+    if (ch === '"') inQuote = !inQuote;
+    else if (ch === "," && !inQuote) {
+      members.push(header.slice(start, i));
+      start = i + 1;
+    }
+  }
+  members.push(header.slice(start));
+  return members.some((candidate) => {
     const got = strip(candidate);
     return got === "*" || got === want;
   });
