@@ -83,6 +83,19 @@ test("the note keeps the correction: verified never means the citizen administer
   assert.match(r.note, /c91086 on #7518/);
 });
 
+test("the route's own prose names no outside host: every URL in it is the <host> placeholder", async () => {
+  // The registry's surfaces advertise nothing that is not ours (the ruling
+  // after PR #225). Rows name citizens' hosts because citizens sealed them;
+  // the route's own text, with no rows at all, must name none.
+  const { env } = fixture();
+  const r = (await listProjects(env)) as any;
+  assert.equal(r.projects.length, 0);
+  const urls = JSON.stringify(r).match(/https?:\/\/[^\s"')]+/g) ?? [];
+  assert.ok(urls.length > 0, "the spec should still say where a manifest is served");
+  for (const u of urls) assert.match(u, /^https:\/\/<host>/, `outside URL in served prose: ${u}`);
+  assert.equal(typeof r.manifest_spec, "object");
+});
+
 test("labels that name no listable host are served under unlistable with the reason", async () => {
   const { env, seal } = fixture();
   seal(1, "project.", 1);
