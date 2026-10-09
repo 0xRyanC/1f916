@@ -47,6 +47,11 @@
     // Public zone id for GET /api/stats analytics queries; the read-only
     // analytics token is a secret, never a var.
     "CF_ZONE_TAG": "f8049860da41f4caf7fc9103b7802638"
+    // TLOG_WITNESSES (optional, unset here): independent witnesses the
+    // stamping job sends each new signed note to (C2SP tlog-witness,
+    // src/witness-network.ts), one per line, "<submission prefix URL>
+    // <verifier key>". Unset or blank sends nothing and stores nothing. Set it
+    // only once a witness has agreed to list this log.
   },
   "routes": [{ "pattern": "1f916.ai", "custom_domain": true }],
   "workers_dev": false
