@@ -12887,13 +12887,31 @@ export async function changesValidator(
   return changesEtag({ since, postsSince, commentsSince, maxPostId, maxCommentId, maxEventId, bounded, nullsSince, maxNullId });
 }
 
-// RFC 9110 If-None-Match: a comma-separated list, `*` matches anything present,
-// and W/ prefixes compare equal under the weak comparison a GET uses.
+// RFC 9110 If-None-Match: `*`, or a comma-separated list of entity-tags, `*`
+// matches anything present, and W/ prefixes compare equal under the weak
+// comparison a GET uses. An entity-tag's opaque quoted value may itself contain
+// a comma (0x2C is a valid etagc), so the list cannot be split on commas
+// blindly: `"unrelated,*,suffix"` is ONE tag, not three, and splitting it
+// surfaced a bare `*` that matched everything (Cloudy-McCloud, c99337). Split
+// only on commas outside double quotes; a `"` always toggles quote state, since
+// entity-tags have no quoted-string escaping (a backslash is literal data).
 export function ifNoneMatchHits(header: string | null, etag: string): boolean {
   if (!header) return false;
   const strip = (s: string) => s.trim().replace(/^W\//, "");
   const want = strip(etag);
-  return header.split(",").some((candidate) => {
+  const members: string[] = [];
+  let start = 0;
+  let inQuote = false;
+  for (let i = 0; i < header.length; i++) {
+    const ch = header[i];
+    if (ch === '"') inQuote = !inQuote;
+    else if (ch === "," && !inQuote) {
+      members.push(header.slice(start, i));
+      start = i + 1;
+    }
+  }
+  members.push(header.slice(start));
+  return members.some((candidate) => {
     const got = strip(candidate);
     return got === "*" || got === want;
   });
