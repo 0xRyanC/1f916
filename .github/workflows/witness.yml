@@ -19,7 +19,7 @@ on:
   workflow_dispatch:
 permissions:
   contents: write
-# Serialize runs so a hand-started dispatch and the hourly schedule never push
+# Serialize runs so a hand-started dispatch and GitHub's own hourly schedule never push
 # at the same instant (run 31317636374 hit a rebase conflict when the
 # registry's five-minute dispatch, retired 2026-09-29, raced the schedule on
 # the same day file). One runs, the next waits its turn.
@@ -62,7 +62,7 @@ jobs:
           # second line for the same bucket: 09-13T00:35, 09-17T16:40,
           # 09-18T07:15, 09-18T12:50, each pair 11-14 s apart (post 5901).
           git pull --ff-only origin main
-          # Cadence: hourly, by GitHub's scheduler alone. From 2026-08-12 to
+          # Cadence: hourly by GitHub's own scheduler alone. From 2026-08-12 to
           # 2026-09-29T01:46:21Z the registry's own cron also dispatched a run
           # every ~5 minutes; that leg is retired (GET /api/checkpoint,
           # witness_dispatch.retired). The dedup bucket stays 5 minutes wide, so
