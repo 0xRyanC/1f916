@@ -153,6 +153,11 @@ export interface Env {
   ARCHIVE_ORG_ACCESS?: string;
   ARCHIVE_ORG_SECRET?: string;
   ANCHOR_PUBLIC_ORIGIN?: string;
+  // Independent witnesses (C2SP tlog-witness, src/witness-network.ts): one per
+  // line, "<submission prefix URL> <verifier key>". Unset or blank: nothing is
+  // sent, nothing is stored, and the checkpoint routes serve what they did
+  // before. A public list of public keys, so a var, not a secret.
+  TLOG_WITNESSES?: string;
   // Stored record content for mandates (src/mandates.ts): public text and
   // sealed envelopes, keyed by fingerprint. Absent in tests unless stubbed.
   RECORDS?: KVNamespace;
