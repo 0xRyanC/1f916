@@ -419,6 +419,22 @@ test("the configuration is read strictly, and a bad entry costs only itself", as
   assert.equal((await readWitnessConfig({ TLOG_WITNESSES: `${WITNESS_URL} ${ws[0].vkey()};https://w1.example ${ws[1].vkey()}` } as unknown as Env)).witnesses.length, 2);
 });
 
+test("a witness whose key is ML-DSA-44 (0x06) is refused at configuration, not asked forever", async () => {
+  const key = registryKey();
+  const ed = new FakeWitness(key.pub, "ed.example/w");
+  const name = "mldsa.example/w";
+  const pk = new Uint8Array(1312).fill(7);
+  const raw = Buffer.concat([Buffer.from([0x06]), Buffer.from(pk)]);
+  const id = createHash("sha256").update(Buffer.concat([Buffer.from(name + "\n"), raw])).digest().subarray(0, 4).toString("hex");
+  const vkey = `${name}+${id}+${raw.toString("base64")}`;
+  assert.equal((await parseWitnessVkey(vkey)).type, 0x06, "the key itself parses");
+  const { witnesses, errors } = await readWitnessConfig({ TLOG_WITNESSES: `https://mldsa.example ${vkey}\n${WITNESS_URL} ${ed.vkey()}` } as unknown as Env);
+  assert.deepEqual(witnesses.map((w) => w.key.name), [ed.name], "the Ed25519 witness after it is still read");
+  assert.equal(errors.length, 1);
+  assert.match(errors[0], /0x06/);
+  assert.match(errors[0], /mldsa\.example\/w is not asked/);
+});
+
 test("only witnesses still in the configuration are served; a removed one, or a changed key under the same name, is not", async () => {
   const { env, witness, grow, count, key } = await fixture();
   await grow(3);

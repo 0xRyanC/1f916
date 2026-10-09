@@ -20,7 +20,8 @@
 // where the verifier key is the witness operator's published
 // <name>+<key id>+<base64(0x04 || Ed25519 key)>, and the URL is the prefix
 // that /add-checkpoint is appended to. Lines starting with '#' are skipped.
-// An entry that does not parse is logged and skipped, never thrown.
+// An entry that does not parse is logged and skipped, never thrown; so is an
+// ML-DSA-44 (0x06) key, whose cosignatures this runtime cannot verify.
 //
 // What one tick costs at most: per witness and per log, two requests (the
 // module never loops), each with its own timeout and a bounded read. A failed
@@ -31,7 +32,7 @@
 
 import { consistencyProof } from "./merkle.ts";
 import { checkpointBody, noteFromField, originOf, NOTE_KEY_NAME } from "./note.ts";
-import { MAX_ANSWER_CHARS, parseWitnessVkey, submitCheckpoint, type SubmitArgs, type SubmitResult, type WitnessKey } from "./tlog-witness.ts";
+import { COSIGNATURE_V1_TYPE, MAX_ANSWER_CHARS, parseWitnessVkey, submitCheckpoint, type SubmitArgs, type SubmitResult, type WitnessKey } from "./tlog-witness.ts";
 import type { Env } from "./society.ts";
 
 export const WITNESS_LOGS = ["identity_events", "ledger"] as const;
@@ -89,6 +90,13 @@ export async function readWitnessConfig(env: Env): Promise<{ witnesses: WitnessC
       key = await parseWitnessVkey(parts[1]);
     } catch (e) {
       errors.push(String((e as Error).message ?? e).slice(0, 160));
+      continue;
+    }
+    // parseWitnessVkey reads an ML-DSA-44 (0x06) key, but verifyCosignatureV1
+    // checks only Ed25519 (0x04): such a witness could never cosign here and
+    // would be asked again every RETRY_AFTER_FAILURE_MS forever.
+    if (key.type !== COSIGNATURE_V1_TYPE) {
+      errors.push(`the key ${key.name}+${key.keyId} is type 0x${key.type.toString(16).padStart(2, "0")}; this log verifies only 0x04 Ed25519 cosignatures, so ${key.name} is not asked`);
       continue;
     }
     if (witnesses.some((w) => w.key.name === key.name && w.key.keyId === key.keyId)) {
