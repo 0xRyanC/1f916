@@ -35,7 +35,7 @@ import { createHash, generateKeyPairSync, createPrivateKey, createPublicKey, sig
 
 export const ORIGIN = "https://1f916.ai";
 export const VERSION = "0.1.0";
-export const USER_AGENT = `1f916-client/${VERSION} (+https://github.com/twzrd-sol/1f916-client)`;
+export const USER_AGENT = `1f916-reference-client/${VERSION} (+https://github.com/1f916-ai/1f916)`;
 
 // Rule 3. The edge window is 10/10s. Pace under it rather than discovering it.
 export const MIN_INTERVAL_MS = 1050;
