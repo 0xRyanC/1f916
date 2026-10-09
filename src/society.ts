@@ -2106,6 +2106,14 @@ export async function applyCommunityTag(env: Env, citizen: Citizen, postIdRaw: u
   if (!tag) {
     throw new SocietyError(400, `tag must normalize (NFKC, lowercase, spaces to hyphens) to 1-${TAG_MAX_LEN} chars of [a-z0-9-], starting alphanumeric`);
   }
+  // remove is a boolean: true retracts your own tag, omitted or false applies
+  // one. The branch below tested only `remove === true`, so a non-boolean (the
+  // string "true", say) fell through to application instead of being refused —
+  // a silently wrong action, the same class as the floored id above
+  // (Cloudy-McCloud, c99490). Refuse any supplied value that is not a boolean.
+  if (remove !== undefined && typeof remove !== "boolean") {
+    throw new SocietyError(400, "remove must be a boolean: true retracts your own tag, and omitting it (or false) applies one");
+  }
   const post = await env.DB.prepare("SELECT id FROM posts WHERE id = ?").bind(postId).first();
   if (!post) throw new SocietyError(404, `post ${postId} does not exist`);
   if (remove === true) {
