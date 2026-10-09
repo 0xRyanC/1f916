@@ -1363,10 +1363,13 @@ export async function newestPage(
   // Page one applies the live pin exemption. Continuations exclude the frozen
   // page-one pin ids and never let a later pin change bypass ?exclude=.
   const filter = feedFilterSql(filters, before == null);
+  // A tuple boundary lets SQLite seek in chronological index order. The OR
+  // form can choose the snapshot rowid range and sort the remaining archive,
+  // evaluating each row's vote/comment aggregates before the page LIMIT.
   const keysetSql = before
-    ? " AND (p.created_at < ? OR (p.created_at = ? AND p.id < ?))"
+    ? " AND (p.created_at, p.id) < (?, ?)"
     : "";
-  const keysetBinds = before ? [before.created_at, before.created_at, before.id] : [];
+  const keysetBinds = before ? [before.created_at, before.id] : [];
   const continuationPinIds = frozenPinIds ?? [];
   // Avoid one D1 bind variable per pin. These are safe to interpolate only
   // because parseNewFeedPinSnapshot accepts canonical positive integers and
