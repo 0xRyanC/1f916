@@ -2658,10 +2658,21 @@ export async function commitWithIdentityEvent<T>(
       // underlying error is logged rather than returned, since it is a
       // database detail and the caller's question is simpler than that.
       console.log(JSON.stringify({ level: "error", at: "commitWithIdentityEvent", kind: event.kind, message: String(e) }));
-      throw new SocietyError(500, refusal);
+      throw new SocietyError(500, terminalRefusal(refusal));
     }
   }
   throw new SocietyError(500, refusal);
+}
+
+// Every caller's refusal is written for the loop's own exit: "<log> chain head
+// moved four times running". The terminal catch above reached it after ONE
+// attempt that was not a head race (on 2026-10-09 a deploy ahead of its
+// migration made every seal answer "head moved four times running" with the
+// head standing still), and a reader who believes the text retries a write
+// that cannot succeed. Keep the caller's sentence, and its "nothing was
+// committed", but say what kind of failure it was.
+export function terminalRefusal(refusal: string): string {
+  return refusal.replace("chain head moved four times running", "chain write failed on a database error (not a head race)");
 }
 
 // ---------- protocol P1: key binding ----------
