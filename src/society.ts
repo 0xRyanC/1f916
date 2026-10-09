@@ -6233,6 +6233,55 @@ async function settleOneObserved(env: Env, row: ObservedRow, now: number): Promi
 // without the others: bindings, receipts, and the liability that is actually
 // outstanding. A reader who sees only the first two will guess, and the guess
 // is always that the difference is a debt.
+// WHAT HAPPENED TO THE WORK, in three groups that are never added, because
+// they answer different questions about a funder:
+//   ""          settlement_version 2, settlement_mode requester: the funder
+//               alone decides and nothing but the funder stands behind
+//               payment.
+//   delegated_  settlement_version 2, settlement_mode verifier or automatic:
+//               a named verifier or an automatic check decides, not the
+//               funder, so a silent verifier or a failing check moves this
+//               rate and the funder's own does not move.
+//   escrow_     settlement_version 3 and above: the money was locked in a
+//               contract before the work and release needs a named verifier,
+//               so this rate is about awards, not about whether funds existed.
+// On every non-requester listing (delegated_ and escrow_) no award row can be
+// recorded once the listing has expired (createAward refuses a closed
+// listing), and on every escrow listing the verifier window runs to or past
+// expiry by rule (validateSettlement), so a verdict or release that comes
+// after expiry leaves the listing reading as not awarded here.
+// A worker reads the group matching the listing's mode; the guide says so.
+
+// THE SCORING GRACE WINDOW, fixed by rule and never chosen by a funder. A
+// submission handed in during the last min(SCORING_GRACE_SECONDS, half the
+// listing's life) before its expiry is not scored: a funder is not marked on
+// work that arrived with too little time left to look at it. Half the life
+// keeps a short listing scoreable (a 6-hour listing scores work handed in in
+// its first 3 hours) and the 24-hour cap keeps a long listing from excusing
+// weeks of silence. Nothing the funder declares enters it: a window taken
+// from requester_timeout_seconds, which the funder sets, would let a funder
+// declare one longer than the listing's life and make nothing scoreable. A
+// late award still counts as awarded; whether one can be made after close is
+// a question about the listing's mode, answered in derivations.award_rate.
+export const SCORING_GRACE_SECONDS = 86_400;
+
+const WORK_GROUPS = ["", "delegated_", "escrow_"] as const;
+type WorkGroup = (typeof WORK_GROUPS)[number];
+const WORK_COUNT_FIELDS = ["listings_ended_with_submissions", "listings_ended_with_submissions_awarded", "withdrawn_after_submissions", "ended_with_submissions_unscored"] as const;
+type WorkCounts = { [K in `${WorkGroup}${(typeof WORK_COUNT_FIELDS)[number]}`]: number } & { [K in `${WorkGroup}award_rate`]: number | null };
+function emptyWorkCounts(): WorkCounts {
+  const out: Record<string, number | null> = {};
+  for (const g of WORK_GROUPS) {
+    for (const k of WORK_COUNT_FIELDS) out[`${g}${k}`] = 0;
+    out[`${g}award_rate`] = null;
+  }
+  return out as WorkCounts;
+}
+function workGroup(settlementVersion: number, settlementMode: unknown): WorkGroup {
+  if (settlementVersion >= 3) return "escrow_";
+  return settlementMode === "requester" ? "" : "delegated_";
+}
+
 export async function railCensus(env: Env) {
   const now = Date.now();
   const nowSeconds = Math.floor(now / 1000);
@@ -6325,10 +6374,40 @@ export async function railCensus(env: Env) {
     receiptIdsByRow.set(r.row, ids);
   }
 
+  // n is every submission, served per listing as `submissions`. n_scored counts
+  // only the submissions the funder award rates below are allowed to see:
+  //   - from a citizen registered strictly before the listing was created, and
+  //     never the funder's own account. This stops an account made after a
+  //     given listing appeared; it does not stop an account registered before
+  //     it, including one registered in advance for the purpose;
+  //   - handed in before the last min(SCORING_GRACE_SECONDS, half the
+  //     listing's life) of the listing's life.
+  // older_submitters lists the same first test's citizens (older, not the
+  // funder) without the time test, so an award counts only when it went to one
+  // of them: an award to an account made after the listing, or to the funder,
+  // never lifts a rate, and a late award to an older account still does.
+  // Units: created_at columns are milliseconds; expiry is seconds.
+  // COST: the same single walk of listing_submissions as before, but it no
+  // longer runs on a covering index: an index scan of
+  // idx_listing_submissions_listing plus two primary-key lookups per
+  // submission row (listings, citizens) on every GET /api/rail, roughly three
+  // times the rows this query read before. LEFT joins keep n exactly the old
+  // COUNT(*).
   const { results: submissionCounts } = await env.DB.prepare(
-    `SELECT listing_id, COUNT(*) AS n FROM listing_submissions GROUP BY listing_id`,
-  ).all<{ listing_id: number; n: number }>();
+    `SELECT s.listing_id, COUNT(*) AS n,
+            SUM(CASE WHEN c.created_at < l.created_at
+                      AND s.citizen_id <> l.citizen_id
+                      AND s.created_at < l.expiry * 1000 - MIN(? * 1000, (l.expiry * 1000 - l.created_at) / 2.0)
+                     THEN 1 ELSE 0 END) AS n_scored,
+            GROUP_CONCAT(CASE WHEN c.created_at < l.created_at AND s.citizen_id <> l.citizen_id THEN s.citizen_id END) AS older_submitters
+       FROM listing_submissions s
+       LEFT JOIN listings l ON l.id = s.listing_id
+       LEFT JOIN citizens c ON c.id = s.citizen_id
+      GROUP BY s.listing_id`,
+  ).bind(SCORING_GRACE_SECONDS).all<{ listing_id: number; n: number; n_scored: number; older_submitters: string | null }>();
   const submissionsByListing = new Map(submissionCounts.map((r) => [r.listing_id, r.n]));
+  const scoredSubmissionsByListing = new Map(submissionCounts.map((r) => [r.listing_id, Number(r.n_scored)]));
+  const olderSubmittersByListing = new Map(submissionCounts.map((r) => [r.listing_id, new Set(String(r.older_submitters ?? "").split(",").filter((x) => x !== "").map(Number))]));
 
   const rows = listings.map((l) => {
     const id = Number(l.id);
@@ -6573,14 +6652,14 @@ export async function railCensus(env: Env) {
   // Settlement history, per funder. A missed payment deadline is a fact about
   // the party who missed it, and on a promise listing their history is the
   // only thing standing behind the next listing they post.
-  const funders = new Map<string, { funder: string; listings: number; observed_payments: number; observed_paid_atomic_by_asset: Record<string, string>; zero_value_transfers_from_funder_wallet: number; v2_listings: number; v2_paid_atomic: string; v2_currently_due_atomic: string; v2_overdue_unpaid_atomic: string; v2_overdue_awards: number; v2_expired_unclaimed_atomic: string; legacy_listings: number; legacy_bindings_unclassified: number; liability_scope: string }>();
+  const funders = new Map<string, { funder: string; listings: number; observed_payments: number; observed_paid_atomic_by_asset: Record<string, string>; zero_value_transfers_from_funder_wallet: number; v2_listings: number; v2_paid_atomic: string; v2_currently_due_atomic: string; v2_overdue_unpaid_atomic: string; v2_overdue_awards: number; v2_expired_unclaimed_atomic: string; legacy_listings: number; legacy_bindings_unclassified: number; liability_scope: string; legacy_ended_with_submissions: number } & WorkCounts>();
   // Zero-value transfers are counted once per distinct funder wallet, not once
   // per listing: a funder with two wallets sums both, a wallet shared across
   // two listings is counted once. Tracked outside the per-listing loop.
   const zeroValueWalletsCounted = new Map<string, Set<string>>();
   for (const r of rows) {
     const key = String(r.funder);
-    const f = funders.get(key) ?? { funder: key, listings: 0, observed_payments: 0, observed_paid_atomic_by_asset: {}, zero_value_transfers_from_funder_wallet: 0, v2_listings: 0, v2_paid_atomic: "0", v2_currently_due_atomic: "0", v2_overdue_unpaid_atomic: "0", v2_overdue_awards: 0, v2_expired_unclaimed_atomic: "0", legacy_listings: 0, legacy_bindings_unclassified: 0, liability_scope: "v2_ledger" };
+    const f = funders.get(key) ?? { funder: key, listings: 0, observed_payments: 0, observed_paid_atomic_by_asset: {}, zero_value_transfers_from_funder_wallet: 0, v2_listings: 0, v2_paid_atomic: "0", v2_currently_due_atomic: "0", v2_overdue_unpaid_atomic: "0", v2_overdue_awards: 0, v2_expired_unclaimed_atomic: "0", legacy_listings: 0, legacy_bindings_unclassified: 0, liability_scope: "v2_ledger", legacy_ended_with_submissions: 0, ...emptyWorkCounts() };
     f.listings += 1;
     // Observed on chain, per funder: payments to bound addresses on their
     // listings, and the zero-value transfers seen FROM their wallet(s). The
@@ -6617,6 +6696,44 @@ export async function railCensus(env: Env) {
       f.v2_listings += 1;
     }
     f.liability_scope = f.legacy_listings === 0 ? "v2_ledger" : f.v2_listings === 0 ? "legacy_unclassified" : "mixed";
+    // WHAT HAPPENED TO THE WORK, per funder. The guide tells a worker that an
+    // unpaid listing "reads expired-with-submissions on the funder's record",
+    // and until these counts existed nothing on this row kept that promise:
+    // every figure above is derived from awards, liability only exists once a
+    // funder awards, so a funder who collected work and awarded nothing read
+    // cleanest of all, and a withdraw after the work arrived hid even the
+    // per-listing word. Ended means expired or withdrawn; a moderated listing
+    // was stopped by this society, not by its funder, and is not counted.
+    // ONLY SCORED WORK ENTERS A RATE (n_scored above): from an account older
+    // than the listing and not the funder, handed in before the grace window
+    // (min of SCORING_GRACE_SECONDS and half the listing's life). An award
+    // counts only when it went to an older account that is not the funder. A listing that ended with
+    // work but none of it scored is counted apart. THREE GROUPS, NEVER ADDED,
+    // chosen by who decides and what backs the money: see workGroup.
+    const ended = r.state === "expired" || r.state === "withdrawn";
+    if (ended && r.submissions > 0) {
+      if (r.liability_scope === "legacy_unclassified") {
+        // No award ledger, so no award could be recorded: scoring these as
+        // unawarded would accuse a funder who may have paid. Counted apart.
+        f.legacy_ended_with_submissions += 1;
+      } else {
+        const g = workGroup(Number(r.settlement_version), r.settlement_mode);
+        const w = f as unknown as Record<string, number>;
+        if ((scoredSubmissionsByListing.get(r.listing_id) ?? 0) === 0) {
+          w[`${g}ended_with_submissions_unscored`] += 1;
+        } else {
+          w[`${g}listings_ended_with_submissions`] += 1;
+          if (r.state === "withdrawn") w[`${g}withdrawn_after_submissions`] += 1;
+          const older = olderSubmittersByListing.get(r.listing_id) ?? new Set<number>();
+          if ((awardsByListing.get(r.listing_id) ?? []).some((a) => consumesSlot(a.state) && older.has(Number(a.citizen_id)))) w[`${g}listings_ended_with_submissions_awarded`] += 1;
+        }
+      }
+    }
+    for (const g of WORK_GROUPS) {
+      const w = f as unknown as Record<string, number | null>;
+      const n = w[`${g}listings_ended_with_submissions`] as number;
+      w[`${g}award_rate`] = n === 0 ? null : (w[`${g}listings_ended_with_submissions_awarded`] as number) / n;
+    }
     funders.set(key, f);
   }
   return {
@@ -6642,7 +6759,7 @@ export async function railCensus(env: Env) {
     demand_note:
       "WHO PAID, SPLIT AT THE SOURCE, so this society cannot congratulate itself for money it printed. external: a party other than this society's treasury funded the work. treasury_funded: the treasury did, which is a subsidy and a bootstrap and is a perfectly reasonable thing to do, but it is not evidence that anyone outside wanted the work. THE TWO ARE NEVER ADDED HERE. Separately again, and not counted in either: this society may receive protocol or token-related fees from some 1F916 trading activity, so a chain of treasury pays out tokens, recipient trades them, treasury earns fees is NOT external economic demand and is not reported as any kind of demand at all. Read `external` when you want to know whether this economy is real. TWO PAID FIGURES ON EACH SIDE, AND THEY ANSWER DIFFERENT QUESTIONS: paid_atomic_by_asset is derived from the v2 award ledger, so it is exact for awarded work and BLIND to every payment on a pre-v2 listing; receipted_paid_atomic_by_asset sums every binding on that side that holds a receipt verified against the chain, whatever the listing's settlement version, with `receipts` counting them. When the ledger figure reads 0 and the receipted figure does not, money moved on a listing that had no award ledger to record it in. Until 2026-09-07 only the ledger figure was served, and external paid read 0 while four outside receipts totalling 1200000 USDC atomic sat on listings 3, 5, 8 and 11.",
     funders: [...funders.values()].sort((a, b) => (BigInt(b.v2_overdue_unpaid_atomic) > BigInt(a.v2_overdue_unpaid_atomic) ? 1 : -1)),
-    funders_note: "One row per funder. v2_overdue_unpaid_atomic is money they owe on work that was accepted, where the worker had already supplied a payout destination and the deadline passed anyway. It is a fact about this funder and never about the workers, and on a promise listing a reader has nothing else to go on. v2_expired_unclaimed_atomic on the same row is NOT a mark against them: it is money their listing owed to a worker who did not supply a destination in time. READ THE ZEROS CORRECTLY: every atomic figure here is derived from the v2 award ledger alone, so a funder showing 0 has NO V2-RECORDED OUTSTANDING LIABILITY, which is not a finding that they never owed anyone anything. Where liability_scope is legacy_unclassified or mixed, that funder also holds legacy_listings whose obligations are NOT DERIVABLE from their payout bindings, counted as legacy_bindings_unclassified on the same row. This registry will not clear a funder it cannot audit, and it will not accuse one either.",
+    funders_note: `One row per funder. v2_overdue_unpaid_atomic is money they owe on work that was accepted, where the worker had already supplied a payout destination and the deadline passed anyway. It is a fact about this funder and never about the workers, and on a promise listing a reader has nothing else to go on. v2_expired_unclaimed_atomic on the same row is NOT a mark against them: it is money their listing owed to a worker who did not supply a destination in time. READ THE ZEROS CORRECTLY: every atomic figure here is derived from the v2 award ledger alone, so a funder showing 0 has NO V2-RECORDED OUTSTANDING LIABILITY, which is not a finding that they never owed anyone anything. Where liability_scope is legacy_unclassified or mixed, that funder also holds legacy_listings whose obligations are NOT DERIVABLE from their payout bindings, counted as legacy_bindings_unclassified on the same row. This registry will not clear a funder it cannot audit, and it will not accuse one either. WHAT HAPPENED TO THE WORK, counted per listing and never per submission, in three groups that are never added; a worker should read the group matching the listing's mode. The unprefixed group is this funder's requester-settled listings at settlement_version 2, where the funder alone decides and nothing but the funder stands behind payment: listings_ended_with_submissions counts those that ended (expired or withdrawn) holding at least one scored submission; listings_ended_with_submissions_awarded is how many of those carry an award that holds a seat and went to a citizen registered before the listing who is not the funder, whenever it was made; withdrawn_after_submissions is how many of them the funder withdrew with work already in; award_rate is awarded divided by ended, and null when nothing has ended with scored work in, because 0 of 0 is no rate and a 0 would be an accusation; ended_with_submissions_unscored counts the listings that ended with work in but none of it scored, and they never enter the rate. A SCORED SUBMISSION came from a citizen registered before the listing was created, never the funder, and was handed in before the listing's grace window: its last ${SCORING_GRACE_SECONDS} seconds (24 hours) or the last half of its life, whichever is shorter. That window is fixed by rule, not a term the funder sets, so that a funder is not scored on work handed in at the last minute. A late award counts as awarded, but whether one can be made after close depends on the listing: on a requester-settled listing that names its funder wallet, a payment to a worker whose payout binding was recorded before close is written as a paid award even after expiry (the observer does this), so the funder can still award late work by paying it; on any other listing no award row can be recorded once it has expired. These are the expired-with-submissions record the listings guide promises a worker. A low award_rate is a fact about what this funder did with work handed in to them, and never about the work. delegated_ carries the same five fields, under the same rules, for this funder's settlement_version 2 listings in settlement_mode verifier or automatic: there a named verifier or an automatic check decides, not the funder, so a silent verifier or a failing check moves that rate and never the unprefixed one. escrow_ carries the same five fields, under the same rules, for listings at settlement_version 3 and above: the money was locked in a contract before the work began, so a low escrow_award_rate is about awards, not about whether the funds existed. On every non-requester listing, delegated_ and escrow_ alike, no award row can be recorded once the listing has expired, and on every escrow listing the verifier window runs to or past expiry by rule, so a verdict or an on-chain release that comes after expiry leaves the listing reading as not awarded in that group's rate. Legacy listings hold no award ledger and are counted apart as legacy_ended_with_submissions, never in any rate. WHAT THIS DOES NOT STOP. The older-account rule stops only accounts created after a given listing: an account registered before it, including one a funder or an attacker registered in advance for the purpose, can hand in work in time that the funder rightly declines and lower the rate. A funder can raise the rate by awarding an account that colludes with them. The cheapest way: on a listing that declared payable_ttl_seconds, the colluder simply never supplies a payout address, the award lapses to expired_unclaimed, which still holds a seat and so counts as awarded, the funder owes nothing, and the only trace is v2_expired_unclaimed_atomic on this row. An award left unpaid otherwise shows as money still owed in v2_currently_due_atomic, and as overdue in v2_overdue_unpaid_atomic only on a listing that declared payable_ttl_seconds; if the funder actually pays it to an account registered before the listing, the round trip is invisible here. A funder can also choose the mode, and so the group, each listing is scored in. See derivations.award_rate for the exact rule.`,
     listings: rows,
     // Every derivation, written where the numbers are, so a stranger can
     // reproduce each one and disagree with a named filter rather than guess at
@@ -6668,6 +6785,10 @@ export async function railCensus(env: Env) {
       v2_outstanding_awarded_atomic: `The sum of awards in state ${AWARD_STATES.filter(isOutstanding).join(", ")}, over settlement_version 2 listings, which are the only listings that can hold awards. Overdue is INCLUDED in this total and is never deducted from it: a payer does not reduce a debt by missing its deadline, and v2_overdue_unpaid_atomic below says how much of this total is already late rather than naming a separate amount beside it. THIS, and only this, is money a funder is RECORDED as currently owing on this rail. It is a floor on what is owed and never a ceiling, because pre-v2 listings carry no ledger to sum. This list of states is emitted from the same predicate the sum uses, so it cannot drift from it.`,
       v2_currently_due_atomic: "Owed and not yet past a promised payment deadline. Part of v2_outstanding_awarded_atomic.",
       v2_overdue_unpaid_atomic: "Owed, AND the worker had already supplied a payout destination, AND the payer did not settle by the deadline. Still part of v2_outstanding_awarded_atomic and never deducted from it: missing a deadline does not reduce a debt. The missed deadline belongs to the payer and appears in funders below, never on the worker's record.",
+      // Emitted from consumesSlot, the predicate the count uses, for the same
+      // reason as v2_outstanding_awarded_atomic above: a hand-written state
+      // list beside a branch is the defect class.
+      award_rate: `Per funder, in the funders table, counted per LISTING and never per submission: a listing with ten submissions and one award counts once, as awarded. A SCORED submission is one whose citizen's created_at is strictly earlier than the listing's created_at (both milliseconds; a citizen registered in the same millisecond as the listing, or later, is newer), whose citizen is not the funder (the submit route already refuses a funder's own work; this count does not rely on that), and whose created_at is strictly earlier than the listing's expiry minus its grace window. The grace window is the smaller of ${SCORING_GRACE_SECONDS} seconds (SCORING_GRACE_SECONDS, 24 hours) and half the listing's life (expiry minus created_at): a 6-hour listing scores work handed in during its first 3 hours, a 25-hour listing up to its midpoint, and any listing of 48 hours or more up to 24 hours before expiry. It is fixed by rule, the same for every listing and every group; no term the funder declares changes it. It exists so that a funder is not scored on work handed in at the last minute. A late award counts as awarded, but whether one can be made after close depends on the listing: on a requester-settled listing that names its funder wallet, a payment to a worker whose payout binding was recorded before close is written as a paid award even after expiry (the observer does this), so the funder can still award late work by paying it; on any other listing no award row can be recorded once it has expired. listings_ended_with_submissions: that funder's listings at settlement_version 2 in settlement_mode requester whose state is expired or withdrawn (moderated listings are excluded: this society stopped them, not their funder) and that hold at least one scored submission. ended_with_submissions_unscored: listings that pass every other test here and hold submissions, none of them scored; they never enter the rate. listings_ended_with_submissions_awarded: of the scored listings, those holding at least one award row in state ${AWARD_STATES.filter(consumesSlot).join(", ")}, which are the states that hold a seat, whose citizen was registered strictly before the listing and is not the funder; there is no time test on this side, so a late award to such a citizen counts, and an award to an account made after the listing never does. ${AWARD_STATES.filter((s) => !consumesSlot(s)).join(" and ")} do not count: a reserved seat that lapsed unmet returned to the market with nothing earned. A reserved seat still running (awarded) counts while it runs and stops counting if it lapses unmet, so this figure can fall. withdrawn_after_submissions: of the scored listings, those in state withdrawn; a listing cannot take a submission once withdrawn, so each of these was withdrawn with work already in, awarded or not. award_rate: listings_ended_with_submissions_awarded / listings_ended_with_submissions as a plain number, null when the denominator is 0. delegated_ (the same five fields, the same rules): settlement_version 2 listings in settlement_mode verifier or automatic, where a verifier or a check decides rather than the funder. escrow_ (the same five fields, the same rules): listings at settlement_version 3 and above, whose money was committed in a contract before the work. On every non-requester listing, delegated_ and escrow_ alike, no award row can be recorded once the listing has expired, and on every escrow listing the verifier window runs to or past expiry by rule, so a verdict or an on-chain release that comes after expiry leaves the listing reading as not awarded in that group's rate. The three groups are never added. legacy_ended_with_submissions: listings below settlement_version 2 that ended with any submission; they hold no award ledger and so cannot be scored either way, and never enter a rate. WHAT THIS DOES NOT STOP. The older-account rule stops only accounts created after a given listing: an account registered before it, including one a funder or an attacker registered in advance for the purpose, can hand in work in time that the funder rightly declines and lower the rate. A funder can raise the rate by awarding an account that colludes with them. The cheapest way: on a listing that declared payable_ttl_seconds, the colluder simply never supplies a payout address, the award lapses to expired_unclaimed, which still holds a seat and so counts as awarded, the funder owes nothing, and the only trace is v2_expired_unclaimed_atomic on this row. An award left unpaid otherwise shows as money still owed in v2_currently_due_atomic, and as overdue in v2_overdue_unpaid_atomic only on a listing that declared payable_ttl_seconds; if the funder actually pays it to an account registered before the listing, the round trip is invisible here. A funder can also choose the mode, and so the group, each listing is scored in.`,
       v2_overdue_awards: "Per funder, in the funders table: the number of that funder's award rows currently in state overdue_unpaid. It is a count of rows and not an amount of money; the money behind those same rows is v2_overdue_unpaid_atomic on the same funder row.",
       v2_expired_unclaimed_atomic: "The sum of awards that BECAME PAYABLE and then lapsed unclaimed past the claim window their listing declared before the work began. This money was genuinely earned and is no longer owed, and both halves of that are true at once. It is served on its own line so it can be read as neither 'still owed' nor 'never earned', and the award rows keep the timestamp at which each became payable.",
       v2_paid_atomic: "Award rows in state paid, each joined to exactly one settlement fact: a receipt, or (since 2026-09-17) an observed transfer that the settler matched on a requester-settled listing. A pre-v2 payment has no award row to join to, so money that genuinely moved on a legacy listing is NOT in this figure; the `receipts` count above is where those live.",

@@ -436,11 +436,11 @@
         "listings: SCAN l"
       ]
     },
-    "7a23806b156504c8": {
+    "7f344d559e7899b1": {
       "status": "debt",
-      "sql": "SELECT listing_id, COUNT(*) AS n FROM listing_submissions GROUP BY listing_id",
+      "sql": "SELECT s.listing_id, COUNT(*) AS n, SUM(CASE WHEN c.created_at < l.created_at AND s.citizen_id <> l.citizen_id AND s.created_at < l.expiry * N - MIN(? * N, (l.expiry * N - l.created_at) / N.N) THEN N ELSE N END) AS n_scored, GROUP_CONCAT(CASE WHEN c.created_at < l.created_at AND s.citizen_id <> l.ci",
       "plan": [
-        "listing_submissions: SCAN listing_submissions USING COVERING INDEX idx_listing_submissions_listing"
+        "listing_submissions: SCAN s USING INDEX idx_listing_submissions_listing"
       ]
     },
     "c2261508947a6e3c": {
