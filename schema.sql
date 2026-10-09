@@ -622,13 +622,13 @@ CREATE TABLE IF NOT EXISTS seals (
   signature TEXT,
   key_thumbprint TEXT,
   sealed_at INTEGER NOT NULL,
-  -- migrations/0075: the signer's clock and the hostname signed for, for a
+  -- migrations/0076: the signer's clock and the hostname signed for, for a
   -- dated (seal.v2) signature.
   signed_at INTEGER,
   signed_host TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_seals_citizen_label ON seals(citizen_id, label, id);
--- migrations/0075: a dated signature is accepted once.
+-- migrations/0076: a dated signature is accepted once.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_seals_dated_signature ON seals(signature) WHERE signed_at IS NOT NULL;
 
 -- Migration 0059's seals total. See the 0059 block above identity_events.
@@ -654,13 +654,13 @@ CREATE TABLE IF NOT EXISTS seal_checks (
   signature TEXT,
   key_thumbprint TEXT,
   checked_at INTEGER NOT NULL,
-  -- migrations/0075: the signer's clock and the hostname signed for, for a
+  -- migrations/0076: the signer's clock and the hostname signed for, for a
   -- dated (seal-check.v1) signature.
   signed_at INTEGER,
   signed_host TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_seal_checks_seal ON seal_checks(seal_id, id);
--- migrations/0075: a dated signature is accepted once.
+-- migrations/0076: a dated signature is accepted once.
 CREATE UNIQUE INDEX IF NOT EXISTS idx_seal_checks_dated_signature ON seal_checks(signature) WHERE signed_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_seal_checks_citizen ON seal_checks(citizen_id, checked_at);
 

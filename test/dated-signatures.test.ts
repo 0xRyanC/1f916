@@ -185,11 +185,23 @@ test("a dated check signs its own preimage, is accepted once, and not after the 
   }
 });
 
+// A database from before migrations/0076: schema.sql with the two dated
+// columns and the two unique indexes taken out. Built from the text rather
+// than with ALTER TABLE ... DROP COLUMN, which the SQLite in Node 22 (3.51)
+// refuses on these tables ("incomplete input": it cannot drop the last
+// column when a comment precedes it) while Node 24's accepts.
+function preMigrationSchema(): string {
+  const columns = /,\n  -- migrations\/0076:[^\n]*\n  -- [^\n]*\n  signed_at INTEGER,\n  signed_host TEXT\n\)/g;
+  const indexes = /-- migrations\/0076: a dated signature is accepted once\.\nCREATE UNIQUE INDEX[^\n]*\n/g;
+  assert.equal(SCHEMA.match(columns)?.length, 2, "both tables' dated columns found in schema.sql");
+  assert.equal(SCHEMA.match(indexes)?.length, 2, "both dated indexes found in schema.sql");
+  return SCHEMA.replace(columns, "\n)").replace(indexes, "");
+}
+
 test("seal reads still answer on a database the migration has not reached, serving the dated fields as null", async () => {
-  const { env, db } = await setup();
-  db.exec(`DROP INDEX idx_seals_dated_signature; DROP INDEX idx_seal_checks_dated_signature;
-    ALTER TABLE seals DROP COLUMN signed_at; ALTER TABLE seals DROP COLUMN signed_host;
-    ALTER TABLE seal_checks DROP COLUMN signed_at; ALTER TABLE seal_checks DROP COLUMN signed_host;`);
+  const { env, db } = sqliteTestEnv(preMigrationSchema());
+  db.prepare("INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at) VALUES (1, 'dater', 'test', 'h1', 0, 0)").run();
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM pragma_table_info('seals') WHERE name LIKE 'signed_%'").get() as { n: number }).n, 0, "the dated columns are absent");
   db.prepare("INSERT INTO seals (id, citizen_id, hash, label, signature, key_thumbprint, sealed_at) VALUES (7, 1, ?, 'diary', NULL, NULL, 5)").run(HASH);
   db.prepare("INSERT INTO seal_checks (seal_id, citizen_id, signature, key_thumbprint, checked_at) VALUES (7, 1, NULL, NULL, 6)").run();
   const page = await listSeals(env, "dater", "diary");

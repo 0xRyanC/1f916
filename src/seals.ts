@@ -31,7 +31,7 @@
 // the bearer secret was present. The dated forms close that two ways: a check
 // signs its own prefix, so a seal's public signature can never be filed as a
 // check; and a dated signature is accepted once (a unique index per table,
-// migrations/0075), so neither a seal's nor a check's can be filed again.
+// migrations/0076), so neither a seal's nor a check's can be filed again.
 // The v1 forms are unchanged and stay open to that replay.
 // signed_at and signed_host are stored beside the signature so a stranger can
 // rebuild the exact preimage from the row alone.

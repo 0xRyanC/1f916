@@ -7832,7 +7832,7 @@ function refuseDatedAs(v: ValidatedSeal, act: "seal" | "check"): void {
   );
 }
 
-// A dated signature is accepted once (unique partial indexes, migrations/0075).
+// A dated signature is accepted once (unique partial indexes, migrations/0076).
 // Its bytes are public once recorded, so a second filing is a replay whoever
 // sends it, and the keyholder who wants another row signs a fresh signed_at.
 async function commitDatedOnce<T>(v: ValidatedSeal, commit: () => Promise<T>): Promise<T> {
@@ -7974,7 +7974,7 @@ const datedSealNote = () =>
   SIGNED_AT_SKEW_MS / 1000 +
   " s of its own clock, and accepts each dated signature once, so the key signed those exact bytes at most that long before the row's sealed_at / checked_at, and a dated check's signature is never a copy of its seal's. It shows when the key signed, not that the keyholder was present at the moment of recording. POST /api/seal with signed_at (ms) beside signature to sign a dated form.";
 
-// Reads name the dated columns, which exist only once migrations/0075 has
+// Reads name the dated columns, which exist only once migrations/0076 has
 // run. Code deployed ahead of the migration must still serve seals, so a read
 // that finds the columns missing is retried with them as NULL, which is what
 // every row was before the migration anyway.
