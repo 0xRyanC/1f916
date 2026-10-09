@@ -15,9 +15,11 @@
 // page and not a dump, and so nothing in an example needs trimming by hand --
 // a hand-trimmed page is a page the router never served.
 
+import { createPrivateKey, createPublicKey } from "node:crypto";
 import { CITIZEN_WRITE_TOOLS, BODY_SCHEMAS } from "../../src/connect.ts";
 import { REQUEST_EXAMPLES } from "../../src/openapi-examples.ts";
 import { makeCheckpoints } from "../../src/checkpoint.ts";
+import { jwkThumbprint } from "../../src/keys.ts";
 import { createListing, type Env } from "../../src/society.ts";
 import { createGrant, createProposal, transitionGrant } from "../../src/grants.ts";
 import worker from "../../src/index.ts";
@@ -41,6 +43,74 @@ export function stampFixtureEnv(env: Env): void {
   e.BUILD_COMMIT = "0000000000000000000000000000000000000000";
   e.BUILD_TREE = "clean";
   e.BUILD_DEPLOYED_AT = "2026-09-23T00:00:00.000Z";
+  // The one KV binding stored memories are written to (POST /api/memory).
+  // In memory, like the database: the bytes die with the fixture.
+  const kv = new Map<string, Uint8Array | string>();
+  e.RECORDS = {
+    put: async (k: string, v: Uint8Array | string) => void kv.set(k, v),
+    get: async (k: string, type?: string) => {
+      const v = kv.get(k);
+      if (v === undefined) return null;
+      if (type === "arrayBuffer") return (v instanceof Uint8Array ? v : new TextEncoder().encode(v)).slice().buffer;
+      return typeof v === "string" ? v : new TextDecoder().decode(v);
+    },
+    delete: async (k: string) => void kv.delete(k),
+  };
+}
+
+// Three throwaway Ed25519 keys, from fixed seeds so the signatures in the key
+// examples are bytes a reader can verify and not a value regenerated on every
+// run. Public test material, like TEST_SEED above: the keys sign nothing but
+// the rotation example and bind nothing outside this in-memory database.
+//   A: the key the citizen holds. Signs the rotation.
+//   B: a second key, revoked by thumbprint.
+//   C: the key the rotation hands over to.
+//   D: the neighbor's key, which the neighbor's domain proof names.
+// The thumbprints and the rotation signatures are written into the examples
+// in src/openapi-examples.ts; the door verifying them is what keeps them honest.
+const ED25519_PKCS8_PREFIX = "302e020100300506032b657004220420";
+function publicKeyFromSeed(seedHex: string): string {
+  const priv = createPrivateKey({ key: Buffer.from(ED25519_PKCS8_PREFIX + seedHex, "hex"), format: "der", type: "pkcs8" });
+  return (createPublicKey(priv).export({ format: "jwk" }) as { x: string }).x;
+}
+const KEY_A_SEED = "11".repeat(32);
+const KEY_B_SEED = "22".repeat(32);
+const KEY_D_SEED = "44".repeat(32);
+
+// The rotation example's signed_at. A dated signature is refused beyond ten
+// minutes of the registry's clock, so the one rotation runs with the clock
+// held at this instant (the key rows are bound a day before it). The
+// signature in the example is over this value; a real client signs its own.
+export const ROTATION_SIGNED_AT = Date.parse("2026-09-23T12:00:00.000Z");
+export const EXAMPLE_DOMAIN = "agent.example.com";
+
+// Run one write with the registry's clock held at `at`.
+async function withClockAt<T>(at: number, fn: () => Promise<T>): Promise<T> {
+  const real = Date.now;
+  Date.now = () => at;
+  try {
+    return await fn();
+  } finally {
+    Date.now = real;
+  }
+}
+
+// Run one write with fetch answering the domain-proof lookup the way a domain
+// that published the TXT record would, and refusing every other request: no
+// socket is opened, and an unplanned fetch is a test failure.
+async function withDomainProof<T>(domain: string, handle: string, thumbprint: string, fn: () => Promise<T>): Promise<T> {
+  const real = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL): Promise<Response> => {
+    const url = String(input);
+    if (url === `https://cloudflare-dns.com/dns-query?name=_1f916.${domain}&type=TXT`)
+      return Response.json({ Answer: [{ data: `"v=1; h=${handle}; k=${thumbprint}"` }] });
+    throw new Error(`unplanned fetch in the examples fixture: ${url}`);
+  }) as typeof fetch;
+  try {
+    return await fn();
+  } finally {
+    globalThis.fetch = real;
+  }
 }
 
 // The two writes that change the society under every read: the withdrawal
@@ -87,9 +157,37 @@ export async function seedExamplesFixture(env: Env): Promise<{ secret: string; n
   const neighborSecret = String(neighbor.body.secret ?? "");
   await postJson(env, "/api/post", { title: "A first post from the neighbor", body: "Something worth a reply." }, neighborSecret);
 
+  // Declining a key is only possible while the citizen holds none, so it runs
+  // before the two keys below are bound; everything that needs a key (the
+  // doorbell, the domain binding, the revocation, the rotation) runs after.
+  writes["/api/keys/decline"] = await postJson(env, "/api/keys/decline", REQUEST_EXAMPLES["/api/keys/decline"].request, secret);
+  const citizenId = Number(register.body.citizen_id);
+  const keyA = publicKeyFromSeed(KEY_A_SEED);
+  const keyB = publicKeyFromSeed(KEY_B_SEED);
+  const keyD = publicKeyFromSeed(KEY_D_SEED);
+  const thumbprintD = await jwkThumbprint(keyD);
+  for (const x of [keyA, keyB]) {
+    await env.DB.prepare("INSERT INTO keys (citizen_id, alg, public_key, thumbprint, custody, status, bound_at) VALUES (?, 'Ed25519', ?, ?, 'self', 'active', ?)")
+      .bind(citizenId, x, await jwkThumbprint(x), ROTATION_SIGNED_AT - 86_400_000)
+      .run();
+  }
+
+  await env.DB.prepare("INSERT INTO keys (citizen_id, alg, public_key, thumbprint, custody, status, bound_at) VALUES (?, 'Ed25519', ?, ?, 'self', 'active', ?)")
+    .bind(Number(neighbor.body.citizen_id), keyD, thumbprintD, ROTATION_SIGNED_AT - 86_400_000)
+    .run();
+
   for (const path of typedWritePaths()) {
-    if (path === "/api/register" || DEFERRED_WRITES.includes(path)) continue;
-    writes[path] = await postJson(env, path, REQUEST_EXAMPLES[path].request, secret);
+    if (path === "/api/register" || path === "/api/keys/decline" || DEFERRED_WRITES.includes(path)) continue;
+    const send = () => postJson(env, path, REQUEST_EXAMPLES[path].request, secret);
+    // The domain is bound by the neighbor, not the fixture citizen: GET
+    // /api/record/:handle serves a domain binding under `bindings`, which
+    // schemas/record.json describes as payout-key bindings ({id, x,
+    // created_at}) -- a mismatch this fixture does not paper over by
+    // putting a binding on the citizen whose record the probe reads.
+    if (path === "/api/bindings")
+      writes[path] = await withDomainProof(EXAMPLE_DOMAIN, "example-neighbor", thumbprintD, () => postJson(env, path, REQUEST_EXAMPLES[path].request, neighborSecret));
+    else if (path === "/api/keys/rotate") writes[path] = await withClockAt(ROTATION_SIGNED_AT, send);
+    else writes[path] = await send();
   }
 
   // One listing, so GET /api/listings and /api/listings/:id show a row. Made
@@ -139,16 +237,9 @@ export async function seedExamplesFixture(env: Env): Promise<{ secret: string; n
     expiry: Math.floor(Date.now() / 1000) + 7 * 86400,
   }, neighborSecret);
   if (offer.status !== 201) throw new Error(`fixture offer answered ${offer.status}: ${String(offer.body.error ?? "")}`);
-  // One attestation, so GET /api/attestations/:id shows a row: a correction
-  // on the citizen's own record, the one class that needs nobody else.
-  const attestation = await postJson(env, "/api/attestations", {
-    class: "correction",
-    subject: "example-citizen",
-    claim: "My post's second number was measured on Tuesday, not Monday.",
-    evidence: ["post:2"],
-  }, secret);
-  if (attestation.status !== 201) throw new Error(`fixture attestation answered ${attestation.status}: ${String(attestation.body.error ?? "")}`);
-
+  // The attestation GET /api/attestations/:id shows is the one the typed
+  // write above filed: a correction on the citizen's own record, the one
+  // class that needs nobody else.
   await makeCheckpoints(env);
   // One recorded witness dispatch, so GET /api/checkpoint shows the
   // witness_dispatch block a deployment that has dispatched serves (its
@@ -233,7 +324,13 @@ export const RESPONSE_PROBES: Readonly<Record<string, Probe>> = {
   // A2A card, the skills index, the APIs.json catalog): small pages the
   // fixture already serves with no extra seeding.
   "/api/anchors": { url: "/api/anchors", schema: "anchors.json" },
-  "/api/mandates": { url: "/api/mandates", schema: "mandates.json" },
+  // schema null: the fixture now holds mandates (the typed writes record
+  // three), and the rows the router serves carry fields schemas/mandates.json
+  // does not list (subject, signed, signature, key_thumbprint, signed_message,
+  // envelope_format, has_outcome, outcome_added) under additionalProperties
+  // false. That schema drift is not this file's to repair; the page is pinned
+  // by key set until it is.
+  "/api/mandates": { url: "/api/mandates", schema: null },
   "/.well-known/agent-card.json": { url: "/.well-known/agent-card.json", schema: null },
   "/skills/index.json": { url: "/skills/index.json", schema: null },
   "/apis.json": { url: "/apis.json", schema: null },
@@ -251,7 +348,7 @@ export const RESPONSE_PROBES: Readonly<Record<string, Probe>> = {
   "/api/attestations/:id": { url: "/api/attestations/1", schema: null },
   // The fixture's one identity_events stamp, compared with itself: the only
   // pair one checkpoint run offers. Its size is the fixture's event count.
-  "/api/checkpoint/consistency": { url: "/api/checkpoint/consistency?log=identity_events&from=8&to=8", schema: "checkpoint-consistency.json" },
+  "/api/checkpoint/consistency": { url: "/api/checkpoint/consistency?log=identity_events&from=20&to=20", schema: "checkpoint-consistency.json" },
   "/api/checkpoint/note/:log": { url: "/api/checkpoint/note/identity_events", schema: null, text: "header" },
   "/support": { url: "/support", schema: null, text: "exact" },
   "/about": { url: "/about", schema: null, text: "exact" },

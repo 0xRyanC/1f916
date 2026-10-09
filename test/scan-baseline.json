@@ -712,33 +712,17 @@
     }
   },
   "uncovered_reads": {
-    "5536dd5aa7ed6e82": {
-      "file": "src/bindings.ts",
-      "sql": "SELECT COUNT(*) AS n FROM bindings WHERE citizen_id = ?"
-    },
     "92d27d97b5340508": {
       "file": "src/index.ts",
       "sql": "SELECT c.created_at, (SELECT COUNT(*) FROM keys k WHERE k.citizen_id = c.id AND k.status = 'active') AS active_keys, (SELECT COUNT(*) FROM keys k WHERE k.citizen_id = c.id) AS total_keys, (SELECT COUNT(*) FROM seals s WHERE s.citizen_id = c.id) AS seals FROM citizens c WHERE c.handle = ?"
-    },
-    "394244a49218be45": {
-      "file": "src/society.ts",
-      "sql": "SELECT citizen_id FROM bindings WHERE domain = ?"
     },
     "d36a1c7cf4bc1a03": {
       "file": "src/society.ts",
       "sql": "SELECT COUNT(*) AS n FROM payout_receipts pr JOIN payout_bindings pb ON pb.id = pr.binding_id WHERE pb.docket_id = ?"
     },
-    "129e0e7988a59c06": {
-      "file": "src/society.ts",
-      "sql": "SELECT COUNT(*) AS n FROM witnesses WHERE citizen_id = ?"
-    },
     "d9986808055a69c7": {
       "file": "src/society.ts",
       "sql": "SELECT id FROM ledger WHERE id = ?"
-    },
-    "bbc0a3b6f4333eb2": {
-      "file": "src/society.ts",
-      "sql": "SELECT id, citizen_id, public_key, epoch FROM witnesses WHERE url = ?"
     },
     "c5caa8373a03e566": {
       "file": "src/society.ts",
@@ -747,38 +731,6 @@
     "2b6768fd192d880f": {
       "file": "src/x402.ts",
       "sql": "SELECT hash FROM ledger WHERE lower(tx) = ? ORDER BY id LIMIT 1"
-    },
-    "70d9a6a8b617deb9": {
-      "file": "src/checkpoint.ts",
-      "sql": "SELECT id, tree_size, root, sig, created_at FROM checkpoints WHERE log = ? AND tree_size >= ? ORDER BY tree_size ASC LIMIT 1"
-    },
-    "79e9f4db1e67e5a1": {
-      "file": "src/society.ts",
-      "sql": "SELECT ${\u2026}, i.handle AS issuer, s.handle AS subject FROM attestations a JOIN citizens i ON i.id = a.issuer_id JOIN citizens s ON s.id = a.subject_id WHERE a.target_attestation_id = ? ORDER BY a.id ASC"
-    },
-    "35ddf48e37a79d4e": {
-      "file": "src/society.ts",
-      "sql": "SELECT id FROM identity_events WHERE kind = 'attestation' AND instr(detail, ?) > 0 LIMIT 1"
-    },
-    "dc3966a3193140c8": {
-      "file": "src/society.ts",
-      "sql": "SELECT id, detail, created_at FROM identity_events WHERE kind = 'moderation' ORDER BY id ASC"
-    },
-    "710aae22e2171090": {
-      "file": "src/society.ts",
-      "sql": "SELECT id, mod_state FROM comments WHERE mod_state IS NOT NULL"
-    },
-    "1aa07dc3d59d95cc": {
-      "file": "src/society.ts",
-      "sql": "SELECT id, mod_state FROM listings WHERE mod_state IS NOT NULL"
-    },
-    "ce97c931607bc029": {
-      "file": "src/society.ts",
-      "sql": "SELECT id, mod_state FROM posts WHERE mod_state IS NOT NULL"
-    },
-    "10ef20770ad88f48": {
-      "file": "src/society.ts",
-      "sql": "SELECT MAX(id) AS id FROM identity_events WHERE kind = 'moderation'"
     }
   }
 }

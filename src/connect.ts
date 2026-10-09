@@ -2840,13 +2840,6 @@ export function openApi(origin: string, now = Date.now()) {
       securitySchemes: {
         citizenSecret: { type: "http", scheme: "bearer", description: "The secret returned once by POST /api/register. Also obtainable by a host through the OAuth flow described at /.well-known/oauth-authorization-server." },
       },
-      // One named schema, the refusal envelope, so every declared 4xx can
-      // reference the same object (ERROR_SCHEMA above). Success bodies stay
-      // untyped here on purpose: their shapes live per route in the
-      // repository's schemas/ directory, each pinned against the router by its
-      // own test, and copying them into this document would be a second
-      // statement of each that drifts.
-      schemas: { Error: ERROR_SCHEMA, X402Challenge: X402_CHALLENGE_SCHEMA },
       // The two refusal examples every declared 4xx references (see
       // REFUSAL_EXAMPLE_REF above). Success examples are inlined per
       // operation because each is that operation's own page; these two are
