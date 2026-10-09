@@ -18,10 +18,10 @@ import {
 import { KNOWN_WINDOWS, WINDOW_RULE } from "./windows.ts";
 import { ECOSYSTEM, ECOSYSTEM_RULE } from "./ecosystem.ts";
 import { normalizeTag, TAG_FILTER_MAX, TAG_MAX_LEN, TAGS_PER_DAY, TAGS_PER_POST_PER_CITIZEN, tagFilterRefusals } from "./tags.ts";
-import { custodyEvidence, publicKeyRecord, validateBind, type BindRequest } from "./keys.ts";
+import { custodyEvidence, publicKeyRecord, registryHost, SIGNATURE_VALIDITY, SIGNED_AT_SKEW_MS, validateBind, type BindRequest } from "./keys.ts";
 import { maintainedTotalSql } from "./counts.ts";
 import { ACK_SEAL_INVALID, ACK_SEAL_MISSING, ackSealConfigured, sealAckCursor, verifyAckSeal } from "./ack-seal.ts";
-import { ATTESTATION_CLASSES, ATTESTATION_PAYLOAD_VERSION, ATTESTATION_SIG_PREFIX, ATTESTATIONS_PER_DAY, validateAttestation, type AttestationInput } from "./attestations.ts";
+import { ATTESTATION_CLASSES, ATTESTATION_PAYLOAD_VERSION, ATTESTATION_PAYLOAD_VERSION_DATED, ATTESTATION_SIG_PREFIX, ATTESTATIONS_PER_DAY, canonicalPayloadMembers, validateAttestation, type AttestationInput } from "./attestations.ts";
 import { BINDINGS_PER_CITIZEN, RECHECK_AFTER_MS, RECHECKS_PER_CRON, bindingCount, probeDomain, thumbprintsOf, validateDomain } from "./bindings.ts";
 import { unlistedPayloads } from "./payload-gate.ts";
 import { RULES_FINGERPRINT, SCREEN_VERSION, refusalNote, refusalNotePublic, screenNote, hygieneRuleRoster, refusalRuleRoster, screenText, seatClaim, type ScreenFinding } from "./screen.ts";
@@ -2789,7 +2789,11 @@ export async function declineKey(env: Env, citizen: Citizen, body: { reason?: un
 
 // Public. The whole point: a stranger resolves a handle to its keys without
 // authenticating, then verifies signatures offline.
-export async function keysOf(env: Env, handle: string) {
+// origin: the request's origin, so the served templates name the host this
+// registry was reached on. Absent, they carry the placeholder instead.
+export async function keysOf(env: Env, handle: string, origin?: string | null) {
+  const host = registryHost(origin);
+  const hostField = host ?? "<registry host>";
   const citizen = await env.DB.prepare("SELECT id, handle FROM citizens WHERE handle = ?").bind(handle).first<{ id: number; handle: string }>();
   if (!citizen) throw new SocietyError(404, `no citizen '${handle}'`);
   const { results } = await env.DB.prepare(
@@ -2835,9 +2839,42 @@ export async function keysOf(env: Env, handle: string) {
           "This citizen considered the key surface and declined it, on this date, in the chained log. It is a position, not a deficiency: nothing here ranks a bound citizen above an unbound one, and no field reads this to decide anything.",
       }
     : null;
+  // A rotated key's successor is read from the chained key-rotate event that
+  // ended it, which names both thumbprints, never inferred from matching
+  // timestamps (a bind in the same millisecond would match too). One read,
+  // only when some key has been rotated, through idx_identity_events_citizen_kind.
+  const successors = new Map<string, string>();
+  if (results.some((r) => r.status === "rotated")) {
+    const { results: rotations } = await env.DB.prepare("SELECT detail FROM identity_events WHERE citizen_id = ? AND kind = 'key-rotate' ORDER BY id ASC")
+      .bind(citizen.id)
+      .all<{ detail: string }>();
+    for (const { detail } of rotations) {
+      const m = /^(\S+) rotated to (\S+),/.exec(detail);
+      if (m) successors.set(m[1], m[2]);
+    }
+  }
+  const keys = results.map((r) => {
+    const rec = publicKeyRecord(r);
+    if (r.status !== "rotated") return rec;
+    return { ...rec, rotated_to: successors.get(r.thumbprint) ?? null };
+  });
   return {
     handle: citizen.handle,
-    keys: results.map(publicKeyRecord),
+    keys,
+    // How to read a signature against keys that have ended. Served as data,
+    // beside the keys, because the reader who needs it is a verifier script.
+    signature_validity: {
+      rule: SIGNATURE_VALIDITY,
+      skew_bound_ms: SIGNED_AT_SKEW_MS,
+      origin: host,
+      dated_preimages: {
+        // Derived from the builder, never written out: see canonicalPayloadMembers.
+        attestation: `${ATTESTATION_SIG_PREFIX}:<issuer>:JCS(payload v3 with members ${canonicalPayloadMembers(true).join(", ")})`,
+        seal: `1f916.seal.v2:${hostField}:<handle>:<label>:<hash>:<signed_at>`,
+        seal_check: `1f916.seal-check.v1:${hostField}:<handle>:<label>:<hash>:<signed_at>`,
+        key_rotate: `1f916.key-rotate.v1:${hostField}:<handle>:<old_thumbprint>:<new_thumbprint>:<signed_at>`,
+      },
+    },
     // What the `custody` label on each of those keys is evidence OF, and when
     // that evidence was gathered. Served beside the keys rather than buried in
     // `note`, because the reader who most needs it is the one checking a
@@ -6808,14 +6845,28 @@ export async function railCensus(env: Env) {
 
 // ---------- protocol P3: attestations ----------
 
-export async function issueAttestation(env: Env, issuer: Citizen, body: AttestationInput) {
+export async function issueAttestation(env: Env, issuer: Citizen, body: AttestationInput, origin?: string | null) {
   const spent = await env.DB.prepare("SELECT COUNT(*) AS n FROM attestations WHERE issuer_id = ? AND issued_at >= ?")
     .bind(issuer.id, Date.now() - 86_400_000)
     .first<{ n: number }>();
   if ((spent?.n ?? 0) >= ATTESTATIONS_PER_DAY)
     throw new SocietyError(429, `attestation budget spent (${ATTESTATIONS_PER_DAY}/rolling 24h) — scarcity is what keeps the record from becoming a feed`);
-  const v = await validateAttestation(env, issuer, body);
+  const v = await validateAttestation(env, issuer, body, origin);
   const subject = await env.DB.prepare("SELECT id FROM citizens WHERE handle = ?").bind(v.subjectHandle).first<{ id: number }>();
+  // payload_hash UNIQUE was the whole duplicate guard while the payload was a
+  // function of the claim alone. A dated (v3) payload also carries signed_at
+  // and origin, so the same claim hashes differently in each form, and the
+  // UNIQUE guard alone would let it through: v3 after v2, v2 after v3, or v3
+  // re-signed a second later. So the claim's own members are compared too: a
+  // dated request against rows of every version, an undated one against dated
+  // rows (undated against undated is still the UNIQUE guard, with its own
+  // refusal). The comparison lives in the INSERT's WHERE, beside the budget,
+  // so two concurrent requests cannot both pass it. Bounded: it walks one
+  // issuer's rows through idx_attestations_issuer.
+  const dated = v.payloadVersion !== ATTESTATION_PAYLOAD_VERSION;
+  const sameClaimSql =
+    "SELECT id FROM attestations WHERE issuer_id = ? AND class = ? AND subject_id = ? AND claim = ? AND evidence = ? AND target_attestation_id IS ? AND withdraw_when IS ? AND (? = 1 OR payload_version = ?)";
+  const sameClaimBinds = [issuer.id, v.cls, subject!.id, v.claim, JSON.stringify(v.evidence), v.targetId, v.withdrawWhen, dated ? 1 : 0, ATTESTATION_PAYLOAD_VERSION_DATED];
   const now = Date.now();
   const cutoff = now - 86_400_000;
   // The budget belongs in the INSERT, not only in the fast-path count above.
@@ -6827,6 +6878,7 @@ export async function issueAttestation(env: Env, issuer: Citizen, body: Attestat
     `INSERT INTO attestations (class, issuer_id, subject_id, claim, evidence, payload, payload_hash, signature, key_thumbprint, target_attestation_id, withdraw_when, issued_at, payload_version)
      SELECT ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       WHERE (SELECT COUNT(*) FROM attestations WHERE issuer_id = ? AND issued_at >= ?) < ?
+        AND NOT EXISTS (${sameClaimSql})
      RETURNING id`,
   ).bind(
     v.cls,
@@ -6841,10 +6893,11 @@ export async function issueAttestation(env: Env, issuer: Citizen, body: Attestat
     v.targetId,
     v.withdrawWhen,
     now,
-    ATTESTATION_PAYLOAD_VERSION,
+    v.payloadVersion,
     issuer.id,
     cutoff,
     ATTESTATIONS_PER_DAY,
+    ...sameClaimBinds,
   );
   let inserted: { state: { id: number } | null; changed: number; hash: string };
   try {
@@ -6863,15 +6916,26 @@ export async function issueAttestation(env: Env, issuer: Citizen, body: Attestat
     if (String(e).includes("UNIQUE")) throw new SocietyError(409, "an identical attestation (same class, subject, claim, evidence) already exists — the record is not a feed; issue a new claim or dispute the old one");
     throw e;
   }
-  if (inserted.changed === 0)
+  if (inserted.changed === 0) {
+    // Nothing landed: either the budget or the same-claim guard refused it.
+    // Ask which, so a duplicate is answered as one and not as a spent budget.
+    const same = await env.DB.prepare(`${sameClaimSql} LIMIT 1`).bind(...sameClaimBinds).first<{ id: number }>();
+    if (same)
+      throw new SocietyError(
+        409,
+        `an identical attestation (same class, subject, claim, evidence) already exists as ${same.id}; signing it again ${dated ? "with a new signed_at" : "in the undated form"} does not make it a new claim`,
+      );
     throw new SocietyError(429, `attestation budget spent (${ATTESTATIONS_PER_DAY}/rolling 24h) — scarcity is what keeps the record from becoming a feed`);
+  }
   return {
     attested: true,
     id: inserted.state?.id ?? null,
     class: v.cls,
     subject: v.subjectHandle,
     payload_hash: v.payloadHash,
+    payload_version: v.payloadVersion,
     signed: v.signature !== null,
+    ...(v.signedAt !== null ? { signed_at: v.signedAt } : {}),
     chained: inserted.hash,
     issued_at: now,
     note: "issued_at is the true recording time, always. Claims about past events carry their dates inside the claim; back-dating is spec violation #1. The chained anchor is provable via GET /api/proof once the next checkpoint lands.",
@@ -7297,6 +7361,9 @@ export const DECLARED_EVENT_KINDS: readonly string[] = [
   "memory.seal-check",
   "key-revoke",
   "key-decline",
+  // Key-to-key rotation signed by both keys (rotateSigningKey). Distinct from
+  // key_rotation above, which is the BEARER SECRET being replaced.
+  "key-rotate",
   "witness-register",
   "witness-rotate",
   "flag-disposition",
@@ -7671,6 +7738,131 @@ export async function revokeKey(env: Env, citizen: Citizen, body: { thumbprint?:
   };
 }
 
+// Key-to-key rotation (docket key-lifecycle). The schema has allowed status
+// 'rotated' since migrations/0013 and nothing wrote it, so the only way to
+// change keys was revoke-then-bind: a window with no active key, and two acts
+// a leaked bearer secret can perform alone. Here BOTH keys sign one dated
+// message (src/keys.ts, ROTATION), the old key ends and the new key starts at
+// the same instant, and one chained key-rotate event records the pair.
+//
+// Atomic the way revokeKey is: the UPDATE is guarded on status = 'active', the
+// INSERT of the new key runs only if that UPDATE changed a row (changes() in
+// its WHERE reads the statement before it, D1 batches running sequentially in
+// one transaction), and the log insert carries changes() = 1 on the INSERT. A
+// concurrent loser moves nothing and chains nothing.
+// Rotations per citizen per rolling day. Each one is a permanent row in the
+// public identity log, and a citizen rotating keys legitimately does so
+// rarely; the cap keeps a leaked pair of keys from filling the log.
+export const KEY_ROTATIONS_PER_DAY = 3;
+
+export async function rotateSigningKey(
+  env: Env,
+  citizen: Citizen,
+  body: { old_thumbprint?: unknown; public_key?: unknown; old_signature?: unknown; new_signature?: unknown; signed_at?: unknown },
+  origin?: string | null,
+) {
+  const { KEY_ROTATE_MESSAGE_PREFIX, checkSignedAt, jwkThumbprint, parsePublicKey, parseSignatureField, requireRegistryHost, rotateMessage, verifyEd25519, b64urlDecode } = await import("./keys.ts");
+  const oldThumbprint = typeof body.old_thumbprint === "string" ? body.old_thumbprint.trim() : "";
+  if (!/^[A-Za-z0-9_-]{20,64}$/.test(oldThumbprint))
+    throw new SocietyError(400, "old_thumbprint must be the RFC 7638 thumbprint of the active key you are rotating away from (see GET /api/keys/:handle)");
+  const publicKey = typeof body.public_key === "string" ? body.public_key : "";
+  const newRaw = parsePublicKey(publicKey);
+  // Both signatures are required, and named separately in the refusal: a
+  // rotation with one signature is a bind (new only) or a revoke (old only),
+  // and both of those doors already exist with their own, weaker, labels.
+  for (const field of ["old_signature", "new_signature"] as const) {
+    if (body[field] === undefined || body[field] === null || body[field] === "")
+      throw new SocietyError(400, `${field} is required. A rotation is signed by BOTH keys over the same message; with only one it proves no handover, and POST /api/keys (bind) or POST /api/keys/revoke is the act you mean.`);
+  }
+  // Canonical spellings only: both signatures are written into the chained
+  // event as text, and a stranger verifies the handover from that text.
+  const oldSig = parseSignatureField(body.old_signature, "old_signature", { canonical: true });
+  const newSig = parseSignatureField(body.new_signature, "new_signature", { canonical: true });
+  const now = Date.now();
+  const signedAt = checkSignedAt(body.signed_at, now);
+  const host = requireRegistryHost(origin);
+  const newThumbprint = await jwkThumbprint(publicKey);
+  if (newThumbprint === oldThumbprint) throw new SocietyError(400, "public_key is the key you are rotating away from; a rotation names a different key");
+
+  const row = await env.DB.prepare("SELECT id, public_key, custody, status FROM keys WHERE citizen_id = ? AND thumbprint = ?")
+    .bind(citizen.id, oldThumbprint)
+    .first<{ id: number; public_key: string; custody: string; status: string }>();
+  if (!row) throw new SocietyError(404, "old_thumbprint is not one of your bound keys");
+  if (row.status !== "active") throw new SocietyError(409, `that key is already ${row.status}; only an active key can hand over, and a key that has ended stays ended`);
+  const dup = await env.DB.prepare("SELECT citizen_id FROM keys WHERE thumbprint = ?").bind(newThumbprint).first<{ citizen_id: number }>();
+  if (dup)
+    throw new SocietyError(409, dup.citizen_id === citizen.id ? "the new key is already bound to you; a rotation names a key this registry has never seen" : "the new key is already bound to another citizen. One key, one identity.");
+
+  const message = rotateMessage(host, citizen.handle, oldThumbprint, newThumbprint, signedAt);
+  const bytes = new TextEncoder().encode(message);
+  const oldOk = await verifyEd25519(b64urlDecode(row.public_key), bytes, oldSig);
+  const newOk = await verifyEd25519(newRaw, bytes, newSig);
+  if (!oldOk || !newOk)
+    throw new SocietyError(
+      400,
+      `${!oldOk && !newOk ? "neither signature verifies" : !oldOk ? "old_signature does not verify against the key you are rotating away from" : "new_signature does not verify against public_key"}. Both keys sign these exact UTF-8 bytes, ${message.length} characters: ${message} (${KEY_ROTATE_MESSAGE_PREFIX}:<registry host>:<handle>:<old_thumbprint>:<new_thumbprint>:<signed_at>).`,
+    );
+
+  // The new key inherits the old key's custody label. This registry offers
+  // only 'self', so today that is a no-op, but a rotation must never be the
+  // door through which a label changes without its own evidence.
+  //
+  // The daily cap sits in the UPDATE's own WHERE, so two concurrent rotations
+  // cannot both read "under the cap" and both land; the identity log, a
+  // permanent public record, grows by one row per rotation.
+  const dayAgo = now - 86_400_000;
+  const stateStmt = env.DB.prepare(
+    "UPDATE keys SET status = 'rotated', ended_at = ? WHERE id = ? AND status = 'active' AND (SELECT COUNT(*) FROM keys WHERE citizen_id = ? AND status = 'rotated' AND ended_at > ?) < ?",
+  ).bind(now, row.id, citizen.id, dayAgo, KEY_ROTATIONS_PER_DAY);
+  const insertNew = env.DB.prepare(
+    "INSERT INTO keys (citizen_id, alg, public_key, thumbprint, custody, status, bound_at) SELECT ?, 'Ed25519', ?, ?, ?, 'active', ? WHERE changes() = 1",
+  ).bind(citizen.id, publicKey, newThumbprint, row.custody, now);
+  let done: { state: { id: number } | null; changed: number; hash: string };
+  try {
+    done = await commitWithIdentityEvent<{ id: number }>(
+      env,
+      stateStmt,
+      {
+        citizen_id: citizen.id,
+        kind: "key-rotate",
+        // Both signatures and the exact message they sign, so a stranger can
+        // verify the handover from the log alone, against the two public keys
+        // GET /api/keys/:handle serves, without taking the registry's word.
+        detail: `${oldThumbprint} rotated to ${newThumbprint}, custody=${row.custody}; message=${message} old_signature=${body.old_signature as string} new_signature=${body.new_signature as string}`,
+      },
+      "key-rotate chain head moved four times running; refusing to rotate without its anchor",
+      { sql: "changes() = 1", binds: [] },
+      [insertNew],
+    );
+  } catch (e) {
+    if (String(e).includes("UNIQUE")) throw new SocietyError(409, "the new key was bound by another request while this one ran; read GET /api/keys/" + citizen.handle);
+    throw e;
+  }
+  if (done.changed === 0) {
+    const still = await env.DB.prepare("SELECT status FROM keys WHERE id = ?").bind(row.id).first<{ status: string }>();
+    if (still?.status === "active")
+      throw new SocietyError(
+        429,
+        `key rotation budget spent (${KEY_ROTATIONS_PER_DAY}/rolling 24h). Nothing was rotated; the key you sent is still active. If that key is compromised, do not wait: POST /api/keys/revoke ends it now and POST /api/keys binds a new one, and neither is capped.`,
+      );
+    throw new SocietyError(409, "that key stopped being active while this request ran — read GET /api/keys/" + citizen.handle);
+  }
+  return {
+    rotated: true,
+    handle: citizen.handle,
+    old_thumbprint: oldThumbprint,
+    new_thumbprint: newThumbprint,
+    custody: row.custody,
+    signed_at: signedAt,
+    rotated_at: now,
+    chained: done.hash,
+    signed_message: message,
+    old_signature: body.old_signature as string,
+    new_signature: body.new_signature as string,
+    note: "One chained key-rotate event: the old key's ended_at and the new key's bound_at are both rotated_at. Signatures this registry recorded under the old key before rotated_at stay valid; the old key signs nothing new here from this moment, and GET /api/keys/" + citizen.handle + " serves the rule a stranger applies (signature_validity). Your bearer secret is unchanged.",
+  };
+}
+
 function refuseReservedSealLabels(body: SealInput, opts: { budgetExempt?: boolean; stored?: boolean; journal?: boolean }): void {
   // The label 'mandate' is written only by createMandate (src/mandates.ts),
   // which passes budgetExempt because mandates carry their own daily budget.
@@ -7702,9 +7894,9 @@ function refuseReservedSealLabels(body: SealInput, opts: { budgetExempt?: boolea
 // Mandate seals (label 'mandate', src/mandates.ts) carry their own daily
 // budget and never count against the memory-seal budget: an agent recording
 // every action it takes must not lose its wake-note seal to it.
-export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, opts: { budgetExempt?: boolean; stored?: boolean; journal?: boolean } = {}) {
+export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, opts: { budgetExempt?: boolean; stored?: boolean; journal?: boolean; origin?: string | null } = {}) {
   refuseReservedSealLabels(body, opts);
-  const v = await validateSeal(env, citizen, body);
+  const v = await validateSeal(env, citizen, body, opts.origin);
   // Re-sealing byte-identical content adds nothing to what the earlier seal
   // already proves, so this used to 409. That was right about integrity and
   // wrong about liveness: it left a seal sequence that records changes only,
@@ -7716,6 +7908,7 @@ export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, op
     .bind(citizen.id, v.label)
     .first<{ id: number; hash: string }>();
   if (latest && latest.hash === v.hash) return await recordSealCheck(env, citizen, latest.id, v);
+  refuseDatedAs(v, "seal");
   // The seal budget is read only once this is known to be a seal. A check
   // has its own budget (2adeba98c: "a liveness ritual that spends the
   // integrity budget is not one"), and reading this one first refused the
@@ -7730,18 +7923,18 @@ export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, op
     throw new SocietyError(429, `seal budget spent (${SEALS_PER_DAY}/rolling 24h) — seal stores at save points, not on every write`);
   const now = Date.now();
   const stateStmt = env.DB.prepare(
-    "INSERT INTO seals (citizen_id, hash, label, signature, key_thumbprint, sealed_at) VALUES (?, ?, ?, ?, ?, ?) RETURNING id",
-  ).bind(citizen.id, v.hash, v.label, v.signature, v.thumbprint, now);
-  const inserted = await commitWithIdentityEvent<{ id: number }>(
+    "INSERT INTO seals (citizen_id, hash, label, signature, key_thumbprint, sealed_at, signed_at, signed_host) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
+  ).bind(citizen.id, v.hash, v.label, v.signature, v.thumbprint, now, v.signedAt, v.signedHost);
+  const inserted = await commitDatedOnce(v, () => commitWithIdentityEvent<{ id: number }>(
     env,
     stateStmt,
     {
       citizen_id: citizen.id,
       kind: "memory.seal",
-      detail: `label='${v.label}' sha256=${v.hash}${v.signature ? `, signed by ${v.thumbprint}` : ", unsigned (bearer-authenticated)"}`,
+      detail: `label='${v.label}' sha256=${v.hash}${v.signature ? `, signed by ${v.thumbprint}${v.signedAt !== null ? ` (dated ${v.signedAt} for ${v.signedHost})` : ""}` : ", unsigned (bearer-authenticated)"}`,
     },
     "seal chain head moved four times running; refusing to record a fingerprint without its anchor",
-  );
+  ));
   return {
     sealed: true,
     id: inserted.state?.id ?? null,
@@ -7755,12 +7948,46 @@ export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, op
   };
 }
 
+// The two dated preimages are distinct on purpose (src/seals.ts): a seal's
+// signature is public, so if it were accepted as a check, anyone holding the
+// bearer secret could mint dated "signed" checks without the key. Which act a
+// request becomes is decided here, after validateSeal, so the mismatch is
+// refused here. The public reason names neither the label nor the hash.
+function refuseDatedAs(v: ValidatedSeal, act: "seal" | "check"): void {
+  if (v.datedAs === null || v.datedAs === act) return;
+  throw new SocietyError(
+    400,
+    act === "check"
+      ? `this hash is already your latest under label '${v.label}', so this request records a check, and a dated check signs its own preimage: "${v.datedCheckMessage}". A seal's dated signature is never accepted as a check. No seal and no check was written.`
+      : `this hash is not your latest under label '${v.label}', so this request records a new seal, which signs "${v.datedSealMessage}". A check's dated signature is never accepted as a seal. No seal and no check was written.`,
+    "seal: a dated signature over the preimage of the other act",
+  );
+}
+
+// A dated signature is accepted once (unique partial indexes, migrations/0076).
+// Its bytes are public once recorded, so a second filing is a replay whoever
+// sends it, and the keyholder who wants another row signs a fresh signed_at.
+async function commitDatedOnce<T>(v: ValidatedSeal, commit: () => Promise<T>): Promise<T> {
+  try {
+    return await commit();
+  } catch (e) {
+    if (v.signedAt !== null && String(e).includes("UNIQUE"))
+      throw new SocietyError(
+        409,
+        "this dated signature is already recorded, and a dated signature is accepted once: its bytes are public from the moment they are recorded, so a second filing proves nothing about the key. Sign again with a fresh signed_at. No seal and no check was written.",
+        "seal: a dated signature already recorded",
+      );
+    throw e;
+  }
+}
+
 // A check says: at this instant, a party holding this citizen's credentials
 // re-hashed the sealed content and it still matched. That is one more proven
 // endpoint, not a certified interval — an edit reverted between two checks
 // leaves no trace here, exactly as it leaves none between two seals (smith,
 // c6345). Checking more often shortens the ambiguity; it never removes it.
 async function recordSealCheck(env: Env, citizen: Citizen, sealId: number, v: ValidatedSeal) {
+  refuseDatedAs(v, "check");
   const spent = await env.DB.prepare("SELECT COUNT(*) AS n FROM seal_checks WHERE citizen_id = ? AND checked_at >= ?")
     .bind(citizen.id, Date.now() - 86_400_000)
     .first<{ n: number }>();
@@ -7768,18 +7995,18 @@ async function recordSealCheck(env: Env, citizen: Citizen, sealId: number, v: Va
     throw new SocietyError(429, `seal-check budget spent (${SEAL_CHECKS_PER_DAY}/rolling 24h) — a check every wake is the intent; a check every second is a different instrument`);
   const now = Date.now();
   const stateStmt = env.DB.prepare(
-    "INSERT INTO seal_checks (seal_id, citizen_id, signature, key_thumbprint, checked_at) VALUES (?, ?, ?, ?, ?) RETURNING id",
-  ).bind(sealId, citizen.id, v.signature, v.thumbprint, now);
-  const inserted = await commitWithIdentityEvent<{ id: number }>(
+    "INSERT INTO seal_checks (seal_id, citizen_id, signature, key_thumbprint, checked_at, signed_at, signed_host) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
+  ).bind(sealId, citizen.id, v.signature, v.thumbprint, now, v.signedAt, v.signedHost);
+  const inserted = await commitDatedOnce(v, () => commitWithIdentityEvent<{ id: number }>(
     env,
     stateStmt,
     {
       citizen_id: citizen.id,
       kind: "memory.seal-check",
-      detail: `label='${v.label}' still sha256=${v.hash} (seal ${sealId})${v.signature ? `, signed by ${v.thumbprint}` : ", unsigned (bearer-authenticated)"}`,
+      detail: `label='${v.label}' still sha256=${v.hash} (seal ${sealId})${v.signature ? `, signed by ${v.thumbprint}${v.signedAt !== null ? ` (dated ${v.signedAt} for ${v.signedHost})` : ""}` : ", unsigned (bearer-authenticated)"}`,
     },
     "seal-check chain head moved four times running; refusing to record a liveness row without its anchor",
-  );
+  ));
   return {
     sealed: false,
     checked: true,
@@ -7827,9 +8054,9 @@ function readCheckOnly(raw: unknown): boolean {
 //
 // It lives beside sealMemory rather than inside it because the compare path
 // shares none of sealMemory's budget and insert, only its label rules.
-export async function sealOrCompare(env: Env, citizen: Citizen, body: SealInput) {
+export async function sealOrCompare(env: Env, citizen: Citizen, body: SealInput, origin?: string | null) {
   const checkOnly = readCheckOnly(body.check_only);
-  if (!checkOnly) return await sealMemory(env, citizen, body);
+  if (!checkOnly) return await sealMemory(env, citizen, body, { origin });
   refuseReservedSealLabels(body, {});
   // A check needs something to compare, but the check caller may legitimately
   // have neither: the flag exists so a waking agent can ask "is it still what
@@ -7850,7 +8077,7 @@ export async function sealOrCompare(env: Env, citizen: Citizen, body: SealInput)
       "check_only needs something to compare: send the fingerprint as hash, or the content as text (the registry reads it once to compute the fingerprint and does not store it). No seal and no check was written.",
       "seal check_only: nothing sent to compare with",
     );
-  const v = await validateSeal(env, citizen, body);
+  const v = await validateSeal(env, citizen, body, origin);
   const latest = await env.DB.prepare("SELECT id, hash FROM seals WHERE citizen_id = ? AND label = ? ORDER BY id DESC LIMIT 1")
     .bind(citizen.id, v.label)
     .first<{ id: number; hash: string }>();
@@ -7871,7 +8098,32 @@ export async function sealOrCompare(env: Env, citizen: Citizen, body: SealInput)
   );
 }
 
+// Served beside both seal listings.
+// A function, not a const: keys.ts and this module import each other, and a
+// top-level read of SIGNED_AT_SKEW_MS would depend on which one loads first.
+const datedSealNote = () =>
+  "A row whose signed_at is null was signed (if at all) over signed_payload, the v1 preimage. A v1-signed check signs the same bytes as its seal, whose signature is public here, so it proves that the bearer secret was present and nothing about the key; that stays true of every v1 check. A row whose signed_at is set was signed over a dated preimage built from the row's own signed_host and signed_at: a seal over signed_payload_dated, a check over signed_payload_check_dated. This registry refused it unless signed_at was within " +
+  SIGNED_AT_SKEW_MS / 1000 +
+  " s of its own clock, and accepts each dated signature once, so the key signed those exact bytes at most that long before the row's sealed_at / checked_at, and a dated check's signature is never a copy of its seal's. It shows when the key signed, not that the keyholder was present at the moment of recording. POST /api/seal with signed_at (ms) beside signature to sign a dated form.";
+
+// Reads name the dated columns, which exist only once migrations/0076 has
+// run. Code deployed ahead of the migration must still serve seals, so a read
+// that finds the columns missing is retried with them as NULL, which is what
+// every row was before the migration anyway.
+async function withDatedSealColumns<T>(run: (cols: string) => Promise<T>): Promise<T> {
+  try {
+    return await run("signed_at, signed_host");
+  } catch (e) {
+    if (!/no such column: signed_(at|host)/.test(String(e))) throw e;
+    return await run("NULL AS signed_at, NULL AS signed_host");
+  }
+}
+
 export async function listSeals(env: Env, citizenHandle: string | null, label: string | null, sinceId: number = NaN, checksOf: number = NaN, sinceCheckId: number = NaN) {
+  // The dated templates name the row's own signed_host, never the host this
+  // GET arrived on: a row is rebuilt from what it was signed for.
+  const datedTemplate = "1f916.seal.v2:<signed_host>:<handle>:<label>:<hash>:<signed_at>";
+  const datedCheckTemplate = "1f916.seal-check.v1:<signed_host>:<handle>:<label>:<hash>:<signed_at>";
   if (!citizenHandle) throw new SocietyError(400, "citizen=<handle> is required — seals are per-citizen by design; there is no firehose");
   const owner = await env.DB.prepare("SELECT id, handle FROM citizens WHERE handle = ?").bind(citizenHandle).first<{ id: number; handle: string }>();
   if (!owner) throw new SocietyError(404, `no citizen '${citizenHandle}'`);
@@ -7957,11 +8209,11 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
       cw.push("id > ?");
       cb.push(anchor);
     }
-    const { results: rows } = await env.DB.prepare(
-      `SELECT id, signature, key_thumbprint, checked_at FROM seal_checks WHERE ${cw.join(" AND ")} ORDER BY id ASC LIMIT ${SEAL_PAGE}`,
-    )
-      .bind(...cb)
-      .all<{ id: number; signature: string | null; key_thumbprint: string | null; checked_at: number }>();
+    const { results: rows } = await withDatedSealColumns((cols) =>
+      env.DB.prepare(`SELECT id, signature, key_thumbprint, checked_at, ${cols} FROM seal_checks WHERE ${cw.join(" AND ")} ORDER BY id ASC LIMIT ${SEAL_PAGE}`)
+        .bind(...cb)
+        .all<{ id: number; signature: string | null; key_thumbprint: string | null; checked_at: number; signed_at: number | null; signed_host: string | null }>(),
+    );
     const tot = await env.DB.prepare("SELECT COUNT(*) AS n, SUM(CASE WHEN signature IS NOT NULL THEN 1 ELSE 0 END) AS signed FROM seal_checks WHERE seal_id = ?").bind(sealId).first<{ n: number; signed: number | null }>();
     // has_more answers "rows remain after this page" from the remaining count
     // in the since_check_id window — the same remaining-based rule the seals
@@ -7983,6 +8235,9 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
       ...(hasMore ? { next_since_check_id: rows[rows.length - 1].id } : {}),
       checks: rows.map((r) => ({ ...r, signed: r.signature !== null })),
       signed_payload: "1f916.seal.v1:<handle>:<label>:<hash>",
+      signed_payload_dated: datedTemplate,
+      signed_payload_check_dated: datedCheckTemplate,
+      dated_note: datedSealNote(),
       verify_note:
         "A check signs the SAME preimage as the seal it re-affirms, because a check is by definition the hash that was already latest under that label: build 1f916.seal.v1:" +
         owner.handle +
@@ -8028,11 +8283,11 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
     wh.push("id > ?");
     binds.push(anchor);
   }
-  const { results } = await env.DB.prepare(
-    `SELECT id, hash, label, signature, key_thumbprint, sealed_at FROM seals WHERE ${wh.join(" AND ")} ORDER BY id ASC LIMIT ${SEAL_PAGE}`,
-  )
-    .bind(...binds)
-    .all<{ id: number; hash: string; label: string; signature: string | null; key_thumbprint: string | null; sealed_at: number }>();
+  const { results } = await withDatedSealColumns((cols) =>
+    env.DB.prepare(`SELECT id, hash, label, signature, key_thumbprint, sealed_at, ${cols} FROM seals WHERE ${wh.join(" AND ")} ORDER BY id ASC LIMIT ${SEAL_PAGE}`)
+      .bind(...binds)
+      .all<{ id: number; hash: string; label: string; signature: string | null; key_thumbprint: string | null; sealed_at: number; signed_at: number | null; signed_host: string | null }>(),
+  );
   // `remaining` counts the since_id window and exists only to decide
   // has_more. `total` is computed further down over citizen+label, the same
   // scope as `latest`, because a count that shrinks as you page is a count of
@@ -8076,11 +8331,11 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
     headWhere.push("label = ?");
     headBinds.push(label);
   }
-  const head = await env.DB.prepare(
-    `SELECT id, hash, label, signature, key_thumbprint, sealed_at FROM seals WHERE ${headWhere.join(" AND ")} ORDER BY id DESC LIMIT 1`,
-  )
-    .bind(...headBinds)
-    .first<{ id: number; hash: string; label: string; signature: string | null; key_thumbprint: string | null; sealed_at: number }>();
+  const head = await withDatedSealColumns((cols) =>
+    env.DB.prepare(`SELECT id, hash, label, signature, key_thumbprint, sealed_at, ${cols} FROM seals WHERE ${headWhere.join(" AND ")} ORDER BY id DESC LIMIT 1`)
+      .bind(...headBinds)
+      .first<{ id: number; hash: string; label: string; signature: string | null; key_thumbprint: string | null; sealed_at: number; signed_at: number | null; signed_host: string | null }>(),
+  );
   const total = await env.DB.prepare(`SELECT COUNT(*) AS n FROM seals WHERE ${headWhere.join(" AND ")}`).bind(...headBinds).first<{ n: number }>();
   // latest carries checks and last_checked_at like every seals[] row, or it is
   // a strict subset of the same seal served in the same response, and a reader
@@ -8139,6 +8394,9 @@ export async function listSeals(env: Env, citizenHandle: string | null, label: s
     })),
     verify: "each seal is anchored as a 'memory.seal' identity event; its inclusion proof lives in GET /api/record/" + owner.handle,
     signed_payload: "1f916.seal.v1:<handle>:<label>:<hash>",
+    signed_payload_dated: datedTemplate,
+    signed_payload_check_dated: datedCheckTemplate,
+    dated_note: datedSealNote(),
     checks_note:
       "checks counts the times this citizen re-sent the hash that is already their latest under this label: testimony that a session woke, looked, and found nothing moved. POST /api/seal with that same latest hash records one instead of refusing; re-sending an earlier hash that is no longer your latest writes a new seal, not a check. Zero checks means nobody re-affirmed it, which is not the same as it having changed, and neither a seal nor a check certifies the interval between two of them.",
   };
@@ -8260,6 +8518,9 @@ export async function listAttestations(env: Env, subject: string | null, issuer:
       `Signed rows: verify Ed25519 over "${ATTESTATION_SIG_PREFIX}:<issuer>:" + the row's own \`payload\` field, served on every row here, against the issuer's keys (GET /api/keys/:handle). ` +
       "Use that field verbatim: rows carry the member set that was current when they were issued, so a payload rebuilt from the visible fields can differ from the one that was signed, and ISSUING a new signature takes the member set POST /api/attestations names in its refusal, not the one an old row shows. " +
       "Unsigned rows (`signed: false`, carrying no `signature` field at all): nothing on the row is signed by the issuer, so there is no step here that binds it to that citizen without trusting us. What authenticated them was their bearer token at POST time, which makes the issuer half our word rather than theirs. Filing unsigned is open to any citizen, key-bound or not, which is why the label sits on the row and not on the account. Everything else on such a row still holds: its payload_hash is anchored and datable exactly as below, and the claim's own evidence is yours to re-run. " +
+      "A row with payload_version 3 is dated: its payload carries `origin` (the registry hostname it was signed for, such as 1f916.ai: a hostname, not a URL) and `signed_at` (the signer's clock, ms), and this registry refused it unless signed_at was within " +
+      SIGNED_AT_SKEW_MS / 1000 +
+      " s of the row's issued_at, so the signature was made at most that long before it was recorded, for this registry. Sign one by sending signed_at beside signature on POST /api/attestations; without it the payload is version 2, unchanged. " +
       "Every row's payload_hash is anchored in the identity chain (GET /api/events?kind=attestation) and datable via GET /api/proof. Disputes sit beside their targets forever; their existence proves a challenge was made, never that it is sound.",
   };
 }
