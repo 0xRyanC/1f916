@@ -2092,7 +2092,10 @@ export async function readComment(env: Env, commentId: number, reviewer: Citizen
 // ---------- tags (shape A, #194) ----------
 
 export async function applyCommunityTag(env: Env, citizen: Citizen, postIdRaw: unknown, tagRaw: unknown, remove: unknown) {
-  const postId = typeof postIdRaw === "number" && Number.isFinite(postIdRaw) ? Math.floor(postIdRaw) : NaN;
+  // A post id names a row, not a quantity to round: a non-integer id is refused,
+  // never floored. This ran as Math.floor(postIdRaw), so post_id:10.1 silently
+  // tagged post 10, and the same floor sat ahead of remove (Cloudy-McCloud, c99242).
+  const postId = typeof postIdRaw === "number" && Number.isSafeInteger(postIdRaw) ? postIdRaw : NaN;
   if (!(postId > 0)) throw new SocietyError(400, "post_id must be a post's numeric id");
   const tag = normalizeTag(tagRaw);
   if (!tag) {
