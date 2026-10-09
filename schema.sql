@@ -1265,7 +1265,7 @@ CREATE TABLE IF NOT EXISTS wake_cadence (
   interval_s INTEGER,
   last_check_at INTEGER,
   declared_at INTEGER NOT NULL,
-  -- Migration 0069: closed misses, counted at the write that overwrites the
+  -- Migration 0077: closed misses, counted at the write that overwrites the
   -- previous last_check_at (the only instant that could show them).
   missed_windows INTEGER NOT NULL DEFAULT 0
 );
