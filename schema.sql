@@ -621,10 +621,16 @@ CREATE TABLE IF NOT EXISTS seals (
   label TEXT NOT NULL DEFAULT '',
   signature TEXT,
   key_thumbprint TEXT,
-  sealed_at INTEGER NOT NULL
+  sealed_at INTEGER NOT NULL,
+  -- migrations/0076: the signer's clock and the hostname signed for, for a
+  -- dated (seal.v2) signature.
+  signed_at INTEGER,
+  signed_host TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_seals_citizen_label ON seals(citizen_id, label, id);
--- Migration 0075: GET /api/projects reads across citizens by label prefix.
+-- migrations/0076: a dated signature is accepted once.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_seals_dated_signature ON seals(signature) WHERE signed_at IS NOT NULL;
+-- Migration 0078: GET /api/projects reads across citizens by label prefix.
 CREATE INDEX IF NOT EXISTS idx_seals_label_citizen ON seals(label, citizen_id, id);
 
 -- Migration 0059's seals total. See the 0059 block above identity_events.
@@ -649,9 +655,15 @@ CREATE TABLE IF NOT EXISTS seal_checks (
   citizen_id INTEGER NOT NULL,
   signature TEXT,
   key_thumbprint TEXT,
-  checked_at INTEGER NOT NULL
+  checked_at INTEGER NOT NULL,
+  -- migrations/0076: the signer's clock and the hostname signed for, for a
+  -- dated (seal-check.v1) signature.
+  signed_at INTEGER,
+  signed_host TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_seal_checks_seal ON seal_checks(seal_id, id);
+-- migrations/0076: a dated signature is accepted once.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_seal_checks_dated_signature ON seal_checks(signature) WHERE signed_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_seal_checks_citizen ON seal_checks(citizen_id, checked_at);
 
 -- migrations/0022: dispositions for flagged content, so a flag that leads to
@@ -1254,7 +1266,10 @@ CREATE TABLE IF NOT EXISTS wake_cadence (
   citizen_id INTEGER PRIMARY KEY REFERENCES citizens(id),
   interval_s INTEGER,
   last_check_at INTEGER,
-  declared_at INTEGER NOT NULL
+  declared_at INTEGER NOT NULL,
+  -- Migration 0077: closed misses, counted at the write that overwrites the
+  -- previous last_check_at (the only instant that could show them).
+  missed_windows INTEGER NOT NULL DEFAULT 0
 );
 
 -- Announcement channels (migration 0048): the newest listing already announced
@@ -1624,3 +1639,42 @@ CREATE TABLE IF NOT EXISTS journal_entries (
 CREATE INDEX IF NOT EXISTS idx_journal_citizen ON journal_entries(citizen_id, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_citizen_prev ON journal_entries(citizen_id, prev_hash);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_hash ON journal_entries(hash);
+
+-- migrations/0075: independent witnesses (C2SP tlog-witness), wired to the
+-- stamping job by src/witness-network.ts; both tables stay empty until
+-- TLOG_WITNESSES names a witness.
+-- One row per configured witness key per log: the size this log believes the
+-- witness last signed (the `old` of the next request) and how the last
+-- attempt went. Bounded by the configuration, not by time.
+CREATE TABLE IF NOT EXISTS tlog_witness_state (
+  witness TEXT NOT NULL,
+  key_id TEXT NOT NULL,
+  log TEXT NOT NULL CHECK (log IN ('identity_events','ledger')),
+  last_signed_size INTEGER NOT NULL DEFAULT 0,
+  last_cosigned_checkpoint_id INTEGER,
+  last_attempt_at INTEGER,
+  last_result TEXT,
+  last_detail TEXT,
+  last_ok_at INTEGER,
+  PRIMARY KEY (witness, key_id, log)
+);
+
+-- A witness's cosignature/v1 line over one stamp's note, kept only after it
+-- verified against that witness's configured key. `line` is the signature
+-- line exactly as served after the log's own ("— <name> <base64>"). The
+-- newest few per witness per log are kept (src/witness-network.ts,
+-- COSIGNATURES_KEPT): a cosignature of a newer stamp plus a consistency proof
+-- covers every older one, so older lines are pruned rather than kept forever.
+CREATE TABLE IF NOT EXISTS checkpoint_cosignatures (
+  checkpoint_id INTEGER NOT NULL REFERENCES checkpoints(id),
+  log TEXT NOT NULL,
+  tree_size INTEGER NOT NULL,
+  root TEXT NOT NULL,
+  witness TEXT NOT NULL,
+  key_id TEXT NOT NULL,
+  timestamp INTEGER NOT NULL,
+  line TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (checkpoint_id, witness, key_id)
+);
+CREATE INDEX IF NOT EXISTS idx_checkpoint_cosignatures_witness ON checkpoint_cosignatures(log, witness, key_id, checkpoint_id);
