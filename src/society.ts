@@ -7907,14 +7907,27 @@ export async function rotateSigningKey(
   };
 }
 
+// Which reserved family a label belongs to, if any. The one classification read
+// by the refusal below and by the check_only steer (steerToOwnLabel), so the
+// steer can never name a label that the door would then refuse (deploy audit,
+// 2026-10-11).
+function reservedSealLabelKind(label: string): "mandate" | "stored" | "journal" | null {
+  const l = label.trim();
+  if (l === "mandate") return "mandate";
+  if (l.startsWith("stored.")) return "stored";
+  if (l === JOURNAL_HEAD_LABEL) return "journal";
+  return null;
+}
+
 function refuseReservedSealLabels(body: SealInput, opts: { budgetExempt?: boolean; stored?: boolean; journal?: boolean }): void {
+  const kind = typeof body.label === "string" ? reservedSealLabelKind(body.label) : null;
   // The label 'mandate' is written only by createMandate (src/mandates.ts),
   // which passes budgetExempt because mandates carry their own daily budget.
   // The budget query below excludes that label, so a caller who could send it
   // through POST /api/seal or the MCP seal tool would have an unbudgeted seal:
   // refuse it there. Checked on the trimmed label so that it cannot be dodged
   // with whitespace; validateSeal rejects anything outside [a-z0-9._-] anyway.
-  if (!opts.budgetExempt && typeof body.label === "string" && body.label.trim() === "mandate")
+  if (!opts.budgetExempt && kind === "mandate")
     throw new SocietyError(400, "label 'mandate' is reserved: a mandate is recorded through POST /api/mandates, which seals it under the account's own mandate budget");
   // Labels beginning 'stored.' are written only by storeMemory (src/memory.ts),
   // which passes `stored`. Each is the seal of a file held here, and the newest
@@ -7922,7 +7935,7 @@ function refuseReservedSealLabels(body: SealInput, opts: { budgetExempt?: boolea
   // the same label would break that: the deploy audit of 2026-09-28 sealed a
   // file's hash by hand and then could never store the file. Refused here, so
   // the two histories cannot mix.
-  if (!opts.stored && typeof body.label === "string" && body.label.trim().startsWith("stored."))
+  if (!opts.stored && kind === "stored")
     throw new SocietyError(400, "labels beginning 'stored.' are reserved: each is the seal of a memory kept through POST /api/memory. Seal a fingerprint of your own under any other label");
   // The label 'journal.head' is written only by the journal (src/journal.ts),
   // which passes `journal`: it is the head of a citizen's chain of entries,
@@ -7931,7 +7944,7 @@ function refuseReservedSealLabels(body: SealInput, opts: { budgetExempt?: boolea
   // their own files under 'journal', 'journal-<date>' and 'journal.<name>',
   // and the deploy audit of 2026-09-29 found a prefix rule would have refused
   // one of them that same day.
-  if (!opts.journal && typeof body.label === "string" && body.label.trim() === JOURNAL_HEAD_LABEL)
+  if (!opts.journal && kind === "journal")
     throw new SocietyError(400, `the label '${JOURNAL_HEAD_LABEL}' is reserved: it is sealed by POST /api/journal, from the entries themselves. Seal a fingerprint of your own under any other label; one that merely begins with 'journal' is yours to use`);
 }
 
@@ -8155,60 +8168,67 @@ export async function sealOrCompare(env: Env, citizen: Citizen, body: SealInput,
 // 15 checked correctly; not told it, 0 of 10 did. Every one of those ten sent
 // check_only under the empty label, read "no seal under label ''" with the
 // advice to seal it, and stopped, because nothing in the answer said where the
-// note was. The answer now says: the label holding a seal with this exact
+// note was. The answer now says: the label whose newest seal holds this exact
 // fingerprint if there is one, and otherwise the caller's own labels to try.
 // It is the caller's own record, listed publicly at GET /api/seals anyway,
 // and goes only into the message; the public nulls log keeps the generic
 // reason. The steer never records a check under a label the caller did not
 // name: a check is testimony about the label asked for, so the caller asks
 // again.
+//
+// It reads every label's newest seal once, not a capped list of matching
+// rows: with the same content under four labels, a LIMIT 3 on the matches
+// could hide the one label whose newest seal still holds it (deploy audit,
+// 2026-10-11). A label check_only refuses (reservedSealLabelKind) is never
+// offered as somewhere to send the check.
 const STEER_LABELS = 10;
 async function steerToOwnLabel(env: Env, citizen: Citizen, hash: string): Promise<{ sentence: string; fields: Record<string, unknown> }> {
-  const same = await env.DB.prepare("SELECT id, label FROM seals WHERE citizen_id = ? AND hash = ? ORDER BY id DESC LIMIT 3")
-    .bind(citizen.id, hash)
-    .all<{ id: number; label: string }>();
-  const matches: { seal: number; label: string; latest: boolean; latest_seal: number }[] = [];
-  for (const s of same.results) {
-    if (matches.some((m) => m.label === s.label)) continue;
-    // Judged by content, not by row: a check under this label compares with
-    // the newest seal there, so "latest" means that seal holds these bytes.
-    const top = await env.DB.prepare("SELECT id, hash FROM seals WHERE citizen_id = ? AND label = ? ORDER BY id DESC LIMIT 1")
-      .bind(citizen.id, s.label)
-      .first<{ id: number; hash: string }>();
-    const topId = Number(top?.id ?? s.id);
-    const isLatest = (top?.hash ?? hash) === hash;
-    matches.push({ seal: isLatest ? topId : s.id, label: s.label, latest: isLatest, latest_seal: topId });
-  }
-  const labels = await env.DB.prepare(`SELECT label, MAX(id) AS latest FROM seals WHERE citizen_id = ? GROUP BY label ORDER BY latest DESC LIMIT ${STEER_LABELS}`)
+  const { results: heads } = await env.DB.prepare(
+    "SELECT s.label AS label, s.id AS id, s.hash AS hash FROM seals s JOIN (SELECT label, MAX(id) AS id FROM seals WHERE citizen_id = ? GROUP BY label) m ON s.id = m.id ORDER BY s.id DESC",
+  )
     .bind(citizen.id)
-    .all<{ label: string; latest: number }>();
-  const total = await env.DB.prepare("SELECT COUNT(DISTINCT label) AS n FROM seals WHERE citizen_id = ?").bind(citizen.id).first<{ n: number }>();
-  const labelsTotal = Number(total?.n ?? 0);
+    .all<{ label: string; id: number; hash: string }>();
+  const { results: same } = await env.DB.prepare("SELECT label, MAX(id) AS id FROM seals WHERE citizen_id = ? AND hash = ? GROUP BY label ORDER BY id DESC")
+    .bind(citizen.id, hash)
+    .all<{ label: string; id: number }>();
+  const headOf = new Map(heads.map((h) => [h.label, h]));
+  const checkable = heads.filter((h) => reservedSealLabelKind(h.label) === null);
+  const matches = same.map((m) => {
+    const head = headOf.get(m.label);
+    const latest = head !== undefined && head.hash === hash;
+    return { label: m.label, seal: latest ? head!.id : m.id, latest, latest_seal: head?.id ?? m.id, reserved: reservedSealLabelKind(m.label) !== null };
+  });
   const fields = {
     citizen: citizen.handle,
     same_fingerprint: matches,
-    your_labels: labels.results.map((r) => ({ label: r.label, latest_seal: r.latest })),
-    labels_total: labelsTotal,
+    checkable_labels: checkable.slice(0, STEER_LABELS).map((h) => ({ label: h.label, latest_seal: h.id })),
+    checkable_labels_total: checkable.length,
   };
-  const current = matches.find((m) => m.latest);
+  const current = matches.find((m) => m.latest && !m.reserved);
   if (current)
     return {
       sentence: `What you sent is identical to your latest seal under label '${current.label}' (seal ${current.seal}). To record the check there, send it again with check_only and label '${current.label}'.`,
       fields,
     };
-  if (matches.length > 0) {
-    const old = matches[0];
+  const old = matches.find((m) => !m.reserved);
+  if (old)
     return {
       sentence: `What you sent is identical to your seal ${old.seal} under label '${old.label}', but that is not your latest seal under that label: seal ${old.latest_seal} was sealed there after it, with different content. A check under '${old.label}' compares with seal ${old.latest_seal}, so it would be refused as a difference.`,
       fields,
     };
-  }
-  if (labels.results.length === 0)
-    return { sentence: "You have no seals under any label. Send it again without check_only to seal it.", fields };
-  const listed = labels.results.map((r) => `'${r.label}' (latest seal ${r.latest})`).join(", ");
-  const more = labelsTotal > labels.results.length ? `, and ${labelsTotal - labels.results.length} more at GET /api/seals?citizen=${encodeURIComponent(citizen.handle)}` : "";
+  const held = matches[0];
+  if (held)
+    return {
+      sentence: `What you sent is identical to your seal ${held.seal} under label '${held.label}', which is reserved: check_only cannot be sent under it.`,
+      fields,
+    };
+  if (checkable.length === 0)
+    return { sentence: "You have no seals under a label check_only can compare with. Send it again without check_only to seal it.", fields };
+  const shown = checkable.slice(0, STEER_LABELS);
+  const listed = shown.map((h) => `'${h.label}' (latest seal ${h.id})`).join(", ");
+  const more = checkable.length > shown.length ? `, and ${checkable.length - shown.length} more at GET /api/seals?citizen=${encodeURIComponent(citizen.handle)}` : "";
   return {
-    sentence: `None of your seals, under any label, has this fingerprint. You are ${citizen.handle}, and your labels, newest first, are: ${listed}${more}. To compare with one of them, send it again with check_only and that label.`,
+    sentence: `None of your seals, under any label, has this fingerprint. You are ${citizen.handle}, and the labels check_only can compare with, newest first, are: ${listed}${more}. To compare with one of them, send it again with check_only and that label.`,
     fields,
   };
 }
