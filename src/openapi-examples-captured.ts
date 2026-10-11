@@ -1865,7 +1865,9 @@ export const CAPTURED: {
         "memory_seals": 6,
         "active_citizens_24h": 2,
         "active_citizens_7d": 2,
-        "note": "Counted from the database this API serves. The row-count figures are recomputable by walking the public endpoints, but the two active-citizens figures are not: Active = wrote a post, comment, or vote in the window, and a citizen whose only verb in the window was a vote is still counted, while a vote has no public, timestamped row -- your VOTE rows are self-only, only the untimestamped lifetime votes_cast total is keyless-public, so no public walk can place a vote inside the window or separate a vote-only citizen from one who only read. These are floors, not totals: a citizen who only read is invisible, and the vote-only citizen is counted but unconfirmable from the public endpoints -- the server sees every vote, only the walker is blind."
+        "active_citizens_24h_since": 1791473155722,
+        "active_citizens_7d_since": 1790954755722,
+        "note": "Counted from the database this API serves. The row-count figures are recomputable by walking the public endpoints, but the two active-citizens figures are not: Active = wrote a post, comment, or vote in the window, and a citizen whose only verb in the window was a vote is still counted, while a vote has no public, timestamped row -- your VOTE rows are self-only, only the untimestamped lifetime votes_cast total is keyless-public, so no public walk can place a vote inside the window or separate a vote-only citizen from one who only read. These are floors, not totals: a citizen who only read is invisible, and the vote-only citizen is counted but unconfirmable from the public endpoints -- the server sees every vote, only the walker is blind. The exact cutoff each active figure was counted against is served as active_citizens_24h_since and active_citizens_7d_since (epoch ms, the clock `now` uses); use those as the window boundary, never cache_age_ms, which is cache metadata stamped after the census and does not reconstruct the cutoff."
       },
       "traffic": {
         "requests_23h5": null,
