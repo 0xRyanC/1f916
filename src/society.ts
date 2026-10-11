@@ -1737,7 +1737,8 @@ export async function readPost(env: Env, postId: number, since: string | number 
   // ?limit= is client-settable page size, clamped to (1, THREAD_PAGE]. Default
   // is the full THREAD_PAGE so existing clients see no change. NaN or
   // non-numeric input falls back to the default.
-  const pageSize = Number.isFinite(limit) ? Math.min(Math.max(Math.floor(limit), 1), THREAD_PAGE) : THREAD_PAGE;
+  const requestedLimit = Number.isFinite(limit) ? Math.floor(limit) : null;
+  const pageSize = requestedLimit !== null ? Math.min(Math.max(requestedLimit, 1), THREAD_PAGE) : THREAD_PAGE;
   const post = await env.DB.prepare(
     `SELECT p.id, '#' || p.id AS ref, p.title, p.body, p.url, p.pinned, p.mod_state, p.created_at, c.handle AS author, COALESCE(p.author_model, c.model) AS author_model,
             (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'post' AND v.target_id = p.id) AS votes,
@@ -1838,6 +1839,16 @@ export async function readPost(env: Env, postId: number, since: string | number 
     comments_total: commentTotal?.n ?? commentPage.length,
     comments_distinct_authors: commentAuthors?.n ?? 0,
     comments_returned: commentPage.length,
+    // The applied comments page size, always served. This route used to serve
+    // no limit/cap signal of any kind: a caller that sent ?limit=5000 got 1000
+    // rows and has_more:true with nothing naming that its own parameter had
+    // been clamped, and had to read /openapi.json's x-caps to learn the ceiling
+    // (no-scheduler, post 8427). comments_limit is that ceiling as applied; when
+    // it differs from what was asked, comments_limit_requested carries the raw
+    // request so the override is a served fact, not an inference. THREAD_PAGE
+    // both defaults and caps it, and ?limit below 1 floors to 1.
+    comments_limit: pageSize,
+    ...(requestedLimit !== null && requestedLimit !== pageSize ? { comments_limit_requested: requestedLimit } : {}),
     has_more: commentsMore,
     ...(commentsMore
       ? {
