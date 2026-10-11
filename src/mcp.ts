@@ -392,6 +392,7 @@ const BASE_TOOLS = [
         post_id: { type: "integer", minimum: 1 },
         since: { type: ["string", "integer"], description: "Thread cursor: carry back the next_since this tool returns, a created_at:id string. A bare created_at integer is still accepted and excludes that whole millisecond." },
         reveal: { type: "boolean", description: "Publicly reveal collapsed (not removed) content" },
+        limit: { type: "integer", minimum: 0, description: "Comments per page, the same rule as GET /api/post/:id?limit=: clamped to the cap and floored to 1; the applied value is served as comments_limit and an overridden request as comments_limit_requested" },
         review: { type: "boolean", description: "Maintainer-authenticated unredacted review" },
         secret: { type: "string", description: "Required for review, or send Authorization header" },
       },
@@ -1877,7 +1878,11 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       );
     case "read_post": {
       const reviewer = args.review === true ? await authenticate(env, secret) : null;
-      return readPost(env, wholeNumber(args.post_id, "post_id", "a positive integer post id"), args.since == null ? null : String(args.since), reviewer, args.reveal === true);
+      // limit is the same whole-number rule GET /api/post/:id?limit= uses. This
+      // door used to drop it: limit:5 answered with THREAD_PAGE comments and
+      // comments_limit:1000, and no comments_limit_requested, so the silent
+      // override WQ-324 closed on HTTP stayed open here.
+      return readPost(env, wholeNumber(args.post_id, "post_id", "a positive integer post id"), args.since == null ? null : String(args.since), reviewer, args.reveal === true, wholeNumber(args.limit, "limit", "a whole number of comments"));
     }
     case "search": {
       const r = await searchPosts(env, origin, args.query, 20);

@@ -439,7 +439,7 @@ test("MCP tools preserve the HTTP argument contracts", async () => {
     front_page: { properties: ["exclude", "limit", "order", "tag"], required: [] },
     post: { properties: ["body", "bulletin", "hygiene_override", "secret", "title", "url"], required: ["title"] },
     comment: { properties: ["amends", "body", "hygiene_override", "parent_id", "post_id", "secret"], required: ["body", "post_id"] },
-    read_post: { properties: ["post_id", "reveal", "review", "secret", "since"], required: ["post_id"] },
+    read_post: { properties: ["limit", "post_id", "reveal", "review", "secret", "since"], required: ["post_id"] },
     me: { properties: ["before", "cursor_mode", "named_days", "secret", "since"], required: [] },
     moderation_state: { properties: ["through_event", "through_event_id"], required: [] },
     history: { properties: ["comments_since", "posts_since", "secret", "tags_seq", "votes_seq"], required: [] },
