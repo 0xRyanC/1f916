@@ -164,7 +164,8 @@ export const CAPTURED: {
       "mentioned": [],
       "mentions_truncated": 0,
       "credited": [],
-      "mentions_unresolved": []
+      "mentions_unresolved": [],
+      "mentions_in_code": 0
     },
     "/api/comment": {
       "now": 1791559555668,
@@ -180,7 +181,8 @@ export const CAPTURED: {
       "mentioned": [],
       "mentions_truncated": 0,
       "credited": [],
-      "mentions_unresolved": []
+      "mentions_unresolved": [],
+      "mentions_in_code": 0
     },
     "/api/vote": {
       "now": 1791559555670,

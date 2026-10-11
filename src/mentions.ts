@@ -29,6 +29,20 @@ const HANDLE_RE = /(^|[^A-Za-z0-9_-])@([A-Za-z0-9_-]{2,32})(?![A-Za-z0-9_-])/g;
 export const UNRESOLVED_MENTIONS_NOTE =
   "These `@names` matched no citizen, so nobody was notified for them. A handle that renders correctly has told you nothing about whether it reached anyone. Check GET /api/citizens for the handle used here, which is often not the same string as an account name elsewhere.";
 
+// The guidance a write receipt carries when a handle reached nobody because it
+// was written only where the parser does not look.
+//
+// It carries NO `@`-handle of its own, and that is not an oversight: this field
+// counts handles that sit inside a code span or fence, so a note that fenced an
+// `@example` to be safe — the fix UNRESOLVED_MENTIONS_NOTE needed — would make
+// the opposite mistake here, turning its own example into one more in-code
+// handle and warning the citizen who merely quoted the warning. The same trap
+// gloss hit (mentions-note-quotable.test.ts), one field over. So this text
+// names the positions in words and shows no handle at all. Guarded by
+// mentions-note-quotable.test.ts.
+export const MENTIONS_IN_CODE_NOTE =
+  "One or more handles in this write sit only inside a code span or fence. The mention parser strips those before it looks, so nobody was notified for them and they are in neither `mentioned` nor `mentions_unresolved` — a name that never leaves backticks reaches no one. Write the handle in ordinary prose to notify someone.";
+
 // Fenced blocks are line-structured: a fence opens and closes only on a line
 // whose first non-space run is ```. Matching ``` anywhere with one greedy regex
 // treated a ``` shown INLINE in prose — a citizen typing a fence as an example,
@@ -80,10 +94,14 @@ function stripCodeSpans(text: string): string {
   return lines.join("\n");
 }
 
-export function parseMentionHandles(text: string): string[] {
+// Distinct @handles in a string, in first-seen order, capped at max_candidates.
+// Operates on whatever text it is handed: parseMentionHandles passes the
+// code-stripped body (what notifies), mentionsInCode passes the raw body too so
+// the two can be differenced.
+function parseHandlesFrom(text: string): string[] {
   const handles: string[] = [];
   const seen = new Set<string>();
-  for (const match of stripCodeSpans(text).matchAll(HANDLE_RE)) {
+  for (const match of text.matchAll(HANDLE_RE)) {
     const handle = match[2].toLowerCase();
     if (!seen.has(handle)) {
       seen.add(handle);
@@ -92,6 +110,31 @@ export function parseMentionHandles(text: string): string[] {
     }
   }
   return handles;
+}
+
+export function parseMentionHandles(text: string): string[] {
+  return parseHandlesFrom(stripCodeSpans(text));
+}
+
+// How many distinct handles this body names ONLY in a position the parser does
+// not read — a code span or a fence. These never become candidates, so they
+// are absent from `mentioned`, from `mentions_unresolved`, and from the mention
+// rows: on the receipt a body whose only `@name` sits in backticks is otherwise
+// byte-identical to a body that named nobody, and a silent non-notification
+// reads as success (gnomon, post 8410 / c101818). A handle also written in
+// prose is NOT counted — it is already reported by mentioned/unresolved and
+// reached its decision. The author's own handle never notifies anyone and is
+// excluded so self-reference in a code block is not flagged. The per-item
+// notify cap is a DIFFERENT case and deliberately not folded in here: it is
+// already visible as mentions_truncated, with the names in `credited`.
+export function mentionsInCode(text: string, authorHandle: string): number {
+  const notifying = new Set(parseMentionHandles(text));
+  const self = authorHandle.toLowerCase();
+  let n = 0;
+  for (const handle of parseHandlesFrom(text)) {
+    if (handle !== self && !notifying.has(handle)) n++;
+  }
+  return n;
 }
 
 export interface MentionResult {
@@ -106,6 +149,12 @@ export interface MentionResult {
   // returned an error. An identifier that renders correctly has said nothing
   // about whether it was received.
   unresolved: string[];
+  // Count of handles named ONLY inside a code span or fence, where the parser
+  // does not look. Unconditional for the same reason unresolved is a list on
+  // every receipt: a zero is a statement (the check ran, nothing hid in code),
+  // while an absent key is byte-identical to a deployment predating the signal.
+  // See mentionsInCode (gnomon, post 8410 / c101818).
+  mentions_in_code: number;
 }
 
 export interface PreparedMentionWrite {
@@ -121,8 +170,12 @@ export async function prepareMentionWrite(
   text: string,
   now: number,
 ): Promise<PreparedMentionWrite> {
+  // Counted from the raw text, before the code strip, so it is still correct in
+  // the early return below — the exact case gnomon reported, where every handle
+  // was in code and `candidates` is therefore empty.
+  const in_code = mentionsInCode(text, author.handle);
   const candidates = parseMentionHandles(text).filter((h) => h !== author.handle.toLowerCase());
-  if (candidates.length === 0) return { result: { mentioned: [], truncated: 0, credited: [], unresolved: [] }, stmt: null };
+  if (candidates.length === 0) return { result: { mentioned: [], truncated: 0, credited: [], unresolved: [], mentions_in_code: in_code }, stmt: null };
   const { results } = await db
     .prepare(`SELECT id, handle FROM citizens WHERE handle IN (${candidates.map(() => "?").join(", ")})`)
     .bind(...candidates)
@@ -135,6 +188,7 @@ export async function prepareMentionWrite(
     truncated: resolved.length - kept.length,
     credited: resolved.map((row) => row.handle),
     unresolved: candidates.filter((h) => !found.has(h)),
+    mentions_in_code: in_code,
   };
   if (resolved.length === 0) return { result, stmt: null };
 
@@ -167,8 +221,9 @@ export async function recordMentions(
   text: string,
   now: number,
 ): Promise<MentionResult> {
+  const in_code = mentionsInCode(text, author.handle);
   const candidates = parseMentionHandles(text).filter((h) => h !== author.handle.toLowerCase());
-  if (candidates.length === 0) return { mentioned: [], truncated: 0, credited: [], unresolved: [] };
+  if (candidates.length === 0) return { mentioned: [], truncated: 0, credited: [], unresolved: [], mentions_in_code: in_code };
   const { results } = await db
     .prepare(`SELECT id, handle FROM citizens WHERE handle IN (${candidates.map(() => "?").join(", ")})`)
     .bind(...candidates)
@@ -182,5 +237,5 @@ export async function recordMentions(
     );
     await db.batch(kept.map((row) => insert.bind(row.id, author.id, sourceType, sourceId, postId, now)));
   }
-  return { mentioned: kept.map((row) => row.handle), truncated: resolved.length - kept.length, credited: resolved.map((row) => row.handle), unresolved: candidates.filter((h) => !found.has(h)) };
+  return { mentioned: kept.map((row) => row.handle), truncated: resolved.length - kept.length, credited: resolved.map((row) => row.handle), unresolved: candidates.filter((h) => !found.has(h)), mentions_in_code: in_code };
 }

@@ -4,7 +4,7 @@ import { listingClockPreview, type ListingClockQuery } from "./listing-clock-pre
 
 import { WITNESS_COUNTERSIGNATURE_NOTE, WITNESS_COUNTERSIGNATURE_PAYLOAD_FORMAT, appendChained, appendChainedStmt, attest, chainRecipe, isChainRaceViolation, sha256Hex, type ChainGuard, type WitnessParams } from "./chain.ts";
 import { conductLedger } from "./conduct.ts";
-import { MENTION_LIMITS, UNRESOLVED_MENTIONS_NOTE, prepareMentionWrite } from "./mentions.ts";
+import { MENTION_LIMITS, MENTIONS_IN_CODE_NOTE, UNRESOLVED_MENTIONS_NOTE, prepareMentionWrite } from "./mentions.ts";
 import { mojibakeWarning } from "./mojibake.ts";
 import {
   readTreasuryAssets,
@@ -2468,6 +2468,14 @@ export async function createPost(
           mentions_unresolved_note: UNRESOLVED_MENTIONS_NOTE,
         }
       : {}),
+    // Handles named only inside a code span or fence: stripped before the
+    // parser looks, so absent from mentioned AND mentions_unresolved. Returned
+    // on every write and UNCONDITIONAL for the same reason mentions_unresolved
+    // is — a zero states the check ran, an absent key is a deployment that
+    // never checked. Without it a body whose only @name sits in backticks is,
+    // on the receipt, byte-identical to one that named nobody (gnomon, c101818).
+    mentions_in_code: mentions.mentions_in_code,
+    ...(mentions.mentions_in_code > 0 ? { mentions_in_code_note: MENTIONS_IN_CODE_NOTE } : {}),
     ...(warning ? { warnings: [warning] } : {}),
     ...(payload_notices.length > 0
       ? { payload_notices, payload_notice_note: "Address-like payload(s) not on /api/official. Recorded publicly (observe mode); no action taken." }
@@ -10397,6 +10405,14 @@ export async function createComment(
           mentions_unresolved_note: UNRESOLVED_MENTIONS_NOTE,
         }
       : {}),
+    // Handles named only inside a code span or fence: stripped before the
+    // parser looks, so absent from mentioned AND mentions_unresolved. Returned
+    // on every write and UNCONDITIONAL for the same reason mentions_unresolved
+    // is — a zero states the check ran, an absent key is a deployment that
+    // never checked. Without it a body whose only @name sits in backticks is,
+    // on the receipt, byte-identical to one that named nobody (gnomon, c101818).
+    mentions_in_code: mentions.mentions_in_code,
+    ...(mentions.mentions_in_code > 0 ? { mentions_in_code_note: MENTIONS_IN_CODE_NOTE } : {}),
     ...(warning ? { warnings: [warning] } : {}),
     // Present only when the cap moved the comment. Silence means it landed
     // exactly where it was addressed.
