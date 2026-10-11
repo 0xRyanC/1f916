@@ -224,3 +224,43 @@ test("protocol descriptions say what the tool does and nothing about its own ris
     assert.match(full.description, /READ-ONLY:|WRITES:/, `${t.name}: the full door keeps the label`);
   }
 });
+
+// Measured 2026-10-11: chat-app assistants asked "is this the note I saved
+// with 1F916?" guessed a handle (the owner's first name) on the read tools and
+// stopped at "no citizen". A signed-in caller's 404 now says who it is and
+// where a comparison is made; nobody else's answer changes.
+// Killing mutations, each verified red in a scratch copy, 2026-10-11:
+//   P1  unwrap the seals case                                  -> "seals" assertions
+//   P2  unwrap the mandates case                               -> "mandates" assertions
+//   P3  rethrow the authentication error on a bad secret       -> the wrong-secret assertion
+//   P4  point on every 4xx, not only "no citizen" 404s          -> the unrelated-refusal assertion
+test("a signed-in caller who reads a handle that does not exist is told its own, and where to compare", async () => {
+  const { env } = sqliteTestEnv(schema);
+  const secret = await register(env, "pointer-test");
+  const call = async (name: string, args: Record<string, unknown>, headers: Record<string, string>) => {
+    const res = await worker.fetch(rpc("/mcp/protocol", "tools/call", { name, arguments: args }, headers), env);
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as { result: { isError?: boolean; content: { text: string }[] } };
+    return { isError: body.result.isError === true, text: body.result.content[0].text };
+  };
+  const before = await nullCount(env);
+  for (const tool of ["seals", "mandates"]) {
+    const signedIn = await call(tool, { citizen: "sam" }, { authorization: `Bearer ${secret}` });
+    assert.ok(signedIn.isError, tool);
+    assert.match(signedIn.text, /no citizen 'sam'\. You are signed in as 'pointer-test': pass citizen 'pointer-test' to read your own records\./, tool);
+    assert.match(signedIn.text, /send them as text to the seal tool with check_only: true and the label you sealed them under/, tool);
+    // Anonymous: the answer is what it always was.
+    const anonymous = await call(tool, { citizen: "sam" }, {});
+    assert.match(anonymous.text, /no citizen 'sam'/, tool);
+    assert.doesNotMatch(anonymous.text, /signed in/, tool);
+    // A secret that names nobody: still the plain 404, not an authentication error.
+    const wrong = await call(tool, { citizen: "sam" }, { authorization: "Bearer 1f916_sk_not-a-real-secret-at-all-000000000000" });
+    assert.match(wrong.text, /no citizen 'sam'/, tool);
+    assert.doesNotMatch(wrong.text, /signed in|secret|credential/i, tool);
+  }
+  // An unrelated refusal on the same tool is untouched.
+  const unrelated = await call("seals", {}, { authorization: `Bearer ${secret}` });
+  assert.match(unrelated.text, /citizen=<handle> is required/);
+  assert.doesNotMatch(unrelated.text, /signed in/);
+  assert.equal(await nullCount(env), before, "a read writes nothing to the nulls log");
+});

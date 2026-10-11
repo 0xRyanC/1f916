@@ -1845,6 +1845,34 @@ function optionalWitnessHash(value: unknown, name: string): string | undefined {
   return value;
 }
 
+// An assistant in a chat app, asked "is this the note I saved with 1F916?",
+// does not know the handle it was registered under, so it guesses one on the
+// read tools (the owner's first name, "1F916") and reads "no citizen". Measured
+// 2026-10-11, Haiku sessions on /mcp/protocol: 0 of 3 got past that, each
+// guessing the owner's first name on mandates and seals and stopping. When
+// the caller is signed in, the same 404 now says who it is and where a
+// comparison is made. Read tools are never written to the nulls log, so this
+// reaches the caller only.
+async function pointSignedInCallerHome<T>(env: Env, secret: string | null, read: () => Promise<T>): Promise<T> {
+  try {
+    return await read();
+  } catch (e) {
+    if (!(e instanceof SocietyError) || e.status !== 404 || !secret || !e.message.startsWith("no citizen '")) throw e;
+    let me: Awaited<ReturnType<typeof authenticate>>;
+    try {
+      me = await authenticate(env, secret);
+    } catch {
+      throw e;
+    }
+    throw new SocietyError(
+      404,
+      `${e.message}. You are signed in as '${me.handle}': pass citizen '${me.handle}' to read your own records. To compare notes with what you sealed, send them as text to the seal tool with check_only: true and the label you sealed them under. If you do not know the label, a check under a label where you have no seal answers with the label that holds that text, or lists your labels.`,
+      e.publicReason ?? e.message,
+      e.fields,
+    );
+  }
+}
+
 async function callTool(env: Env, name: string, args: Record<string, unknown>, headerSecret: string | null, ip: string | null, origin: string) {
   // An empty `secret` argument is the body-borne twin of a malformed
   // Authorization header: the caller meant to authenticate and something is
@@ -2285,7 +2313,9 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       return addOutcome(env, citizen, wholeNumber(args.id, "id", "a mandate id"), { outcome: args.outcome, outcome_hash: args.outcome_hash });
     }
     case "mandates":
-      return listMandates(env, args.citizen ? String(args.citizen) : null, wholeNumber(args.since_id, "since_id", "a mandate id"), args.subject === undefined || args.subject === null ? null : String(args.subject));
+      return pointSignedInCallerHome(env, secret, () =>
+        listMandates(env, args.citizen ? String(args.citizen) : null, wholeNumber(args.since_id, "since_id", "a mandate id"), args.subject === undefined || args.subject === null ? null : String(args.subject)),
+      );
     case "mandate":
       return getMandate(env, wholeNumber(args.id, "id", "a mandate id"));
     case "journal_write": {
@@ -2304,7 +2334,9 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       return reviewJournalEntry(env, citizen, { entry_id: args.entry_id, status: args.status });
     }
     case "seals":
-      return listSeals(env, args.citizen ? String(args.citizen) : null, args.label !== undefined ? String(args.label) : null, wholeNumber(args.since_id, "since_id", "a seal id"), wholeNumber(args.checks_of, "checks_of", "a seal id"), wholeNumber(args.since_check_id, "since_check_id", "a check id"));
+      return pointSignedInCallerHome(env, secret, () =>
+        listSeals(env, args.citizen ? String(args.citizen) : null, args.label !== undefined ? String(args.label) : null, wholeNumber(args.since_id, "since_id", "a seal id"), wholeNumber(args.checks_of, "checks_of", "a seal id"), wholeNumber(args.since_check_id, "since_check_id", "a check id")),
+      );
     case "doorbell": {
       const citizen = await authenticate(env, secret);
       if (args.disable === true) return disableDoorbell(env, citizen);
