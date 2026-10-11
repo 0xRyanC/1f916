@@ -8132,19 +8132,85 @@ export async function sealOrCompare(env: Env, citizen: Citizen, body: SealInput,
     .first<{ id: number; hash: string }>();
   if (latest && latest.hash === v.hash) return await recordSealCheck(env, citizen, latest.id, v);
   const fields = { matched: false, hash: v.hash, label: v.label, latest: latest ? { id: latest.id, hash: latest.hash } : null, ...(v.fromText ? { from_text: true } : {}) };
-  if (!latest)
+  if (!latest) {
+    const steer = await steerToOwnLabel(env, citizen, v.hash);
     throw new SocietyError(
       409,
-      `check_only: you have no seal under label '${v.label}', so there is nothing to compare with. No seal and no check was written. Send it again without check_only to seal it.`,
+      `check_only: you have no seal under label '${v.label}', so nothing was compared. No seal and no check was written. ${steer.sentence}`,
       "seal check_only: no seal under that label to compare with",
-      fields,
+      { ...fields, ...steer.fields },
     );
+  }
   throw new SocietyError(
     409,
     `check_only: this is NOT what you last sealed under label '${v.label}'. What you sent: sha256=${v.hash}. What you sealed: sha256=${latest.hash} (seal ${latest.id}). No seal and no check was written. Either the content changed since you sealed it, or what you sent is not byte-identical to what you sealed (a trailing newline counts). If the change is yours, send it again without check_only to seal it.`,
     "seal check_only: the content sent does not match the latest seal under that label",
     fields,
   );
+}
+
+// A person who asks their assistant "is this the note I saved last time?"
+// names no label, and the assistant cannot guess one. Measured 2026-10-11
+// with fresh Claude sessions given only /mcp/protocol: told the label, 14 of
+// 15 checked correctly; not told it, 0 of 10 did. Every one of those ten sent
+// check_only under the empty label, read "no seal under label ''" with the
+// advice to seal it, and stopped, because nothing in the answer said where the
+// note was. The answer now says: the label holding a seal with this exact
+// fingerprint if there is one, and otherwise the caller's own labels to try.
+// It is the caller's own record, listed publicly at GET /api/seals anyway,
+// and goes only into the message; the public nulls log keeps the generic
+// reason. The steer never records a check under a label the caller did not
+// name: a check is testimony about the label asked for, so the caller asks
+// again.
+const STEER_LABELS = 10;
+async function steerToOwnLabel(env: Env, citizen: Citizen, hash: string): Promise<{ sentence: string; fields: Record<string, unknown> }> {
+  const same = await env.DB.prepare("SELECT id, label FROM seals WHERE citizen_id = ? AND hash = ? ORDER BY id DESC LIMIT 3")
+    .bind(citizen.id, hash)
+    .all<{ id: number; label: string }>();
+  const matches: { seal: number; label: string; latest: boolean; latest_seal: number }[] = [];
+  for (const s of same.results) {
+    if (matches.some((m) => m.label === s.label)) continue;
+    // Judged by content, not by row: a check under this label compares with
+    // the newest seal there, so "latest" means that seal holds these bytes.
+    const top = await env.DB.prepare("SELECT id, hash FROM seals WHERE citizen_id = ? AND label = ? ORDER BY id DESC LIMIT 1")
+      .bind(citizen.id, s.label)
+      .first<{ id: number; hash: string }>();
+    const topId = Number(top?.id ?? s.id);
+    const isLatest = (top?.hash ?? hash) === hash;
+    matches.push({ seal: isLatest ? topId : s.id, label: s.label, latest: isLatest, latest_seal: topId });
+  }
+  const labels = await env.DB.prepare(`SELECT label, MAX(id) AS latest FROM seals WHERE citizen_id = ? GROUP BY label ORDER BY latest DESC LIMIT ${STEER_LABELS}`)
+    .bind(citizen.id)
+    .all<{ label: string; latest: number }>();
+  const total = await env.DB.prepare("SELECT COUNT(DISTINCT label) AS n FROM seals WHERE citizen_id = ?").bind(citizen.id).first<{ n: number }>();
+  const labelsTotal = Number(total?.n ?? 0);
+  const fields = {
+    citizen: citizen.handle,
+    same_fingerprint: matches,
+    your_labels: labels.results.map((r) => ({ label: r.label, latest_seal: r.latest })),
+    labels_total: labelsTotal,
+  };
+  const current = matches.find((m) => m.latest);
+  if (current)
+    return {
+      sentence: `What you sent is identical to your latest seal under label '${current.label}' (seal ${current.seal}). To record the check there, send it again with check_only and label '${current.label}'.`,
+      fields,
+    };
+  if (matches.length > 0) {
+    const old = matches[0];
+    return {
+      sentence: `What you sent is identical to your seal ${old.seal} under label '${old.label}', but that is not your latest seal under that label: seal ${old.latest_seal} was sealed there after it, with different content. A check under '${old.label}' compares with seal ${old.latest_seal}, so it would be refused as a difference.`,
+      fields,
+    };
+  }
+  if (labels.results.length === 0)
+    return { sentence: "You have no seals under any label. Send it again without check_only to seal it.", fields };
+  const listed = labels.results.map((r) => `'${r.label}' (latest seal ${r.latest})`).join(", ");
+  const more = labelsTotal > labels.results.length ? `, and ${labelsTotal - labels.results.length} more at GET /api/seals?citizen=${encodeURIComponent(citizen.handle)}` : "";
+  return {
+    sentence: `None of your seals, under any label, has this fingerprint. You are ${citizen.handle}, and your labels, newest first, are: ${listed}${more}. To compare with one of them, send it again with check_only and that label.`,
+    fields,
+  };
 }
 
 // Served beside both seal listings.

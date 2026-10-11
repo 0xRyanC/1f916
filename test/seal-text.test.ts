@@ -241,8 +241,96 @@ test("check_only with nothing sealed under the label is refused, writes nothing 
   const e = await refusal(() => sealOrCompare(env, citizen, { text: "first look", label: "empty", check_only: true }));
   assert.equal(e.status, 409);
   assert.match(e.message, /no seal under label 'empty'/);
-  assert.deepEqual(e.fields, { matched: false, hash: sha("first look"), label: "empty", latest: null, from_text: true });
+  assert.match(e.message, /You have no seals under any label\. Send it again without check_only to seal it\./);
+  assert.deepEqual(e.fields, {
+    matched: false, hash: sha("first look"), label: "empty", latest: null, from_text: true,
+    citizen: "chatter", same_fingerprint: [], your_labels: [], labels_total: 0,
+  });
   assert.deepEqual(written(db), { seals: 0, checks: 0, events: 0 });
+});
+
+// Measured 2026-10-11, fresh Claude sessions on /mcp/protocol: asked "is this
+// the same note I saved with 1F916 last time?", 0 of 10 found the seal. Each
+// sent check_only under the empty label and stopped at "no seal under label
+// ''", because the answer never said where the note was.
+//
+// Killing mutations, each checked in a scratch copy before commit:
+//   - drop the steer (`${steer.sentence}` removed): the label is never named,
+//     red.
+//   - list labels oldest first (`ORDER BY latest ASC`): the order assertion,
+//     red.
+//   - drop the LIMIT on the label list: twelve labels are listed and "and 2
+//     more" is absent, red.
+//   - record the check under the steered label instead of refusing: a check
+//     row is written, red.
+//   - pass the message as the public reason: the label reaches the nulls log,
+//     red.
+test("check_only under a label with nothing sealed names the label that holds this content", async () => {
+  const { env, db, citizen } = fixture();
+  const note = "Dentist moved to Thursday 9:40.\nBudget $340.";
+  await sealOrCompare(env, citizen, { text: "an older, unrelated note", label: "errands" });
+  const sealed = (await sealOrCompare(env, citizen, { text: note, label: "wake-note" })) as Record<string, unknown>;
+  const before = written(db);
+
+  // No label: the caller asked about '' and has nothing there.
+  const e = await refusal(() => sealOrCompare(env, citizen, { text: note, check_only: true }));
+  assert.equal(e.status, 409);
+  assert.match(e.message, /no seal under label '', so nothing was compared/);
+  assert.match(e.message, new RegExp(`identical to your latest seal under label 'wake-note' \\(seal ${sealed.id}\\)`));
+  assert.match(e.message, /send it again with check_only and label 'wake-note'/);
+  assert.doesNotMatch(e.message, /without check_only to seal it/, "a caller who asked to compare is not told to seal");
+  assert.deepEqual(e.fields?.same_fingerprint, [{ seal: sealed.id, label: "wake-note", latest: true, latest_seal: sealed.id }]);
+  // The steer records nothing: the check is testimony about the label asked
+  // for, so the caller asks again under the one it meant.
+  assert.deepEqual(written(db), before);
+
+  // Following the steer records the check on that seal.
+  const followed = (await sealOrCompare(env, citizen, { text: note, label: "wake-note", check_only: true })) as Record<string, unknown>;
+  assert.equal(followed.checked, true);
+  assert.equal(followed.seal_id, sealed.id);
+
+  // The detail is the caller's; the public nulls log gets the generic reason.
+  const reason = nullReasonFor(e);
+  for (const detail of ["wake-note", "errands", sha(note), "chatter"]) assert.ok(!reason.includes(detail), `the public reason names '${detail}'`);
+});
+
+test("check_only content that matches none of the caller's seals lists their labels, newest first", async () => {
+  const { env, db, citizen } = fixture();
+  await sealOrCompare(env, citizen, { text: "kitchen shelves: $340", label: "errands" });
+  await sealOrCompare(env, citizen, { text: "kitchen shelves: $340, wall 82 cm", label: "wake-note" });
+  const before = written(db);
+  const e = await refusal(() => sealOrCompare(env, citizen, { text: "kitchen shelves: $430, wall 82 cm", check_only: true }));
+  assert.equal(e.status, 409);
+  assert.match(e.message, /None of your seals, under any label, has this fingerprint\./);
+  assert.match(e.message, /You are chatter, and your labels, newest first, are: 'wake-note' \(latest seal \d+\), 'errands' \(latest seal \d+\)\./);
+  assert.match(e.message, /send it again with check_only and that label/);
+  assert.deepEqual(written(db), before);
+
+  // Twelve labels: ten are named, the rest are counted and pointed at.
+  for (let i = 0; i < 10; i++) await sealOrCompare(env, citizen, { text: `filler ${i}`, label: `filler-${i}` });
+  const many = await refusal(() => sealOrCompare(env, citizen, { text: "nothing like it", check_only: true }));
+  assert.equal((many.fields?.your_labels as unknown[]).length, 10);
+  assert.equal(many.fields?.labels_total, 12);
+  assert.match(many.message, /'filler-9' \(latest seal \d+\), 'filler-8'/);
+  assert.match(many.message, /, and 2 more at GET \/api\/seals\?citizen=chatter\./);
+  assert.doesNotMatch(many.message, /'errands'/);
+});
+
+test("check_only content that matches an older seal says the label has moved on since", async () => {
+  const { env, db, citizen } = fixture();
+  const first = (await sealOrCompare(env, citizen, { text: "version one", label: "core" })) as Record<string, unknown>;
+  const second = (await sealOrCompare(env, citizen, { text: "version two", label: "core" })) as Record<string, unknown>;
+  const before = written(db);
+  const e = await refusal(() => sealOrCompare(env, citizen, { text: "version one", label: "notes", check_only: true }));
+  assert.match(
+    e.message,
+    new RegExp(`identical to your seal ${first.id} under label 'core', but that is not your latest seal under that label: seal ${second.id} was sealed there after it, with different content\\.`),
+  );
+  assert.deepEqual(e.fields?.same_fingerprint, [{ seal: first.id, label: "core", latest: false, latest_seal: second.id }]);
+  assert.deepEqual(written(db), before);
+  // And the claim holds: a check under 'core' is refused as a difference.
+  const under = await refusal(() => sealOrCompare(env, citizen, { text: "version one", label: "core", check_only: true }));
+  assert.match(under.message, /NOT what you last sealed under label 'core'/);
 });
 
 test("check_only with nothing sent to compare is refused as itself, not as a bad hash", async () => {
