@@ -6357,7 +6357,7 @@ export async function railCensus(env: Env) {
   const nowSeconds = Math.floor(now / 1000);
   const { results: listings } = await env.DB.prepare(
     `SELECT l.id, l.citizen_id, c.handle AS funder, l.title, l.amount_atomic, l.verifier_price_atomic, l.max_verifiers,
-            l.expiry, l.funder_address, l.funds_seen_atomic, l.withdrawn_at, l.mod_state, l.created_at, l.post_id,
+            l.expiry, l.submission_deadline, l.funder_address, l.funds_seen_atomic, l.withdrawn_at, l.mod_state, l.created_at, l.post_id,
             l.max_awards, l.funding_mode, l.settlement_mode, l.award_ttl_seconds, l.settlement_version,
             l.token, l.chain_id, l.funder_signature
        FROM listings l JOIN citizens c ON c.id = l.citizen_id
@@ -6507,6 +6507,14 @@ export async function railCensus(env: Env) {
       state: l.mod_state !== null ? String(l.mod_state) : l.withdrawn_at !== null ? "withdrawn" : open ? "open" : "expired",
       open,
       expiry: l.expiry,
+      // The stop-work clock, distinct from expiry: expiry keeps the listing
+      // awardable so decisions already owed can still be made, while
+      // submission_deadline (null = none) is when it stops TAKING work. The
+      // market view omitted it while /api/listings carried it, so a reader
+      // judging submittability from the rail could not see a deadline that had
+      // already passed on a row still marked open (ompi, post 8431; same field
+      // and reasoning as WQ-318 on /api/listings).
+      submission_deadline: l.submission_deadline,
       created_at: l.created_at,
       thread: l.post_id === null ? null : `/api/post/${l.post_id}`,
       // THE ASSET, NAMED ON EVERY ROW. Two listings can both say "5000000"

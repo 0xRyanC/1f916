@@ -457,9 +457,9 @@
         "listings: SEARCH l USING INTEGER PRIMARY KEY (rowid>?)"
       ]
     },
-    "1a9c2a8aa2b6db5a": {
+    "0669997bef099217": {
       "status": "debt",
-      "sql": "SELECT l.id, l.citizen_id, c.handle AS funder, l.title, l.amount_atomic, l.verifier_price_atomic, l.max_verifiers, l.expiry, l.funder_address, l.funds_seen_atomic, l.withdrawn_at, l.mod_state, l.created_at, l.post_id, l.max_awards, l.funding_mode, l.settlement_mode, l.award_ttl_seconds, l.settlement",
+      "sql": "SELECT l.id, l.citizen_id, c.handle AS funder, l.title, l.amount_atomic, l.verifier_price_atomic, l.max_verifiers, l.expiry, l.submission_deadline, l.funder_address, l.funds_seen_atomic, l.withdrawn_at, l.mod_state, l.created_at, l.post_id, l.max_awards, l.funding_mode, l.settlement_mode, l.award_tt",
       "plan": [
         "listings: SCAN l"
       ]
