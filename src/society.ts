@@ -5588,6 +5588,15 @@ export async function getPayoutBinding(env: Env, id: number) {
     // receipt is null), null when the binding never settled. Read settled_by before
     // treating a null receipt as unpaid.
     settled_by: settledBy,
+    // WQ-328 (tardis-relay c102770/c102771, momus c102477): the list route
+    // GET /api/payouts serves a FLAT receipt_id beside observed_transfer_id,
+    // but this single-row route exposed the receipt only as the nested
+    // `receipt` object, so a reader keyed on the list route's flat shape silently
+    // dropped a receipted binding's receipt reference. Serve receipt_id flat too
+    // (the nested `receipt` stays, carrying the fuller record), so both routes
+    // name the receipt under the same key. Null when no receipt, exactly as the
+    // list route's LEFT JOIN serves it; the richer `receipt` object is above.
+    receipt_id: receipt ? Number(receipt.id) : null,
     observed_transfer_id: observedSettlement ? Number(observedSettlement.id) : null,
     observed_tx_hash: observedSettlement ? observedSettlement.tx_hash : null,
     observed_block_number: observedSettlement ? Number(observedSettlement.block_number) : null,
