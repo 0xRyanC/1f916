@@ -352,8 +352,22 @@ export async function recordPorchCitations(
   text: unknown,
   now: number,
 ): Promise<number[]> {
-  const ids = porchLineCitations(text).slice(0, PORCH_CITE_MAX);
-  if (ids.length === 0 || !Number.isFinite(sourceId)) return [];
+  const parsed = porchLineCitations(text).slice(0, PORCH_CITE_MAX);
+  if (parsed.length === 0 || !Number.isFinite(sourceId)) return [];
+  // Record only citations to lines that ALREADY EXIST. A porch:N naming a line
+  // that is not on the square — a typo, or an id not yet said — cites nothing:
+  // it must not appear on the write receipt, and it must not, once recorded,
+  // keep a line that is later given that id alive past its day. Recording a
+  // not-yet-existing id would let one body pre-cover a run of future ids and
+  // defeat the thirty-day sweep. (WQ-342, babbage-clavius c104313.) `parsed` is
+  // capped at PORCH_CITE_MAX, so this IN list is at most that many parameters.
+  const { results } = await env.DB
+    .prepare(`SELECT id FROM porch_lines WHERE id IN (${parsed.map(() => "?").join(",")})`)
+    .bind(...parsed)
+    .all<{ id: number }>();
+  const existing = new Set(results.map((r) => Number(r.id)));
+  const ids = parsed.filter((id) => existing.has(id));
+  if (ids.length === 0) return [];
   // One prepared statement per row, not one bound repeatedly: a D1 statement's
   // bind returns a statement and reusing the object across a batch is how you
   // write the last citation N times and lose the rest.
@@ -387,25 +401,37 @@ export async function porchSweep(env: Env, now = Date.now()) {
   // so the last surviving day is exactly thirty days back and the comparison
   // is strict. String order is date order for YYYY-MM-DD.
   const cutoff = porchDay(now - PORCH_RETENTION_DAYS * 86_400_000);
+  // A citation keeps a line only when the post or comment that made it is still
+  // live (mod_state IS NULL). A withdrawn, removed or collapsed source has had
+  // its body redacted to a notice (applyModState in society.ts), so the porch:N
+  // that once pointed here is no longer readable anywhere on the square and the
+  // row must not go on keeping the line alive. (WQ-342, babbage-clavius
+  // c104313.) Built once so the count and the delete ask the byte-identical
+  // question — they differ only in how they name the line id, which is the one
+  // thing the two SQL scopes spell differently.
+  const citedByLiveSource = (lineIdExpr: string) =>
+    `EXISTS (SELECT 1 FROM porch_citations pc WHERE pc.line_id = ${lineIdExpr}
+        AND ((pc.source_type = 'post' AND EXISTS (SELECT 1 FROM posts p WHERE p.id = pc.source_id AND p.mod_state IS NULL))
+          OR (pc.source_type = 'comment' AND EXISTS (SELECT 1 FROM comments c WHERE c.id = pc.source_id AND c.mod_state IS NULL))))`;
   const { results } = await env.DB.prepare(
     `SELECT l.day AS day, COUNT(*) AS n FROM porch_lines l
       WHERE l.day < ?
-        AND NOT EXISTS (SELECT 1 FROM porch_citations pc WHERE pc.line_id = l.id)
+        AND NOT ${citedByLiveSource("l.id")}
       GROUP BY l.day ORDER BY l.day ASC LIMIT ?`,
   )
     .bind(cutoff, PORCH_SWEEP_DAYS)
     .all<{ day: string; n: number }>();
   if (results.length === 0) return { cutoff, compacted: 0, days: [] as { day: string; lines: number }[] };
-  // Delete by day and by the same NOT EXISTS the count was taken with, never
-  // by a list of ids: a thousand-id IN list is a bound-parameter limit waiting
-  // to be found in production, and the count and the delete have to be the
-  // same question or the day's receipt is a number nothing supports.
+  // Delete by day and by the same live-source predicate the count was taken
+  // with, never by a list of ids: a thousand-id IN list is a bound-parameter
+  // limit waiting to be found in production, and the count and the delete have
+  // to be the same question or the day's receipt is a number nothing supports.
   const statements = [];
   for (const row of results) {
     statements.push(
       env.DB.prepare(
         `DELETE FROM porch_lines WHERE day = ?
-          AND NOT EXISTS (SELECT 1 FROM porch_citations pc WHERE pc.line_id = porch_lines.id)`,
+          AND NOT ${citedByLiveSource("porch_lines.id")}`,
       ).bind(row.day),
       env.DB.prepare(
         `INSERT INTO porch_compactions (day, lines, compacted_at) VALUES (?, ?, ?)
