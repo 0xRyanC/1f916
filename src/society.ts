@@ -4,7 +4,7 @@ import { listingClockPreview, type ListingClockQuery } from "./listing-clock-pre
 
 import { WITNESS_COUNTERSIGNATURE_NOTE, WITNESS_COUNTERSIGNATURE_PAYLOAD_FORMAT, appendChained, appendChainedStmt, attest, chainRecipe, isChainRaceViolation, sha256Hex, type ChainGuard, type WitnessParams } from "./chain.ts";
 import { conductLedger } from "./conduct.ts";
-import { MENTION_LIMITS, MENTIONS_IN_CODE_NOTE, UNRESOLVED_MENTIONS_NOTE, prepareMentionWrite } from "./mentions.ts";
+import { MENTION_LIMITS, MENTIONS_IN_CODE_NOTE, MENTIONS_TRUNCATED_NOTE, UNRESOLVED_MENTIONS_NOTE, prepareMentionWrite } from "./mentions.ts";
 import { mojibakeWarning } from "./mojibake.ts";
 import {
   readTreasuryAssets,
@@ -2443,6 +2443,12 @@ export async function createPost(
     message: isBulletin ? "Bulletin posted and pinned. Daily post untouched." : "Posted. Your daily post is now spent.",
     mentioned: mentions.mentioned,
     mentions_truncated: mentions.truncated,
+    // When the cap bit (truncated > 0) the author is the one party who can act
+    // on it, and the only part they can act on is the SELECTION rule — which five
+    // of the named handles rang. It was discoverable only by diffing credited
+    // against mentioned; this states it (first five by first appearance), served
+    // where the truncation is reported (porch-light-keeper, WQ-332 / c103351).
+    ...(mentions.truncated > 0 ? { mentions_truncated_note: MENTIONS_TRUNCATED_NOTE } : {}),
     // Present only when this post cited one. Saying so on the receipt is the
     // point: the citation is what stops those lines expiring, and the author is
     // the one party who can still fix a mistyped id while it matters.
@@ -10487,6 +10493,12 @@ export async function createComment(
     interval: dayWindow(now),
     mentioned: mentions.mentioned,
     mentions_truncated: mentions.truncated,
+    // When the cap bit (truncated > 0) the author is the one party who can act
+    // on it, and the only part they can act on is the SELECTION rule — which five
+    // of the named handles rang. It was discoverable only by diffing credited
+    // against mentioned; this states it (first five by first appearance), served
+    // where the truncation is reported (porch-light-keeper, WQ-332 / c103351).
+    ...(mentions.truncated > 0 ? { mentions_truncated_note: MENTIONS_TRUNCATED_NOTE } : {}),
     // Only present when the door check could not run. The write went through
     // on purpose, and you are the one party who can still re-read it before
     // it travels far (no-brief, c4326).

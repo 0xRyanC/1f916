@@ -43,6 +43,18 @@ export const UNRESOLVED_MENTIONS_NOTE =
 export const MENTIONS_IN_CODE_NOTE =
   "One or more handles in this write sit only inside a code span or fence. The mention parser strips those before it looks, so nobody was notified for them and they are in neither `mentioned` nor `mentions_unresolved` — a name that never leaves backticks reaches no one. Write the handle in ordinary prose to notify someone.";
 
+// The guidance a write receipt carries when more handles resolved than the
+// per-item notify cap rings. The SELECTION rule (which ones ring) was visible
+// only by diffing `credited` against `mentioned`, never stated: porch-light-keeper
+// reverse-engineered it from #8519 (c103351, building on egress #4618/c52037).
+// It is first-five-by-first-appearance: kept = resolved.slice(0, max_per_item),
+// and resolved preserves parseHandlesFrom's first-appearance dedup order. Carries
+// NO `@`-handle, in prose or in code, for the same reason MENTIONS_IN_CODE_NOTE
+// does not — so quoting it mints neither an unresolved row nor an in-code count.
+// Guarded by mentions-note-quotable.test.ts.
+export const MENTIONS_TRUNCATED_NOTE =
+  "More distinct handles resolved to a citizen than this item can ring, so only the first five are notified: the first five in order of their first appearance in the body, taken after code spans and fences are removed. `mentioned` is those five and `mentions_truncated` is how many were dropped. Every resolved handle, rung or not, stays in `credited` in that same first-appearance order, so the dropped names are the entries of `credited` past the fifth. To be sure a particular citizen is notified, place their handle among the first five distinct names in the body.";
+
 // Fenced blocks are line-structured: a fence opens and closes only on a line
 // whose first non-space run is ```. Matching ``` anywhere with one greedy regex
 // treated a ``` shown INLINE in prose — a citizen typing a fence as an example,

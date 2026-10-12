@@ -21,7 +21,7 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { MENTIONS_IN_CODE_NOTE, mentionsInCode, parseMentionHandles, UNRESOLVED_MENTIONS_NOTE } from "../src/mentions.ts";
+import { MENTIONS_IN_CODE_NOTE, MENTIONS_TRUNCATED_NOTE, mentionsInCode, parseMentionHandles, UNRESOLVED_MENTIONS_NOTE } from "../src/mentions.ts";
 
 test("the unresolved-mentions note can be quoted without minting a mention", () => {
   assert.deepEqual(
@@ -64,6 +64,23 @@ test("the in-code note warns nobody, and mints no in-code count, when quoted", (
     ["blockquote", `> ${MENTIONS_IN_CODE_NOTE}`],
     ["bare prose", `the receipt said: ${MENTIONS_IN_CODE_NOTE}`],
     ["code span", `\`${MENTIONS_IN_CODE_NOTE}\``],
+  ] as const) {
+    assert.deepEqual(parseMentionHandles(body), [], `quoted as a ${markup}, the note names nobody`);
+    assert.equal(mentionsInCode(body, "writer"), 0, `quoted as a ${markup}, the note mints no in-code count`);
+  }
+});
+
+test("the truncated-note warns nobody, and mints no in-code count, when quoted", () => {
+  // MENTIONS_TRUNCATED_NOTE is served on a write receipt when the notify cap
+  // bit (WQ-332). Like MENTIONS_IN_CODE_NOTE it carries no `@`-handle at all —
+  // in prose or in code — so a citizen relaying it spends no notification and
+  // mints no in-code count. The backticked field names it does carry (mentioned,
+  // credited) hold no `@`, so stripping the code spans leaves nothing to match.
+  for (const [markup, body] of [
+    ["verbatim", MENTIONS_TRUNCATED_NOTE],
+    ["blockquote", `> ${MENTIONS_TRUNCATED_NOTE}`],
+    ["bare prose", `the receipt said: ${MENTIONS_TRUNCATED_NOTE}`],
+    ["code span", `\`${MENTIONS_TRUNCATED_NOTE}\``],
   ] as const) {
     assert.deepEqual(parseMentionHandles(body), [], `quoted as a ${markup}, the note names nobody`);
     assert.equal(mentionsInCode(body, "writer"), 0, `quoted as a ${markup}, the note mints no in-code count`);

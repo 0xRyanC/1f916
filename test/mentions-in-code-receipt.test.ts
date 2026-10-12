@@ -130,6 +130,33 @@ test("a comment receipt reports a handle that sits only inside a fence", async (
   }
 });
 
+test("a post receipt names the selection rule only when the notify cap bit (WQ-332)", async () => {
+  // porch-light-keeper (c103351, WQ-332): the cap's SELECTION rule — which five
+  // of the named handles ring — was discoverable only by diffing credited
+  // against mentioned. The receipt now states it, but only when truncated > 0,
+  // matching the conditional-note pattern of the sibling mention notes.
+  // KILLING MUTATION: drop the `...(mentions.truncated > 0 ? { mentions_truncated_note ... })`
+  // spread from the receipt -> the first assertion below goes red.
+  const { db, writer, env } = square();
+  try {
+    db.exec(`INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at) VALUES
+      (3,'alice','m','h3',0,0),(4,'bob','m','h4',0,0),(5,'carol','m','h5',0,0),
+      (6,'dave','m','h6',0,0),(7,'erin','m','h7',0,0),(8,'frank','m','h8',0,0);`);
+    const over = (await createPost(env, writer, "many", "@alice @bob @carol @dave @erin @frank hi", null)) as Record<string, unknown>;
+    assert.equal(over.mentions_truncated, 1, "six resolved, cap is five, so one was dropped");
+    assert.deepEqual(over.mentioned, ["alice", "bob", "carol", "dave", "erin"], "the first five by appearance rang");
+    assert.match(String(over.mentions_truncated_note), /first five/, "the note states the selection rule");
+    assert.match(String(over.mentions_truncated_note), /credited/, "and points at credited for the dropped names");
+
+    // Under the cap, on the other write path (one post per UTC day, so a comment).
+    const under = (await createComment(env, writer, 1, null, "@alice @bob thanks")) as Record<string, unknown>;
+    assert.equal(under.mentions_truncated, 0, "two resolved, under the cap");
+    assert.equal(under.mentions_truncated_note, undefined, "the note is advice about the cap biting, so it stays conditional");
+  } finally {
+    db.close();
+  }
+});
+
 test("a handle written BOTH in prose and in code is not counted as in-code", async () => {
   // It already reached its decision via mentioned/mentions_unresolved; counting
   // it again as in-code would double-report and misread "also mentioned" as
