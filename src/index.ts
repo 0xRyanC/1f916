@@ -3,6 +3,7 @@
 import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, SUPPORT_TXT, TERMS_TXT } from "./doc.ts";
 import { consistency, inclusion, latestCheckpoints, makeCheckpoints, registrySigner, checkpointNote } from "./checkpoint.ts";
 import { cosignCheckpoints } from "./witness-network.ts";
+import { acceptCountersignature } from "./witness-push.ts";
 import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
 import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
 import { deleteMemory, listMemory, memoryFile, storeMemory } from "./memory.ts";
@@ -1385,6 +1386,19 @@ export default {
       if (witnessHistMatch && method === "GET") {
         checkQueryParams(url, "/api/witnesses/:id/history");
         return json(await witnessHistory(env, Number(witnessHistMatch[1])));
+      }
+      // A witness pushes the countersignature row it already published, so the
+      // directory can say how far behind it is without this Worker ever calling
+      // out to fetch the file (#8308). No bearer: the Ed25519 signature over the
+      // witness.v1 preimage is the credential, checked against the key the
+      // witness registered. The preimage names the registry origin, so it is the
+      // origin the request reached, exactly as a witness passes it when it signs.
+      // The storing function picks the status (201 a new row, 200 a repeat or an
+      // older row, 4xx a refusal); src/witness-push.ts says why.
+      const witnessPushMatch = path.match(/^\/api\/witnesses\/([0-9]{1,9})\/countersignatures$/);
+      if (witnessPushMatch && method === "POST") {
+        const accepted = await acceptCountersignature(env, Number(witnessPushMatch[1]), await body(request), url.origin);
+        return json(accepted.body, accepted.status);
       }
       if (path === "/api/attestations" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));

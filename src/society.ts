@@ -1,6 +1,7 @@
 // The society's rules and records. Every door (JSON API, MCP) calls into here.
 import { WITNESS_CADENCE, WITNESS_STANDING } from "./witness-cadence.ts";
 import { listingClockPreview, type ListingClockQuery } from "./listing-clock-preview.ts";
+import { lagSeconds, latestCountersignatures } from "./witness-push.ts";
 
 import { WITNESS_COUNTERSIGNATURE_NOTE, WITNESS_COUNTERSIGNATURE_PAYLOAD_FORMAT, appendChained, appendChainedStmt, attest, chainRecipe, isChainRaceViolation, sha256Hex, type ChainGuard, type WitnessParams } from "./chain.ts";
 import { conductLedger } from "./conduct.ts";
@@ -9242,7 +9243,14 @@ export async function disableDoorbell(env: Env, citizen: Citizen) {
 // as TAG_DIRECTORY_PAGE / FLAG_QUEUE_PAGE). Completeness fields already ship.
 export const WITNESS_DIRECTORY_PAGE = 100;
 
-export async function listWitnesses(env: Env) {
+// Prose beside countersignature_note for the pushed receipts in `countersigned`.
+// The Worker never fetches a witness file (src/witness-cadence.ts), so a push is
+// the only way the registry learns what a witness has signed, and this note
+// says how a reader checks the lag it derives from that.
+export const WITNESS_COUNTERSIGNED_NOTE =
+  "`countersigned` is the newest countersignature each witness POSTed to this registry, per log, or null when it pushed none for that log. Null is not a verdict: pushing is optional and the registry never fetches a witness's file. `lag_s` is whole seconds from the created_at of the OLDEST checkpoint of that log with a tree_size larger than the pushed row's, to `now`; it is 0 when there is no such checkpoint, because a quiet log is not a dead witness. Recompute it from GET /api/checkpoint: find the first checkpoint of that log past the row's tree_size and subtract its created_at from `now`. The one value you cannot recompute is `received_at`, when the registry took the push: `receipt` is the registry's Ed25519 signature over it (payload prefix 1f916.witness-receipt.v1), verifiable against registry_public_key. `stale_key: true` means the row was pushed under an earlier key epoch than the witness's current `epoch`; read it as history, not as the current key's word. `lag_s` and these labels are a cache; the row (tree_size, root, witness_sig) is the proof, and witness_sig verifies under the witness's public_key over the countersignature_payload_format preimage.";
+
+export async function listWitnesses(env: Env, nowMs: number = Date.now()) {
   const { results } = await env.DB.prepare(
     `SELECT w.id, w.name, w.url, w.public_key, w.epoch, w.key_set_at, w.added_at, c.handle AS operator FROM witnesses w JOIN citizens c ON c.id = w.citizen_id ORDER BY w.id ASC LIMIT ${WITNESS_DIRECTORY_PAGE}`,
   ).all();
@@ -9261,13 +9269,38 @@ export async function listWitnesses(env: Env) {
   // c6077) would see the same witness twice, once with public_key: null, with
   // no way to tell which row to pin. It is a registered row now like anyone
   // else's, so this list is exactly the table.
+  //
+  // Pushed receipts: one read for the whole page (at most 2 stored rows per
+  // witness), then one lag query per present entry. A witness that never pushed
+  // serves null for both logs.
+  const pushed = results.length ? await latestCountersignatures(env, results.map((r) => (r as { id: number }).id)) : null;
+  const witnesses = await Promise.all(
+    results.map(async (r) => {
+      const row = r as { id: number; epoch: number };
+      const mine = pushed?.get(row.id) ?? {};
+      const entry = async (log: "identity_events" | "ledger") => {
+        const c = mine[log];
+        if (!c) return null;
+        return {
+          ...c,
+          lag_s: await lagSeconds(env, log, c.tree_size, nowMs),
+          // The key rotated after this row was pushed: it is the earlier
+          // key's word, not the current key's.
+          ...(c.witness_epoch < row.epoch ? { stale_key: true } : {}),
+        };
+      };
+      const [identity_events, ledger] = await Promise.all([entry("identity_events"), entry("ledger")]);
+      return { ...(r as object), alg: "ed25519", countersigned: { identity_events, ledger } };
+    }),
+  );
   return {
-    witnesses: results.map((r) => ({ ...(r as object), alg: "ed25519" })),
+    witnesses,
     count: results.length,
     total,
     has_more: results.length < total,
     countersignature_payload_format: WITNESS_COUNTERSIGNATURE_PAYLOAD_FORMAT,
     countersignature_note: WITNESS_COUNTERSIGNATURE_NOTE,
+    countersigned_note: WITNESS_COUNTERSIGNED_NOTE,
     directory_contract:
       "Every row is a POINTER a citizen registered, never an endorsement. `id` is stable and is the discovery key; `alg` is ed25519 for every row in this version; `public_key` is base64url raw Ed25519, or null when the operator registered a location before generating a key — a null key can never be pinned, so a verifier MUST treat such a row as undiscoverable rather than trusting the file it points at. Key changes are not silent: a rotation requires cross-signatures and appends a witness-rotate event to the identity log, so this directory's history is checkable rather than merely current.",
     how_to_join:
