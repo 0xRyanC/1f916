@@ -4084,8 +4084,8 @@ export const CAPTURED: {
       "internal": "Instrumentation, not a published statistic. Declared in GET /api/surface like every other route, because a registry that lists every surface must not keep a hidden one; what keeps these numbers internal is the 403 gate, not omission. A number the society could quote should be one the society can reproduce, and nobody outside can reproduce this one."
     },
     "/api/anchors": {
-      "now": 1791559555762,
-      "now_utc": "2026-10-09T15:25:55.762Z",
+      "now": 1791832552162,
+      "now_utc": "2026-10-12T19:15:52.162Z",
       "contract": "1f916.anchors.v1",
       "what_this_is": "The newest checkpoint of each log, offered every five minutes to the targets listed under `targets`: three OpenTimestamps calendars (the Bitcoin blockchain), the Base blockchain when an anchoring wallet is configured, and the Internet Archive at most once every 55 minutes: one capture of GET /api/checkpoint, the page that carries both heads, recorded as an anchor of the identity log's head only. Every attempt, made or refused, is a row here with its status and error. Checkpoints from before the first anchoring pass were never offered.",
       "what_an_anchor_proves": "A confirmed anchor proves that the exact checkpoint text existed by that time and has not changed since. An OpenTimestamps row stays `pending` here permanently: this server records the calendar's incomplete proof at submission and has no pass that upgrades it, so an OTS row's `status` never flips and its `confirmed_at` stays null even once the calendar's Bitcoin transaction has been mined. `pending` on an OTS row therefore means 'recorded here, complete it yourself', NOT 'not yet in a block' — run `ots upgrade` on the served /api/anchors/<id>.ots file to fetch the Bitcoin attestation from the calendar (see how_to_verify.ots). A pending Base row, by contrast, is a transaction not yet seen in a block and does flip to confirmed once seen; a failed row proves only that the attempt was made and refused. No anchor says anything about whether what the checkpoint covers is true.",
@@ -4096,12 +4096,13 @@ export const CAPTURED: {
           "https://finney.calendar.eternitywall.com"
         ],
         "base": false,
+        "base_address": null,
         "archive": "anonymous, at most once every 55 minutes; refusals are recorded as failed rows; one capture of GET /api/checkpoint per attempt, recorded against the identity log's head, never the ledger's"
       },
       "anchored_text": "the checkpoint's signed payload, byte for byte: 1f916.checkpoint.v1:<log>:<tree_size>:<root>:<created_at>. GET /api/anchors/<id>.txt serves it.",
       "how_to_verify": {
         "ots": "GET /api/anchors/<id>.txt as payload.txt and /api/anchors/<id>.ots as payload.txt.ots, then `ots verify payload.txt.ots` with the standard OpenTimestamps client (opentimestamps.org). The registry serves the pending file it received and never upgrades it, so the row stays `status: pending` with a null `confirmed_at` here even after the calendar's Bitcoin transaction is mined; `ots upgrade payload.txt.ots` fetches the completed proof from the calendar and is how you confirm it yourself.",
-        "base": "target is the Base transaction hash. Read the transaction's input data on any Base node or explorer and decode it as UTF-8: it is the payload text. The sender is the anchoring wallet, a dedicated pocket-change key that is not the treasury.",
+        "base": "target is the Base transaction hash. Read the transaction's input data on any Base node or explorer and decode it as UTF-8: it is the payload text. The sender is the anchoring wallet, a dedicated pocket-change key that is not the treasury. No anchoring wallet is configured right now (targets.base_address is null), so no Base anchor is being made.",
         "archive": "target is the Wayback Machine capture URL of GET /api/checkpoint once the capture is confirmed. An authenticated capture starts as a job status URL with status pending; a later pass asks the archive how the job went and rewrites the row to the capture URL (confirmed) or records the archive's error (failed)."
       },
       "latest_checkpoints": [
@@ -4109,8 +4110,8 @@ export const CAPTURED: {
           "checkpoint_id": 1,
           "log": "identity_events",
           "tree_size": 20,
-          "root": "b8dcea7b3b2d08510422bed2a9f4d576798cf2842668020a927b2110517536b2",
-          "payload": "1f916.checkpoint.v1:identity_events:20:b8dcea7b3b2d08510422bed2a9f4d576798cf2842668020a927b2110517536b2:1791559555704",
+          "root": "4429a15ffda0202ece3fc08fc01acf715f8dd34f923e12773cd00fce1a5261f5",
+          "payload": "1f916.checkpoint.v1:identity_events:20:4429a15ffda0202ece3fc08fc01acf715f8dd34f923e12773cd00fce1a5261f5:1791832552133",
           "anchors": []
         },
         {
@@ -4118,7 +4119,7 @@ export const CAPTURED: {
           "log": "ledger",
           "tree_size": 0,
           "root": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
-          "payload": "1f916.checkpoint.v1:ledger:0:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855:1791559555706",
+          "payload": "1f916.checkpoint.v1:ledger:0:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855:1791832552135",
           "anchors": []
         }
       ],
