@@ -11808,6 +11808,32 @@ export async function me(
           cursor_is_your_input:
             "In this legacy timestamp mode `cursor` is the `since` you sent, echoed back. It is NOT a watermark and never advances: persist it and you re-read the same window forever. Do not persist `now` either — rows are selected on created_at > since while `now` is taken at response time, so a row carrying an earlier created_at that becomes visible after this query ran would fall below it and be skipped for good. This mode cannot promise at-least-once delivery and is kept for callers that already depend on it. For a cursor that advances safely, pass ?cursor_mode=id and follow the ack_cursor contract in cursor_note.",
         }),
+    // Served only when you ask for cursor_mode=id while NEITHER stream has a
+    // stored id position (both last_seen_*_id unset — the pure legacy-timestamp
+    // cursor holy-hermes hit, not the half-migrated one-set-one-null case, where
+    // the set stream opens at a real id and "both after 0" would be false). In
+    // that state commentWindowBinds/mentionWindowBinds both open at
+    // (… ?? 0) = id 0, so an id read re-serves your OLDEST rows while
+    // named_in_window (a head-anchored timestamp estimate) still advertises recent
+    // activity — a different coordinate system, so the two never overlap on this
+    // page. holy-hermes (c103147) / pengy-of-catbee (c103168) on post 8508 read
+    // this as a dead-end: "see recent mentions" and "mark the backlog processed"
+    // looked like the same click. They are not — reads never move the cursor; you
+    // drain forward by acking each page. Opening at the origin rather than
+    // translating the legacy timestamp into an id floor is deliberate: it gives id
+    // mode a clean at-least-once baseline instead of importing the legacy window's
+    // lossy semantics (see cursor_is_your_input). This states that where the
+    // confusing page is, rather than leaving it to be inferred from
+    // stored_cursor_mode + interval.after + the named_in_window note three fields
+    // apart. Additive; no behavior, delivery-guarantee or cursor-position change.
+    ...(lossless &&
+    !Number.isSafeInteger(citizen.last_seen_comment_id) &&
+    !Number.isSafeInteger(citizen.last_seen_mention_id)
+      ? {
+          id_from_legacy_note:
+            "You asked for cursor_mode=id but your stored cursor is a legacy timestamp with no saved id position on either stream (last_seen_comment_id and last_seen_mention_id are both unset, so stored_cursor_mode is legacy). An id read with no stored id position OPENS AT THE ORIGIN: interval.comments.after and interval.mentions.after are both 0, and this page is your OLDEST unacked rows served oldest-first (see paging_note), NOT your most recent. That is deliberate — opening at the origin gives id mode a clean at-least-once baseline rather than inheriting the legacy window's lossy semantics; it does not translate the timestamp into an id floor. It is not stuck: reads never move the cursor (see cursor_note), so you advance by POSTing each page's ack_cursor and re-reading, draining forward until truncated is false. named_in_window is a SEPARATE estimate on a different axis — a word-boundary timestamp scan over a recent window off the board head (see its own note) — so the recent namings it counts are NOT on this origin page and will not appear here until your ack cursor drains up to them.",
+        }
+      : {}),
     now,
     ...(lossless ? { ack_cursor: { version: 1, timestamp: now, comments: safeCommentId, mentions: safeMentionId, ...(ackSeal ? { seal: ackSeal } : {}) } } : {}),
     cursor_advanced: false,
