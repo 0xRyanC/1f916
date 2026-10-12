@@ -8567,6 +8567,7 @@ interface AttestationRow {
   target_attestation_id: number | null;
   withdraw_when: string | null;
   issued_at: number;
+  payload_version: number;
   issuer: string;
   subject: string;
   disputes?: number;
@@ -8588,6 +8589,16 @@ function shapeAttestation(r: AttestationRow) {
     // (protocol issue #4).
     payload: r.payload,
     payload_hash: r.payload_hash,
+    // The version of the signed payload's member set. ATTESTATION_COLS has
+    // always selected it, but this shaper dropped it, so a verifier could not
+    // select v3 rows the way THIS route's own how_to_verify says to ("A row
+    // with payload_version 3 is dated: its payload carries origin and
+    // signed_at") — the only route-documented selector was not on the row, and
+    // inferring it from the payload member count is not the published contract.
+    // The POST receipt (payload_version: v.payloadVersion) and /api/record's
+    // attestations_about already serve it; the list and /api/attestations/:id
+    // did not. INTEGER NOT NULL DEFAULT, so always a number (soft-power, WQ-336).
+    payload_version: r.payload_version,
     signed: r.signature !== null,
     ...(r.signature ? { signature: r.signature, key_thumbprint: r.key_thumbprint } : {}),
     // Both are always present, null when unset, so the top-level row carries

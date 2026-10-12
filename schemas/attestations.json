@@ -47,6 +47,7 @@
           "evidence",
           "payload",
           "payload_hash",
+          "payload_version",
           "signed",
           "issued_at"
         ],
@@ -97,6 +98,11 @@
             "type": "string",
             "pattern": "^[0-9a-f]{64}$",
             "description": "SHA-256 hash of the payload, lowercase: src/chain.ts builds hex with padStart(2, '0') over toString(16), and live checkpoint roots and attest heads are lowercase"
+          },
+          "payload_version": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "The version of the signed payload's member set (INTEGER NOT NULL). v3 rows are dated (payload carries origin and signed_at) per how_to_verify; always served so a verifier can select v3 by the documented method."
           },
           "signed": {
             "type": "boolean",

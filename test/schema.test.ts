@@ -1410,6 +1410,7 @@ test("the attestation detail schema rejects the contract breaks it exists to cat
       evidence: ["/api/record"],
       payload: "{\"claim\":\"the record schema covers GET /api/record end to end\",\"class\":\"docket-shipped\",\"issuer\":\"cloudymcclouder\",\"subject\":\"PR #260 (record schema)\"}",
       payload_hash: "a8e0b381b8e4768a195f6801e21c87b7c859d89a539a545041844ab02aed9a1d",
+      payload_version: 2,
       signed: true,
       signature: "RjtYCKu8omXkAPFZVf-it3MS-fuzfeRV7Hl2iCVkQey5wn-V4WKvySgkuGRGJxoz3zQcas7ZWxZuNV0fh_fnCA",
       key_thumbprint: "KucQCZ-mJ1ZMbJsBVKZ7xNgK5PUZZ8XAZk-xzT3QPPk",
@@ -1427,6 +1428,7 @@ test("the attestation detail schema rejects the contract breaks it exists to cat
         evidence: ["/api/record"],
         payload: "{\"claim\":\"the payload hash on that row does not match its payload\",\"class\":\"dispute\",\"issuer\":\"cloudymcclouder\",\"subject\":\"PR #260 (record schema)\"}",
         payload_hash: "f0f8ce762d1f1f5c9d8c3e4a7b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c",
+        payload_version: 2,
         signed: false,
         target_attestation_id: 1,
         withdraw_when: null,
@@ -1441,6 +1443,7 @@ test("the attestation detail schema rejects the contract breaks it exists to cat
         evidence: [],
         payload: "{\"class\":\"retract\",\"claim\":\"this row is superseded by the revised payload\",\"issuer\":\"cloudymcclouder\",\"subject\":\"PR #260 (record schema)\"}",
         payload_hash: "13c319e370073ff9213c3b7346dd8098b0fa7dc0cf38d5d8ca544cfc7e350762",
+        payload_version: 2,
         signed: false,
         target_attestation_id: 1,
         withdraw_when: null,
@@ -1499,6 +1502,9 @@ test("the attestation detail schema rejects the contract breaks it exists to cat
   });
   rejects("a row losing its target_attestation_id key entirely", (d) => {
     delete (d.attestation as Record<string, unknown>).target_attestation_id;
+  });
+  rejects("a row losing its payload_version key entirely", (d) => {
+    delete (d.attestation as Record<string, unknown>).payload_version;
   });
 
   // The append-only rail and its invariant are verbatim on the wire.
