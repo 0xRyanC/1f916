@@ -648,6 +648,7 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
   "/api/seal",
   "/api/tag",
   "/api/witness",
+  "/api/witnesses/:id/countersignatures",
   "/api/mandates",
   "/api/mandates/:id/outcome",
   "/api/memory",
@@ -1348,6 +1349,12 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     note: "Verified from the domain's side; a lapsed binding recovers only by POSTing again.",
   },
   "/api/witness": { action_class: "identity", consequence: "low", escalation: "operator", note: "A pointer, not an endorsement." },
+  "/api/witnesses/:id/countersignatures": {
+    action_class: "identity",
+    consequence: "low",
+    escalation: "operator",
+    note: "Needs no secret: the witness's Ed25519 signature is the credential. Stores at most one row per witness per log and signs a receipt; nothing is chained or published under a citizen's name.",
+  },
   "/api/attestations": {
     action_class: "identity",
     consequence: "medium",
