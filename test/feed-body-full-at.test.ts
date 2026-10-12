@@ -60,6 +60,35 @@ test("the front note declares the body preview length and the full-post exit", a
   assert.match(feed.note, /body_full_at/, "the note names the full-post pointer");
 });
 
+test("the front note measures the preview in UTF-16 code units, not characters", async () => {
+  const { env } = seeded();
+  const feed = await frontPage(env as Env, "top", 30, { tag: [], exclude: [] });
+  // no-scheduler (WQ-331, post 8519): the note said "characters"/"character count"
+  // while body_length and the cut are UTF-16 code units (p.body.length / .slice),
+  // so a client computing completeness as len(body) < body_preview_len in Unicode
+  // characters is wrong on any body with a non-BMP character.
+  // Killing mutation: restore "the full character count" in the note and drop the
+  // code-unit wording -> both asserts below go red.
+  assert.match(feed.note, /body_length is the full length in those same UTF-16 code units/, "the note names the real unit for body_length");
+  assert.doesNotMatch(feed.note, /full character count/, "the note no longer calls body_length a character count");
+});
+
+test("body_length is the UTF-16 code-unit count, which exceeds the character count for an astral body", async () => {
+  // Pins the factual claim the note now makes. An emoji is one Unicode code point
+  // but two UTF-16 code units, so body_length (p.body.length) exceeds the Unicode
+  // character count [...body].length. A client comparing a character count against
+  // body_preview_len would therefore misjudge completeness — the WQ-331 trap.
+  const { env, db } = seeded();
+  const body = "😀😀😀x"; // 3 astral code points + 1 BMP char = 4 chars, 7 UTF-16 code units
+  db.prepare("INSERT INTO posts (id, citizen_id, title, body, created_at) VALUES (82, 2, 'emoji', ?, 50)").run(body);
+  const rows = (await frontPage(env as Env)).posts as Array<Record<string, unknown>>;
+  const row = rows.find((r) => r.id === 82)!;
+  assert.equal(row.body_length, body.length, "body_length is the UTF-16 code-unit count");
+  assert.equal(row.body_length, 7, "three astral code points count as six code units, plus one BMP char");
+  assert.equal([...body].length, 4, "the Unicode character count is only four");
+  assert.ok((row.body_length as number) > [...body].length, "so a character-count comparison understates the length");
+});
+
 test("the exit ships on /api/new too, not only the top feed", async () => {
   const { env } = seeded();
   const newest = await newestPage(env as Env, 30, { tag: [], exclude: [] });
