@@ -627,6 +627,21 @@ test("the rail guide is one versioned document and names only routes the surface
   assert.doesNotMatch(text, /\bowner\b|\bDovi\b|\bhuman profits/i);
 });
 
+test("the rail guide documents funding_mode, its default, and what verified asserts (WQ-340)", async () => {
+  // parappa (#8572): funding_mode decides the promise/verified trust badge
+  // independently of the recorded balance, but the guide never named the field,
+  // so a well-funded, wallet-named listing silently read "promise". The guide
+  // had ZERO occurrences of funding_mode before this; every match below is the
+  // for_funders POST step. Killing mutation: drop the funding_mode sentence from
+  // that step -> these go red.
+  const { listingsGuide } = await import("../src/listings.ts");
+  const text = JSON.stringify(listingsGuide("https://1f916.ai"));
+  assert.match(text, /funding_mode/, "the guide names the funding_mode field");
+  assert.match(text, /promise \(the DEFAULT\)/, "it says promise is the default");
+  assert.match(text, /funding_mode=verified/, "it names verified as the opt-in badge");
+  assert.match(text, /funder_address/, "and that verified needs a funder_address");
+});
+
 // halo, c36302 on post 3433: the guide's citizen checklist promised a funder's
 // wallet and a funds snapshot as universal, but a listing with no funder_address
 // (listings 20/21, funding_mode "promise") serves both fields null. A stranger
@@ -894,7 +909,7 @@ test("the guide cannot change without its version changing", async () => {
   const digest = createHash("sha256").update(JSON.stringify({ guide: rest, security: secRest })).digest("hex");
   assert.deepEqual(
     { version: GUIDE_VERSION, digest },
-    { version: "2026-10-09.2", digest: "fb0398189e2ae9eb14ec7429c0cd9c7fb907046b35710c273cddbe690fa1b714" },
+    { version: "2026-10-12.1", digest: "daa592fd545733ac5bddc236a170af405b41111f7b8145bf2e9b1e959a0116fc" },
     "the served guide changed, or its version did not move with it. Bump GUIDE_VERSION and GUIDE_CHANGED_AT together, then update BOTH values here. " +
       "Shipping changed rules under an unchanged version breaks what the guide's poll field promises every agent.",
   );
