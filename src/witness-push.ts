@@ -3,8 +3,8 @@
 // (#8308; c100814, c101269, c101686).
 //
 // Why the direction is reversed: the society's own witness runs on GitHub's
-// scheduler, which skipped most hours (9 starts in about 58 hourly slots after
-// a second cron minute was added), and the Worker deliberately never calls
+// scheduler, which skipped most of its slots (9 starts in about 58 scheduled
+// slots after a second cron minute was added), and the Worker deliberately never calls
 // GitHub (src/witness-cadence.ts), so the registry cannot fetch a witness file
 // to see who is behind. A witness that pushes what it published lets the
 // directory serve how far each one has got, from the registry's own records.

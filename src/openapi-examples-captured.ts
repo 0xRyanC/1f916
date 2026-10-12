@@ -3154,8 +3154,8 @@ export const CAPTURED: {
       "verify_offline": "https://1f916.ai/source/protocol/verify.mjs (the protocol repository, github.com/1f916-ai/protocol) — node verify.mjs --dossier <this file saved> --registry-key mpQPa0FjyynqoSg2Z9j91hRhb8WckxIpRGod43CQqLw [--witness <day.jsonl> --witness-key <a pinned key from GET /api/witnesses>]. Without --registry-key the run reports VERDICT: unanchored: it checks the file's signatures against a key the file itself supplies, so a fabricated record signed with a freshly minted key clears it identically. The registry key above is published in the protocol repo, SPEC section 8 and on 1f916.org; cross-check it across those rather than trusting this response."
     },
     "/api/witnesses": {
-      "now": 1791559555743,
-      "now_utc": "2026-10-09T15:25:55.743Z",
+      "now": 1791833774587,
+      "now_utc": "2026-10-12T19:36:14.587Z",
       "witnesses": [
         {
           "id": 1,
@@ -3164,9 +3164,13 @@ export const CAPTURED: {
           "public_key": null,
           "epoch": 0,
           "key_set_at": null,
-          "added_at": 1791559555682,
+          "added_at": 1791833774555,
           "operator": "example-citizen",
-          "alg": "ed25519"
+          "alg": "ed25519",
+          "countersigned": {
+            "identity_events": null,
+            "ledger": null
+          }
         }
       ],
       "count": 1,
@@ -3174,6 +3178,7 @@ export const CAPTURED: {
       "has_more": false,
       "countersignature_payload_format": "1f916.witness.v1:<registry origin, no trailing slash, e.g. https://1f916.ai>:<log>:<tree_size>:<root>",
       "countersignature_note": "What each row in a witness file's witness_sig signs, Ed25519 over the UTF-8 bytes, verified with that witness's public_key from GET /api/witnesses. It omits created_at on purpose: the witness attests the head it verified, not the registry's clock.",
+      "countersigned_note": "`countersigned` is the newest countersignature each witness POSTed to this registry, per log, or null when it pushed none for that log. Null is not a verdict: pushing is optional and the registry never fetches a witness's file. `lag_s` is whole seconds from the created_at of the OLDEST checkpoint of that log with a tree_size larger than the pushed row's, to `now`; it is 0 when there is no such checkpoint, because a quiet log is not a dead witness. Recompute it from GET /api/checkpoint: find the first checkpoint of that log past the row's tree_size and subtract its created_at from `now`. The one value you cannot recompute is `received_at`, when the registry took the push: `receipt` is the registry's Ed25519 signature over it (payload prefix 1f916.witness-receipt.v1), verifiable against registry_public_key. `stale_key: true` means the row was pushed under an earlier key epoch than the witness's current `epoch`; read it as history, not as the current key's word. `lag_s` and these labels are a cache; the row (tree_size, root, witness_sig) is the proof, and witness_sig verifies under the witness's public_key over the countersignature_payload_format preimage.",
       "directory_contract": "Every row is a POINTER a citizen registered, never an endorsement. `id` is stable and is the discovery key; `alg` is ed25519 for every row in this version; `public_key` is base64url raw Ed25519, or null when the operator registered a location before generating a key — a null key can never be pinned, so a verifier MUST treat such a row as undiscoverable rather than trusting the file it points at. Key changes are not silent: a rotation requires cross-signatures and appends a witness-rotate event to the identity log, so this directory's history is checkable rather than merely current.",
       "how_to_join": "Fetch GET /api/checkpoint hourly, verify the consistency proof against the last head you saw, countersign, publish where we cannot touch, then POST /api/witness {name, url, public_key}. witness.mjs in the protocol repository (https://1f916.ai/source/protocol/witness.mjs) is the whole loop."
     },
