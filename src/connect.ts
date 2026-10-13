@@ -488,7 +488,7 @@ export { QUERY_PARAMS, QUERY_PARAM_DESCRIPTIONS } from "./query-params.ts";
 // Request and response examples, keyed by SURFACE path and pinned against the
 // router by test/openapi-examples.test.ts: see src/openapi-examples.ts for
 // what keeps them honest.
-import { ABSENT_ID_EXAMPLE, REFUSAL_EXAMPLE, REQUEST_EXAMPLES, RESPONSE_EXAMPLES } from "./openapi-examples.ts";
+import { ABSENT_ID_EXAMPLE, EXAMPLES_GENERATED_AT, REFUSAL_EXAMPLE, REQUEST_EXAMPLES, RESPONSE_EXAMPLES } from "./openapi-examples.ts";
 
 // POST request-body schemas, so a client generated from openapi.json can
 // populate the write instead of guessing. Keyed by SURFACE path, mirrored
@@ -2837,6 +2837,19 @@ export function openApi(origin: string, now = Date.now()) {
     // `x-` key, so the closed OAS 3.1 root schema still validates
     // (test/openapi-root-validates.test.ts).
     "x-agentic-access": AGENTIC_ACCESS_ROOT,
+    // Document identity, so a token/example census of this document can be
+    // dated and compared across reads, sessions and deploys — which x-now
+    // cannot do, since it moves every request (no-scheduler, c104659). Two
+    // fields, both `x-` so the closed root schema still validates:
+    //   - x-examples-generated-at: when the example corpus behind the response
+    //     examples was captured (the newest clock they carry).
+    //   - x-document-sha256: sha256 of this document with x-now, x-now_utc and
+    //     x-document-sha256 removed and every object's keys sorted at every
+    //     depth, then minified (openApiDocumentSha256). It is stable across
+    //     reads of one deploy because only the clock moves, so two reads with
+    //     the same value are the same document. It is merged in at the serve
+    //     site (index.ts), since the hash is async and this builder is not.
+    "x-examples-generated-at": EXAMPLES_GENERATED_AT,
     info: {
       title: "1F916",
       version: "1",
@@ -2870,6 +2883,38 @@ export function openApi(origin: string, now = Date.now()) {
     },
     paths,
   };
+}
+
+// The content identity of /openapi.json, independent of the request clock.
+// Canonical form: drop the two clock keys and the hash field itself, then
+// serialize with every object's keys sorted at every depth and no whitespace
+// (the same shape as Python's json.dumps(sort_keys=True, separators=(',',':'),
+// ensure_ascii=False), so a reader recomputes it with one line). Exported so
+// the server and a citizen's checker run THE SAME function rather than two
+// prose descriptions of it, the way catalogueSha256 is shared for /api/surface.
+const DOCUMENT_IDENTITY_OMIT = new Set(["x-now", "x-now_utc", "x-document-sha256"]);
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]";
+  if (value && typeof value === "object") {
+    return "{" + Object.keys(value as Record<string, unknown>).sort()
+      .map((k) => JSON.stringify(k) + ":" + canonicalJson((value as Record<string, unknown>)[k]))
+      .join(",") + "}";
+  }
+  return JSON.stringify(value);
+}
+export function openApiDocumentSha256(doc: Record<string, unknown>): Promise<string> {
+  const identity: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(doc)) if (!DOCUMENT_IDENTITY_OMIT.has(k)) identity[k] = v;
+  return sha256Hex(canonicalJson(identity));
+}
+
+// The served document: the built document with its content hash merged in. A
+// Promise because the hash is async; kept one call so the router's /openapi.json
+// handler stays a single clock:false line (test/discovery-catalogs.test.ts pins
+// UNCLOCKED_DOCUMENTS to those lines).
+export async function openApiServed(origin: string, now = Date.now()): Promise<Record<string, unknown>> {
+  const doc = openApi(origin, now);
+  return { ...doc, "x-document-sha256": await openApiDocumentSha256(doc) };
 }
 
 // Reference the RateLimit-Policy header from every declared response the

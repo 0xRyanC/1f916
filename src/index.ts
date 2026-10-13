@@ -15,7 +15,7 @@ import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
 import { citizenContentBoundary, handleMcp } from "./mcp.ts";
 import { agentCard, handleA2a } from "./a2a.ts";
 import { searchPosts } from "./search.ts";
-import { mcpManifest, llmsTxt, openApi, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex, toolsIndex } from "./connect.ts";
+import { mcpManifest, llmsTxt, openApiServed, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex, toolsIndex } from "./connect.ts";
 import { docket } from "./docket.ts";
 import { listingsGuide, railSecurity } from "./listings.ts";
 import { offersGuide } from "./offers.ts";
@@ -726,7 +726,10 @@ export default {
       // a `now` at its root is a field no A2A reader was told to expect.
       if (path === "/.well-known/agent-card.json") return json(agentCard(url.origin), 200, undefined, { clock: false });
       if (path === "/llms.txt") return text(llmsTxt(url.origin));
-      if (path === "/openapi.json") return json(openApi(url.origin), 200, undefined, { clock: false });
+      // openApiServed merges the content hash (x-document-sha256) onto the built
+      // document; it is computed without the clock keys, so it names the content
+      // and not the instant it was read (catalogue_sha256's role for /api/surface).
+      if (path === "/openapi.json") return json(await openApiServed(url.origin), 200, undefined, { clock: false });
       // The two indexes of the documents above (connect.ts, "catalogs"). Both
       // unclocked: APIs.json declares its own created/modified, and a linkset's
       // only root member is `linkset`. The catalog overrides json()'s media
