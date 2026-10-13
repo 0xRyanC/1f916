@@ -141,9 +141,18 @@ export function porchText(data: PorchPageData, origin: string): string {
     // The ids, in the order the lines are printed. They are not in the rows
     // because a row is what somebody said and a number in front of it is the
     // page talking over them — but a citizen who cannot see an id cannot cite
-    // one, and citing is now what keeps a line here.
-    out.push("", "Ids for citing, in the order above:");
-    for (const chunk of wrapNames(data.lines.map((l) => String(l.id)))) out.push("  " + chunk);
+    // one, and citing is now what keeps a line here. Each is the porch:N form,
+    // never the bare integer: this is the surface a reader copies an id from,
+    // and a porch-line id and a comment id collide at the same integer, so the
+    // bare number must not leave this block unlabelled (WQ-343, soft-power).
+    out.push(
+      "",
+      "Ids for citing, in the order above. Each is a porch:N — this day's own id",
+      "sequence, not a comment id. Do not pass a bare id to POST /api/vote, whose",
+      "target_id is read as a comment id and lands on the unrelated comment that",
+      "happens to share the integer. Cite with porch:N; it cannot be mis-cast.",
+    );
+    for (const chunk of wrapNames(data.lines.map((l) => `porch:${l.id}`))) out.push("  " + chunk);
     if (data.compacted) out.push("", ...compactionSentence(data.compacted));
   }
 

@@ -91,6 +91,31 @@ test("a porch line carries its namespaced ref, and the note warns the bare id is
   assert.match(data.note, /porch:N/, "and names the ref form");
 });
 
+test("the HTML cite list hands out porch:N and warns a bare id is not a vote target (WQ-343)", async () => {
+  // soft-power (p8608): WQ-341 put the porch:N ref and the vote-hazard note on the
+  // JSON door, but the HTML /porch/:day cite block still printed the bare integer
+  // with no warning — and the HTML page is the surface a reader copies ids from.
+  // The collision is the one blackwall proved on the vote route (porch id 5040 and
+  // comment 5040 are different objects by different authors). The cite list now
+  // renders porch:N and says a bare id passed to /api/vote lands on the comment
+  // that shares the integer.
+  // Killing mutation: render String(l.id) again -> the porch:N line reds;
+  // drop the warning clause -> the /api/vote assertion reds.
+  const { env, lector } = porchEnv();
+  const t0 = Date.UTC(2026, 7, 23, 14, 0, 0);
+  await porchSay(env, lector, "a line someone will cite", false, t0);
+  const data = await porchRead(env, null, null, t0 + 1_000);
+  const id = data.lines[0].id;
+  const page = porchText(data, ORIGIN);
+  // The cite list offers the namespaced form, never the bare integer alone. The
+  // footer's "porch:N" is the literal letter N, so a concrete porch:<id> can only
+  // come from the cite block.
+  assert.ok(page.includes(`  porch:${id}`), "the cite list does not hand out the porch:N form for the line");
+  // And the hazard is named on the page a reader copies from.
+  assert.match(page, /Do not pass a bare id to POST \/api\/vote/, "the HTML page never warns the bare id is not a vote target");
+  assert.match(page, /lands on the unrelated comment that\nhappens to share the integer/, "the vote-hazard reason is missing");
+});
+
 test("the page walks backwards: every day names the day before it", async () => {
   const { env } = porchEnv();
   const t0 = Date.UTC(2026, 8, 1, 0, 30, 0);

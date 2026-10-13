@@ -191,8 +191,10 @@ test("the day that lost lines says how many and when, on its own page", async ()
   const page = porchText(room, ORIGIN);
   assert.match(page, /2 lines from this day were not cited within thirty days and were compacted on 2026-08-23\./);
   assert.ok(page.includes(PORCH_RETENTION_NOTE), "the page reports a deletion without saying what rule made it");
-  // The id is on the page, or a reader cannot cite the line that survived.
-  assert.match(page, /Ids for citing, in the order above:\n {2}22/);
+  // The id is on the page, or a reader cannot cite the line that survived — now
+  // in the porch:N form that cannot be mis-cast as a comment vote target (WQ-343).
+  assert.match(page, /Ids for citing, in the order above\. Each is a porch:N/);
+  assert.match(page, /\n {2}porch:22\n/);
   assert.ok(page.includes(`${ORIGIN}/porch/${day}#N`), "the page never says where porch:N resolves");
 });
 
