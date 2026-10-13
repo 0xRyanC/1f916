@@ -88,3 +88,41 @@ test("canonicalJson sorts keys at every depth and drops whitespace, so the hash 
   assert.equal(canonicalJson(a), canonicalJson(b), "key order does not change the canonical form");
   assert.equal(canonicalJson(a), '{"a":{"c":4,"d":[3,2]},"b":1}', "sorted keys, array order kept, no whitespace");
 });
+
+test("x-document-sha256-spec names the EXACT ECMAScript canonicalization, and canonicalJson obeys it (WQ-346)", async () => {
+  // fieldwork-1010 (c105022 on post 8427): the hash is stable, but the recipe
+  // was described as "the same shape as Python json.dumps", which is false for
+  // astral-plane keys and float formatting. The served spec now names the exact
+  // ECMAScript semantics. These assertions pin the spec to the code so it cannot
+  // drift into a decorative lie.
+  // KILLING MUTATION: drop the x-document-sha256-spec field in openApi() -> the
+  // presence assertion reds; change canonicalJson to escape non-ASCII or sort by
+  // code point -> the behaviour assertions red.
+  const { env } = sqliteTestEnv(schema);
+  const doc = (await (await worker.fetch(new Request(`${ORIGIN}/openapi.json`), env)).json()) as Record<string, unknown>;
+  const spec = doc["x-document-sha256-spec"] as Record<string, unknown>;
+  assert.ok(spec, "the served document carries x-document-sha256-spec");
+  assert.deepEqual(spec.omit, ["x-now", "x-now_utc", "x-document-sha256"], "the spec names exactly the three omitted root keys");
+  assert.match(String(spec.key_order), /UTF-16/, "the spec says keys sort by UTF-16 code unit");
+  assert.match(String(spec.not_python), /NOT json\.dumps/, "the spec warns it is not the Python one-liner");
+
+  // The spec is true of the code: ECMAScript number-to-string, not Python's.
+  assert.equal(canonicalJson({ a: 1.0 }), '{"a":1}', "an integral float serializes as 1, not 1.0 (ECMAScript)");
+  assert.equal(canonicalJson({ a: 1e-7 }), '{"a":1e-7}', "1e-7 serializes as 1e-7, not 1e-07 (ECMAScript)");
+  // Keys sort by UTF-16 code unit: U+10000 (a surrogate pair starting 0xD800)
+  // sorts BEFORE U+E000, the opposite of Unicode code-point order.
+  assert.equal(
+    canonicalJson({ ["\u{10000}"]: 2, [""]: 1 }),
+    '{"\u{10000}":2,"":1}',
+    "astral-plane key U+10000 sorts before U+E000 by UTF-16 code unit",
+  );
+
+  // The reporter's whole fixture hashes to the ECMAScript digest, not the Python
+  // one — pinned so the divergence the spec documents stays a measured fact.
+  const fixture = { unicode_keys: { [""]: 1, ["\u{10000}"]: 2 }, integral_float: 1.0, small_float: 1e-7 };
+  assert.equal(
+    await openApiDocumentSha256(fixture),
+    "97f0b64aa95e09d281a9a90a80c46fdeac92b2b1813d2327d73acbec868eac32",
+    "the ECMAScript canonicalization of fieldwork-1010's fixture; the Python one-liner gives c9cfed52..., a different hash",
+  );
+});

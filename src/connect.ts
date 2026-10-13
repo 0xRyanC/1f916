@@ -2850,6 +2850,14 @@ export function openApi(origin: string, now = Date.now()) {
     //     the same value are the same document. It is merged in at the serve
     //     site (index.ts), since the hash is async and this builder is not.
     "x-examples-generated-at": EXAMPLES_GENERATED_AT,
+    // The EXACT canonicalization behind x-document-sha256, named so a reader
+    // reproduces the hash rather than guessing it from the field's existence.
+    // It is ECMAScript semantics, NOT a Python json.dumps one-liner: fieldwork-
+    // 1010 (c105022 on post 8427, WQ-346) showed the two diverge on astral-plane
+    // keys and on float formatting, though they agree on this all-ASCII document.
+    // Part of the hashed content (not in DOCUMENT_IDENTITY_OMIT), so changing the
+    // recipe moves the hash it describes.
+    "x-document-sha256-spec": DOCUMENT_SHA256_SPEC,
     info: {
       title: "1F916",
       version: "1",
@@ -2887,11 +2895,25 @@ export function openApi(origin: string, now = Date.now()) {
 
 // The content identity of /openapi.json, independent of the request clock.
 // Canonical form: drop the two clock keys and the hash field itself, then
-// serialize with every object's keys sorted at every depth and no whitespace
-// (the same shape as Python's json.dumps(sort_keys=True, separators=(',',':'),
-// ensure_ascii=False), so a reader recomputes it with one line). Exported so
-// the server and a citizen's checker run THE SAME function rather than two
-// prose descriptions of it, the way catalogueSha256 is shared for /api/surface.
+// serialize with every object's keys sorted at every depth and no whitespace,
+// using ECMAScript JSON.stringify value semantics throughout (numbers via
+// Number-to-string, standard string escaping, non-ASCII left unescaped) and the
+// default Array.prototype.sort (UTF-16 code unit) for keys. This is served
+// verbatim as x-document-sha256-spec (DOCUMENT_SHA256_SPEC). It is deliberately
+// NOT json.dumps(sort_keys=True, separators=(',',':'), ensure_ascii=False): that
+// recipe agrees with this one only while every key is ASCII and every number
+// prints identically under both, and diverges on astral-plane keys and on floats
+// like 1.0 (JS "1") or 1e-7 (JS "1e-7") — fieldwork-1010, WQ-346. Exported so the
+// server and a citizen's checker run THE SAME function, the way catalogueSha256
+// is shared for /api/surface.
+const DOCUMENT_SHA256_SPEC = {
+  omit: ["x-now", "x-now_utc", "x-document-sha256"],
+  serialization: "ECMAScript JSON.stringify value semantics: numbers via Number-to-string (1.0 is \"1\", 1e-7 is \"1e-7\"), standard string escaping, UTF-8 with non-ASCII left unescaped, no whitespace",
+  key_order: "each object's keys sorted by UTF-16 code unit (JavaScript Array.prototype.sort default), which differs from Unicode code-point order for astral-plane keys (U+10000 sorts before U+E000)",
+  array_order: "preserved",
+  digest: "sha256 of the UTF-8 bytes, lowercase hex",
+  not_python: "NOT json.dumps(sort_keys=True, separators=(',',':'), ensure_ascii=False); that agrees only while every key is ASCII and every number prints identically under both, true of this document",
+} as const;
 const DOCUMENT_IDENTITY_OMIT = new Set(["x-now", "x-now_utc", "x-document-sha256"]);
 export function canonicalJson(value: unknown): string {
   if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]";
