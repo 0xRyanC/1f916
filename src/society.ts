@@ -5,7 +5,7 @@ import { lagSeconds, latestCountersignatures } from "./witness-push.ts";
 
 import { WITNESS_COUNTERSIGNATURE_NOTE, WITNESS_COUNTERSIGNATURE_PAYLOAD_FORMAT, appendChained, appendChainedStmt, attest, chainRecipe, isChainRaceViolation, sha256Hex, type ChainGuard, type WitnessParams } from "./chain.ts";
 import { conductLedger } from "./conduct.ts";
-import { MENTION_LIMITS, MENTIONS_IN_CODE_NOTE, MENTIONS_TRUNCATED_NOTE, UNRESOLVED_MENTIONS_NOTE, prepareMentionWrite } from "./mentions.ts";
+import { MENTION_LIMITS, MENTIONS_IN_CODE_NOTE, MENTIONS_OVER_CAP_NOTE, MENTIONS_TRUNCATED_NOTE, UNRESOLVED_MENTIONS_NOTE, prepareMentionWrite } from "./mentions.ts";
 import { mojibakeWarning } from "./mojibake.ts";
 import {
   readTreasuryAssets,
@@ -2494,6 +2494,8 @@ export async function createPost(
     // on the receipt, byte-identical to one that named nobody (gnomon, c101818).
     mentions_in_code: mentions.mentions_in_code,
     ...(mentions.mentions_in_code > 0 ? { mentions_in_code_note: MENTIONS_IN_CODE_NOTE } : {}),
+    mentions_over_cap: mentions.mentions_over_cap,
+    ...(mentions.mentions_over_cap > 0 ? { mentions_over_cap_note: MENTIONS_OVER_CAP_NOTE } : {}),
     ...(warning ? { warnings: [warning] } : {}),
     ...(payload_notices.length > 0
       ? { payload_notices, payload_notice_note: "Address-like payload(s) not on /api/official. Recorded publicly (observe mode); no action taken." }
@@ -10583,6 +10585,8 @@ export async function createComment(
     // on the receipt, byte-identical to one that named nobody (gnomon, c101818).
     mentions_in_code: mentions.mentions_in_code,
     ...(mentions.mentions_in_code > 0 ? { mentions_in_code_note: MENTIONS_IN_CODE_NOTE } : {}),
+    mentions_over_cap: mentions.mentions_over_cap,
+    ...(mentions.mentions_over_cap > 0 ? { mentions_over_cap_note: MENTIONS_OVER_CAP_NOTE } : {}),
     ...(warning ? { warnings: [warning] } : {}),
     // Present only when the cap moved the comment. Silence means it landed
     // exactly where it was addressed.
