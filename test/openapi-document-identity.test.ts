@@ -126,3 +126,26 @@ test("x-document-sha256-spec names the EXACT ECMAScript canonicalization, and ca
     "the ECMAScript canonicalization of fieldwork-1010's fixture; the Python one-liner gives c9cfed52..., a different hash",
   );
 });
+
+test("the spec names the small-decimal band and the rule is reproduce-exactly, not a finite list (WQ-348)", async () => {
+  // parappa (c105308 on post 8427): the spec named three divergences but not a
+  // fourth live-bytes-visible one — for 1e-6 <= |x| < 1e-4 ECMAScript writes a
+  // plain decimal (0.00001 -> "0.00001") while Python writes an exponent
+  // ("1e-05"). The spec now names this band AND reframes the list as illustrative
+  // of a rule (reproduce ECMAScript Number::toString exactly), so the next edge
+  // case is already covered by the rule rather than needing another append.
+  // KILLING MUTATION: drop the 0.00001/1e-05 clause from not_python -> the band
+  // assertion reds; a canonicalJson that stopped using JSON.stringify for numbers
+  // -> the decimal assertion reds.
+  const { env } = sqliteTestEnv(schema);
+  const doc = (await (await worker.fetch(new Request(`${ORIGIN}/openapi.json`), env)).json()) as Record<string, unknown>;
+  const spec = doc["x-document-sha256-spec"] as Record<string, unknown>;
+  assert.match(String(spec.not_python), /0\.00001.*1e-05/, "the spec names the 1e-6..1e-4 decimal-vs-exponent band");
+  assert.match(String(spec.not_python), /reproduce ECMAScript Number::toString and UTF-16 key order EXACTLY, not tick off a finite list/, "and states the rule is reproduce-exactly, not an enumerated list");
+  assert.match(String(spec.serialization), /Number::toString/, "serialization cites the authoritative ECMA-262 algorithm");
+
+  // The code is what the spec describes: a value in the band is a plain decimal.
+  assert.equal(canonicalJson({ a: 1e-5 }), '{"a":0.00001}', "1e-5 serializes as the decimal 0.00001 (ECMAScript), not Python's 1e-05");
+  assert.equal(canonicalJson({ a: 1e-6 }), '{"a":0.000001}', "1e-6 is still a decimal in ECMAScript");
+  assert.equal(canonicalJson({ a: 1e-7 }), '{"a":1e-7}', "1e-7 is the first exponent form, matching the named boundary");
+});

@@ -2908,11 +2908,11 @@ export function openApi(origin: string, now = Date.now()) {
 // is shared for /api/surface.
 const DOCUMENT_SHA256_SPEC = {
   omit: ["x-now", "x-now_utc", "x-document-sha256"],
-  serialization: "ECMAScript JSON.stringify value semantics: numbers via Number-to-string (1.0 is \"1\", 1e-7 is \"1e-7\"), standard string escaping, UTF-8 with non-ASCII left unescaped, no whitespace",
+  serialization: "ECMAScript JSON.stringify value semantics: numbers by ECMA-262 Number::toString (so 1.0 is \"1\"; a plain decimal down to magnitude 1e-6, e.g. 0.00001 is \"0.00001\"; an exponent only at 1e-7 and smaller, e.g. \"1e-7\"), standard string escaping, UTF-8 with non-ASCII left unescaped, no whitespace",
   key_order: "each object's keys sorted by UTF-16 code unit (JavaScript Array.prototype.sort default), which differs from Unicode code-point order for astral-plane keys (U+10000 sorts before U+E000)",
   array_order: "preserved",
   digest: "sha256 of the UTF-8 bytes, lowercase hex",
-  not_python: "NOT json.dumps(sort_keys=True, separators=(',',':'), ensure_ascii=False); that agrees only while every key is ASCII and every number prints identically under both, true of this document",
+  not_python: "NOT json.dumps(sort_keys=True, separators=(',',':'), ensure_ascii=False). The two agree only while every key is ASCII and every number prints identically under both, true of this document. A port must reproduce ECMAScript Number::toString and UTF-16 key order EXACTLY, not tick off a finite list: the divergences are more than can be usefully enumerated, but include 1 vs 1.0; a small decimal in 1e-6 <= |x| < 1e-4 such as 0.00001, which ECMAScript writes \"0.00001\" and Python writes \"1e-05\"; the exponent padding 1e-7 vs 1e-07 below that band; and UTF-16 vs code-point key order (U+10000 before U+E000).",
 } as const;
 const DOCUMENT_IDENTITY_OMIT = new Set(["x-now", "x-now_utc", "x-document-sha256"]);
 export function canonicalJson(value: unknown): string {
