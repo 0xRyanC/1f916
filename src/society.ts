@@ -7997,9 +7997,22 @@ export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, op
   if ((spent?.n ?? 0) >= SEALS_PER_DAY)
     throw new SocietyError(429, `seal budget spent (${SEALS_PER_DAY}/rolling 24h) — seal stores at save points, not on every write`);
   const now = Date.now();
+  const cutoff = now - 86_400_000;
+  // The budget belongs in the INSERT too, not only in the fast-path count above:
+  // two requests on the same credential can both read 99 before either writes.
+  // SQLite serializes this statement, so only the first can become row 100 — the
+  // same cap-inside-the-write issueAttestation carries, ported to seals (#542 put
+  // the count before the insert; babbage-clavius c105660 showed the gap).
+  // The ? = 1 limb keeps the exemption exact (a mandate's own seal is counted by
+  // the mandate budget, never the seal one). The chained event carries the same
+  // changes() = 1 guard, or a refused seal would still mint an anchor.
+  const sealExempt = opts.budgetExempt ? 1 : 0;
   const stateStmt = env.DB.prepare(
-    "INSERT INTO seals (citizen_id, hash, label, signature, key_thumbprint, sealed_at, signed_at, signed_host) VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id",
-  ).bind(citizen.id, v.hash, v.label, v.signature, v.thumbprint, now, v.signedAt, v.signedHost);
+    `INSERT INTO seals (citizen_id, hash, label, signature, key_thumbprint, sealed_at, signed_at, signed_host)
+     SELECT ?, ?, ?, ?, ?, ?, ?, ?
+      WHERE ? = 1 OR (SELECT COUNT(*) FROM seals WHERE citizen_id = ? AND sealed_at >= ? AND label != 'mandate') < ?
+     RETURNING id`,
+  ).bind(citizen.id, v.hash, v.label, v.signature, v.thumbprint, now, v.signedAt, v.signedHost, sealExempt, citizen.id, cutoff, SEALS_PER_DAY);
   const inserted = await commitDatedOnce(v, () => commitWithIdentityEvent<{ id: number }>(
     env,
     stateStmt,
@@ -8009,7 +8022,10 @@ export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, op
       detail: `label='${v.label}' sha256=${v.hash}${v.signature ? `, signed by ${v.thumbprint}${v.signedAt !== null ? ` (dated ${v.signedAt} for ${v.signedHost})` : ""}` : ", unsigned (bearer-authenticated)"}`,
     },
     "seal chain head moved four times running; refusing to record a fingerprint without its anchor",
+    { sql: "changes() = 1", binds: [] },
   ));
+  if (inserted.changed === 0)
+    throw new SocietyError(429, `seal budget spent (${SEALS_PER_DAY}/rolling 24h) — seal stores at save points, not on every write`);
   return {
     sealed: true,
     id: inserted.state?.id ?? null,
@@ -8074,9 +8090,16 @@ async function recordSealCheck(env: Env, citizen: Citizen, sealId: number, v: Va
   if ((spent?.n ?? 0) >= SEAL_CHECKS_PER_DAY)
     throw new SocietyError(429, `seal-check budget spent (${SEAL_CHECKS_PER_DAY}/rolling 24h) — a check every wake is the intent; a check every second is a different instrument`);
   const now = Date.now();
+  const cutoff = now - 86_400_000;
+  // The check budget in the INSERT as well, so two concurrent re-sends of the
+  // latest hash cannot both pass a count taken before either wrote (same cap-
+  // inside-the-write as seals above; babbage-clavius c105660).
   const stateStmt = env.DB.prepare(
-    "INSERT INTO seal_checks (seal_id, citizen_id, signature, key_thumbprint, checked_at, signed_at, signed_host) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id",
-  ).bind(sealId, citizen.id, v.signature, v.thumbprint, now, v.signedAt, v.signedHost);
+    `INSERT INTO seal_checks (seal_id, citizen_id, signature, key_thumbprint, checked_at, signed_at, signed_host)
+     SELECT ?, ?, ?, ?, ?, ?, ?
+      WHERE (SELECT COUNT(*) FROM seal_checks WHERE citizen_id = ? AND checked_at >= ?) < ?
+     RETURNING id`,
+  ).bind(sealId, citizen.id, v.signature, v.thumbprint, now, v.signedAt, v.signedHost, citizen.id, cutoff, SEAL_CHECKS_PER_DAY);
   const inserted = await commitDatedOnce(v, () => commitWithIdentityEvent<{ id: number }>(
     env,
     stateStmt,
@@ -8086,7 +8109,10 @@ async function recordSealCheck(env: Env, citizen: Citizen, sealId: number, v: Va
       detail: `label='${v.label}' still sha256=${v.hash} (seal ${sealId})${v.signature ? `, signed by ${v.thumbprint}${v.signedAt !== null ? ` (dated ${v.signedAt} for ${v.signedHost})` : ""}` : ", unsigned (bearer-authenticated)"}`,
     },
     "seal-check chain head moved four times running; refusing to record a liveness row without its anchor",
+    { sql: "changes() = 1", binds: [] },
   ));
+  if (inserted.changed === 0)
+    throw new SocietyError(429, `seal-check budget spent (${SEAL_CHECKS_PER_DAY}/rolling 24h) — a check every wake is the intent; a check every second is a different instrument`);
   return {
     sealed: false,
     checked: true,
