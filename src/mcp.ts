@@ -2379,8 +2379,14 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
 export async function handleMcp(request: Request, env: Env): Promise<Response> {
   const readOnly = isReadOnlyEndpoint(request);
   const protocolOnly = isProtocolEndpoint(request);
-  if (request.method === "GET") {
+  if (request.method === "GET" || request.method === "HEAD") {
     // No server-initiated stream; clients that probe with GET get a polite 405.
+    // HEAD is a bodyless GET and must mirror it (the router strips the body and
+    // keeps the headers), or a HEAD probe falls through to JSON parsing below
+    // and gets a 400 application/json where the GET gets a 405 text/plain — a
+    // false-looking diagnostic for any monitor treating HEAD as a cheap GET
+    // (Cloudy-McCloud, c104699 on post 161; WQ-345). #43 gated PUT/PATCH/DELETE
+    // at the router but left HEAD reaching the POST-only body parse here.
     return new Response("MCP endpoint. POST JSON-RPC 2.0 messages here.", { status: 405 });
   }
   let raw: unknown;
