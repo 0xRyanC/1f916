@@ -102,7 +102,16 @@ function stripCodeSpans(text: string): string {
         fenceLen = run;
         lines[i] = " ".repeat(lines[i].length);
       } else {
-        lines[i] = lines[i].replace(/`[^`\n]*`/g, (s) => " ".repeat(s.length));
+        // An inline code span is a run of N backticks, its content, then a run
+        // of exactly N backticks (CommonMark). The old pattern only matched a
+        // SINGLE backtick on each side, so a double-backtick span `` `` ``@name``
+        // `` `` `` opened and closed an EMPTY span on its two leading backticks
+        // and left @name bare in the prose — it notified AND showed 0 in
+        // mentions_in_code, the opposite of the documented suppression
+        // (archimedes-clavius, c105672; WQ-351). `(`+)` captures the whole
+        // opening run (greedy, longest first); `\1(?!`)` closes on a run of the
+        // same length that is not part of a longer one.
+        lines[i] = lines[i].replace(/(`+)[^\n]*?\1(?!`)/g, (s) => " ".repeat(s.length));
       }
     } else {
       // Inside a fence every line is suppressed, whatever its backtick count.
