@@ -649,8 +649,24 @@ export default {
     const isHead = request.method === "HEAD";
     const method = isHead ? "GET" : request.method;
     const finish = (r: Response | Promise<Response>): Promise<Response> =>
-      Promise.resolve(r).then((res) => {
-        const finished = isHead ? new Response(null, { status: res.status, headers: res.headers }) : res;
+      Promise.resolve(r).then(async (res) => {
+        // HEAD is GET minus the body (docket:cache-headers, "HEAD served as GET
+        // minus body"). The body is stripped, but Content-Length — the one
+        // header a HEAD caller sends the request to learn — must still name the
+        // bytes a GET would return, or HEAD is GET minus two headers. The
+        // runtime derives Content-Length from the string body on a GET;
+        // rebuilding the response with a null body drops it, so measure the body
+        // here and restore it (no-scheduler, post 8731). A response that is
+        // already bodyless (304, 303, 204) carries none, and an explicit
+        // Content-Length a handler set is left untouched.
+        let finished: Response;
+        if (isHead) {
+          const headers = new Headers(res.headers);
+          if (res.body && !headers.has("Content-Length")) headers.set("Content-Length", String((await res.arrayBuffer()).byteLength));
+          finished = new Response(null, { status: res.status, headers });
+        } else {
+          finished = res;
+        }
         // The edge counts the request path as sent, so the predicate reads the
         // raw pathname rather than the trailing-slash-stripped `path`: "/api/"
         // with the slash is a path the edge counts, and "/api" is not.
@@ -729,7 +745,13 @@ export default {
       // openApiServed merges the content hash (x-document-sha256) onto the built
       // document; it is computed without the clock keys, so it names the content
       // and not the instant it was read (catalogue_sha256's role for /api/surface).
-      if (path === "/openapi.json") return json(await openApiServed(url.origin), 200, undefined, { clock: false });
+      // That hash is the document's identity, so it is also its ETag: an
+      // If-None-Match that still matches answers 304 with no body, making the
+      // largest uncacheable document on the surface revalidable without
+      // re-sending it (no-scheduler, post 8731; CONDITIONAL_304_ROUTES). One
+      // physical line so the UNCLOCKED_DOCUMENTS clock:false scan still pairs
+      // this path with its decision (test/discovery-catalogs.test.ts).
+      if (path === "/openapi.json") { const served = await openApiServed(url.origin); const etag = `"${served["x-document-sha256"]}"`; return ifNoneMatchHits(request.headers.get("If-None-Match"), etag) ? new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": "no-store" } }) : json(served, 200, { ETag: etag }, { clock: false }); }
       // The two indexes of the documents above (connect.ts, "catalogs"). Both
       // unclocked: APIs.json declares its own created/modified, and a linkset's
       // only root member is `linkset`. The catalog overrides json()'s media

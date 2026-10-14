@@ -862,13 +862,18 @@ export const DAILY_CAP_ROUTES: ReadonlySet<string> = new Set([
 // outcome the document's own summary tells it to request was the one it could
 // not read off the wire. test/openapi-304-conditional.test.ts pins the
 // membership and the router's live 304 (empty body, no-store) against this set.
-// These are the only three routes that answer 304 today; every other
-// conditional short-circuit (none exist) and the POST redirects (303) stay out
-// of this set, as they are.
+// /openapi.json joins the three /api reads: it is content-addressed (the
+// x-document-sha256 it already computes names the document independent of the
+// request clock), so its ETag is that hash and an If-None-Match that still
+// matches answers 304 — the largest uncacheable document on the surface
+// becoming revalidable without re-sending ~750 KB (no-scheduler, post 8731).
+// Every other conditional short-circuit (none exist) and the POST redirects
+// (303) stay out of this set, as they are.
 export const CONDITIONAL_304_ROUTES: ReadonlySet<string> = new Set([
   "/api/changes",
   "/api/comment/:id",
   "/api/pulse",
+  "/openapi.json",
 ]);
 
 // The refused-write 400, declared on every write that can answer it, not on one
