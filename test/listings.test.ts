@@ -2033,3 +2033,35 @@ test('a listing whose award seats are all taken does not advertise a settlement 
   const seated = after.submissions.find((s) => s.handle === VERIFIER.handle)!;
   assert.equal(seated.next_actions.find((a) => a.step === 4)!.state, SEAT_READY);
 });
+
+// The twin of the paid-award case above, for the settlement path listings 38
+// and 51 actually took: the chain observer read the funder's transfer and
+// wrote the award paid against it (migration 0063), so the award carries
+// observed_transfer_id and no receipt exists. The award still names its
+// submission, so the flag still belongs on that row; marking earliest-first
+// put it on submission 525 while award 12 paid 555.
+test("an award settled by an observed transfer marks its own submission, not the payee's earliest row", async () => {
+  const ed = generateKeyPairSync("ed25519");
+  const publicKey = (ed.publicKey.export({ format: "jwk" }) as { x: string }).x;
+  const { env, db } = makeEnv(publicKey);
+  const funderAddress = "0x" + "7".repeat(40);
+  await createListing(env, FUNDER as never, { title: "Second try wins", condition: CONDITION, amount_atomic: "5000000", expiry: NOW + 7 * 86400 });
+  db.prepare("UPDATE listings SET funder_address = ?, funder_signature = ?, funds_seen_atomic = ? WHERE id = 1").run(funderAddress, "0x" + "1".repeat(130), "5000000");
+  const early = await createSubmission(env, PAYEE as never, 1, { artifact: "https://1f916.ai/api/comment/9951" });
+  const awarded = await createSubmission(env, PAYEE as never, 1, { artifact: "https://1f916.ai/api/comment/9952" });
+
+  const bound = await createPayoutBinding(env, PAYEE as never, (await payeeBinding("listing-1", "5000000", ed, PAYEE)).body);
+  const nowMs = Date.now();
+  db.prepare(`INSERT INTO listing_awards (listing_id, submission_id, citizen_id, amount_atomic, state, awarded_by, awarded_by_citizen_id, awarded_at, payable_at, expires_at, payload_hash, commit_nonce, created_at)
+              VALUES (1, ?, 2, '5000000', 'payable', 'requester', 1, ?, ?, ?, 'award-hash-1', 'award-nonce-1', ?)`).run(awarded.id, nowMs, nowMs, nowMs + 86_400_000, nowMs);
+  const transferId = Number(db.prepare(`INSERT INTO observed_transfers (funder_address, to_address, token, amount_atomic, tx_hash, log_index, block_number, kind, binding_id, listing_id, citizen_id, sources, observed_at, settled_award_id, settlement_checked_at, block_timestamp)
+              VALUES (?, ?, ?, '5000000', '0xob1', 0, 1, 'payment', ?, 1, 2, 2, ?, 1, ?, ?)`).run(funderAddress, "0x" + "2".repeat(40), BASE_USDC, bound.id, nowMs, nowMs, Math.floor(nowMs / 1000)).lastInsertRowid);
+  db.prepare("UPDATE listing_awards SET state = 'paid', observed_transfer_id = ?, paid_at = ? WHERE id = 1").run(transferId, nowMs);
+
+  const detail = await getListing(env, 1);
+  const rows = detail.submissions.map((x) => [x.id, x.award_id !== null, x.paid]);
+  assert.deepEqual(rows, [[early.id, false, false], [awarded.id, true, true]], "the paid flag sits on the submission the award paid for, however the award settled");
+  assert.equal(detail.submissions.find((x) => x.id === awarded.id)!.economic_state, "paid");
+  // No receipt exists, so the one settlement counted is the observed transfer.
+  assert.equal(detail.submissions.filter((x) => x.paid).length, 1);
+});
