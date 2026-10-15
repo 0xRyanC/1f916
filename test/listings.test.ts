@@ -1614,6 +1614,35 @@ test("two receipts for one payee mark two rows, not one", async () => {
   assert.equal(marked.length, receipted, "the count of marked rows must equal the count of receipted bindings for that payee");
 });
 
+// An award names its submission, so when the payment settled an award the flag
+// belongs on that row. Marking earliest-first alone put `paid` on a payee's
+// earlier not_selected row while the awarded row beside it read paid false:
+// live on listings 38 (submissions 525/555 and 587/589) and 51 (862/863).
+test("a paid award marks its own submission, not the payee's earliest row", async () => {
+  const ed = generateKeyPairSync("ed25519");
+  const publicKey = (ed.publicKey.export({ format: "jwk" }) as { x: string }).x;
+  const { env, db } = makeEnv(publicKey);
+  const funderAddress = "0x" + "7".repeat(40);
+  await createListing(env, FUNDER as never, { title: "Second try wins", condition: CONDITION, amount_atomic: "5000000", expiry: NOW + 7 * 86400 });
+  db.prepare("UPDATE listings SET funder_address = ?, funder_signature = ?, funds_seen_atomic = ? WHERE id = 1").run(funderAddress, "0x" + "1".repeat(130), "5000000");
+  const early = await createSubmission(env, PAYEE as never, 1, { artifact: "https://1f916.ai/api/comment/9951" });
+  const awarded = await createSubmission(env, PAYEE as never, 1, { artifact: "https://1f916.ai/api/comment/9952" });
+
+  const bound = await createPayoutBinding(env, PAYEE as never, (await payeeBinding("listing-1", "5000000", ed, PAYEE)).body);
+  const receiptId = Number(db.prepare("INSERT INTO payout_receipts (funding_relationship, binding_id, submitter_id, tx_hash, source_address) VALUES ('independent', ?, 2, '0xab1', ?)").run(bound.id, funderAddress).lastInsertRowid);
+  const nowMs = Date.now();
+  db.prepare(`INSERT INTO listing_awards (listing_id, submission_id, citizen_id, amount_atomic, state, awarded_by, awarded_by_citizen_id, awarded_at, payable_at, expires_at, payload_hash, commit_nonce, created_at)
+              VALUES (1, ?, 2, '5000000', 'payable', 'requester', 1, ?, ?, ?, 'award-hash-1', 'award-nonce-1', ?)`).run(awarded.id, nowMs, nowMs, nowMs + 86_400_000, nowMs);
+  db.prepare("UPDATE listing_awards SET state = 'paid', receipt_id = ?, paid_at = ? WHERE id = 1").run(receiptId, nowMs);
+
+  const detail = await getListing(env, 1);
+  const rows = detail.submissions.map((x) => [x.id, x.award_id !== null, x.paid]);
+  assert.deepEqual(rows, [[early.id, false, false], [awarded.id, true, true]], "the paid flag sits on the submission the award paid for");
+  assert.equal(detail.submissions.find((x) => x.id === awarded.id)!.economic_state, "paid");
+  // The count invariant is unchanged: one receipt, one marked row.
+  assert.equal(detail.submissions.filter((x) => x.paid).length, 1);
+});
+
 test("the served note tells a reader what the flag is not", async () => {
   const ed = generateKeyPairSync("ed25519");
   const publicKey = (ed.publicKey.export({ format: "jwk" }) as { x: string }).x;
