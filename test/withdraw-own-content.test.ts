@@ -19,6 +19,7 @@ import {
   withdrawContent,
   moderateContent,
   applyModState,
+  readComment,
   SocietyError,
   WITHDRAWALS_PER_DAY,
   MOD_NOTICE_WITHDRAWN,
@@ -154,6 +155,33 @@ test("an open flag blocks withdrawal, so evidence cannot be tombstoned out from 
       },
     );
     assert.equal((db.prepare("SELECT mod_state FROM posts WHERE id = 10").get() as { mod_state: null }).mod_state, null);
+  } finally {
+    db.close();
+  }
+});
+
+test("a maintainer collapse cannot land on a withdrawn row, so ?reveal cannot make it public again", async () => {
+  // The receipt promises redaction on every read path. reveal reads COLLAPSED
+  // rows, so collapsing a withdrawn one would swap the author's takedown for a
+  // state the public can ask to read. remove is the tier for that content.
+  const { db, env } = board();
+  try {
+    await withdrawContent(env, AUTHOR, "comment", 20, "posted in error");
+    await assert.rejects(
+      () => moderateContent(env, MAINTAINER, "comment", 20, "collapse", "hiding it further"),
+      (e: unknown) => {
+        assert.equal((e as SocietyError).status, 409);
+        assert.match((e as Error).message, /withdrawn/);
+        assert.match((e as Error).message, /remove/);
+        return true;
+      },
+    );
+    assert.equal((db.prepare("SELECT mod_state FROM comments WHERE id = 20").get() as { mod_state: string }).mod_state, "withdrawn");
+    const read = ((await readComment(env, 20, null, true)) as unknown as { comment: { body: string } }).comment;
+    assert.equal(read.body, MOD_NOTICE_WITHDRAWN, "reveal still reads the redaction notice");
+    // remove and restore are unchanged.
+    await moderateContent(env, MAINTAINER, "comment", 20, "remove", "harm is in the reading");
+    assert.equal((db.prepare("SELECT mod_state FROM comments WHERE id = 20").get() as { mod_state: string }).mod_state, "removed");
   } finally {
     db.close();
   }

@@ -9698,8 +9698,15 @@ export async function moderateContent(
   }
   const table = type === "post" ? "posts" : type === "comment" ? "comments" : type === "offer" ? "offers" : "listings";
   const nextState = act === "restore" ? null : act === "collapse" ? "collapsed" : "removed";
-  const exists = await env.DB.prepare(`SELECT id FROM ${table} WHERE id = ?`).bind(id).first();
+  const exists = await env.DB.prepare(`SELECT id, mod_state FROM ${table} WHERE id = ?`).bind(id).first<{ id: number; mod_state: string | null }>();
   if (!exists) throw new SocietyError(404, `${type} ${id} does not exist`);
+  // A withdrawal receipt promises redaction on every read path, and ?reveal
+  // reads collapsed rows. Collapsing a withdrawn row would trade the author's
+  // takedown for a state anyone can ask to read, so the only way up from
+  // withdrawn is remove (or an explicit restore).
+  if (act === "collapse" && exists.mod_state === "withdrawn") {
+    throw new SocietyError(409, `${type} ${id} is withdrawn by its author, and a collapse would make it readable through ?reveal. Use remove if it must stay hidden from everyone.`);
+  }
   const update = env.DB.prepare(`UPDATE ${table} SET mod_state = ? WHERE id = ?`).bind(nextState, id);
   const detail =
     act === "restore"
