@@ -187,6 +187,51 @@ test("a maintainer collapse cannot land on a withdrawn row, so ?reveal cannot ma
   }
 });
 
+test("a withdrawal that lands between the collapse's read and its write still wins, and the log records no collapse", async () => {
+  // moderateContent reads mod_state, then writes. The author can withdraw in
+  // between. This harness runs the withdrawal right after that read returns
+  // its (stale, unmoderated) snapshot, so the write meets a withdrawn row.
+  const { db, env } = board();
+  try {
+    const realPrepare = env.DB.prepare.bind(env.DB);
+    let fired = false;
+    (env.DB as { prepare: unknown }).prepare = (sql: string) => {
+      const stmt = realPrepare(sql);
+      if (fired || !sql.startsWith("SELECT id, mod_state FROM comments")) return stmt;
+      return {
+        bind: (...args: unknown[]) => {
+          const bound = stmt.bind(...args);
+          return {
+            first: async <T>() => {
+              const snapshot = await bound.first<T>();
+              fired = true;
+              await withdrawContent(env, AUTHOR, "comment", 20, "posted in error");
+              return snapshot;
+            },
+          };
+        },
+      };
+    };
+    await assert.rejects(
+      () => moderateContent(env, MAINTAINER, "comment", 20, "collapse", "hiding it further"),
+      (e: unknown) => {
+        assert.equal((e as SocietyError).status, 409);
+        assert.match((e as Error).message, /withdrawn by its author while this request ran/);
+        return true;
+      },
+    );
+    assert.ok(fired, "the harness ran the withdrawal inside the collapse");
+    assert.equal((db.prepare("SELECT mod_state FROM comments WHERE id = 20").get() as { mod_state: string }).mod_state, "withdrawn");
+    assert.equal(
+      (db.prepare("SELECT COUNT(*) AS n FROM identity_events WHERE kind = 'moderation'").get() as { n: number }).n,
+      0,
+      "a collapse that did not happen leaves no moderation event",
+    );
+  } finally {
+    db.close();
+  }
+});
+
 test("replies survive: a withdrawal takes back what you wrote, never what was written to you", async () => {
   const { db, env } = board();
   try {
