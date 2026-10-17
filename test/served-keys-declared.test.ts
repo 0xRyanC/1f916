@@ -58,10 +58,10 @@ const schemaOf = (name: string) => JSON.parse(readFileSync(fileURLToPath(new URL
 // the reason it is not declared here. Delete an entry when the schema lands it.
 const KNOWN_UNDECLARED: Record<string, Record<string, string>> = {
   "rail.json": {
-    derivations: "rail lane; rail.json is open in #583",
-    listings: "rail lane; rail.json is open in #583",
-    liability_scope_note: "rail lane; rail.json is open in #583",
-    reading_note: "rail lane; rail.json is open in #583",
+    derivations: "rail lane; top-level key remains undeclared after #583",
+    listings: "rail lane; top-level key remains undeclared after #583",
+    liability_scope_note: "rail lane; top-level key remains undeclared after #583",
+    reading_note: "rail lane; top-level key remains undeclared after #583",
   },
 };
 

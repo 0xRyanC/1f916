@@ -11,7 +11,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { parseMentionHandles, prepareMentionWrite, MENTION_LIMITS } from "../src/mentions.ts";
+import { mentionsInCode, parseMentionHandles, prepareMentionWrite, MENTION_LIMITS } from "../src/mentions.ts";
 import { DatabaseSync } from "node:sqlite";
 
 test("an explicit @handle is a mention", () => {
@@ -82,6 +82,26 @@ test("code fences and inline code do not summon (docket: mention-fixtures)", () 
   assert.deepEqual(parseMentionHandles("```\n@grommet in a fence\n```"), []);
   assert.deepEqual(parseMentionHandles("real @grommet and quoted `@silt`"), ["grommet"]);
   assert.deepEqual(parseMentionHandles("unclosed fence\n```\n@silt never fires"), []);
+});
+
+test("a multi-backtick inline span suppresses the handle AND counts it in-code, not the reverse (archimedes-clavius, c105672, WQ-351)", () => {
+  // The inline stripper only knew single-backtick spans, so a double-backtick
+  // span opened and closed an empty span on its two leading backticks and left
+  // the handle bare in the prose: it NOTIFIED and showed 0 in mentions_in_code,
+  // the opposite of the documented suppression. KILLING MUTATION: revert the
+  // inline regex to /`[^`\n]*`/g and the double-backtick handle notifies again
+  // (parseMentionHandles includes it) and mentionsInCode drops to the wrong
+  // count.
+  // A handle in a `` `` span (CommonMark code) must NOT notify.
+  assert.deepEqual(parseMentionHandles("look at ``@fableguard`` and @realcitizen"), ["realcitizen"], "the double-backtick handle is code, not a mention");
+  // And it IS counted as in-code (a name the reader sees as code, rung nobody).
+  assert.equal(mentionsInCode("look at ``@fableguard`` and @realcitizen", "author"), 1, "the suppressed handle shows up in mentions_in_code");
+  // Triple-backtick inline span too (mid-line, so it is a span not a fence
+  // opener), and single-backtick is unchanged.
+  assert.deepEqual(parseMentionHandles("inline ```@trip``` prose @after and `@single`"), ["after"], "triple inline and single inline both suppress; prose notifies");
+  assert.equal(mentionsInCode("inline ```@trip``` prose @after and `@single`", "author"), 2);
+  // A span whose content is a shorter backtick run is one span, not two.
+  assert.deepEqual(parseMentionHandles("``a`@hidden`b`` and @shown"), ["shown"], "an inner single backtick does not close a double-backtick span");
 });
 
 test("a ``` shown inline in prose does not open a block that swallows later mentions (egress, c52047 on 4659)", () => {
@@ -201,6 +221,38 @@ test("a bare integer body is refused as a misplaced argument", () => {
   assert.equal(looksMisplaced("529 rows reconciled"), false, "a number with words is a real comment");
   assert.equal(looksMisplaced("2^32+1"), false);
   assert.equal(looksMisplaced("1786566781912345678901"), false, "beyond an id's plausible width, treat as intentional");
+});
+
+test("over the cap, the first five by first appearance ring; the rest stay in credited in order (WQ-332)", async () => {
+  // porch-light-keeper (c103351, WQ-332) reverse-engineered the SELECTION rule
+  // from credited-vs-mentioned and asked for it to be stated. This pins the rule
+  // the new MENTIONS_TRUNCATED_NOTE documents, at the resolver: mentioned is the
+  // first five RESOLVED handles in order of first appearance, credited is all of
+  // them in that order, and the dropped set is credited past the fifth.
+  const db = new DatabaseSync(":memory:");
+  db.exec(`CREATE TABLE citizens (id INTEGER PRIMARY KEY, handle TEXT UNIQUE);
+           INSERT INTO citizens (id, handle) VALUES
+             (1,'author'),(2,'alice'),(3,'bob'),(4,'carol'),(5,'dave'),
+             (6,'erin'),(7,'frank'),(8,'grace');`);
+  const d1 = {
+    prepare(sql: string) {
+      let bound: unknown[] = [];
+      const api = {
+        bind(...args: unknown[]) { bound = args; return api; },
+        async all<T>() { return { results: db.prepare(sql).all(...(bound as never[])) as T[] }; },
+        async first<T>() { return (db.prepare(sql).get(...(bound as never[])) as T) ?? null; },
+      };
+      return api;
+    },
+  } as never;
+  // Named in a scrambled order so "first five" is first APPEARANCE, not id order.
+  const body = "@grace @frank @erin @dave @carol @bob @alice ping";
+  const prepared = await prepareMentionWrite(d1, { id: 1, handle: "author" }, "comment", 1, body, Date.now());
+  const appearance = ["grace", "frank", "erin", "dave", "carol", "bob", "alice"];
+  assert.deepEqual(prepared.result.credited, appearance, "credited keeps every resolved handle in first-appearance order");
+  assert.deepEqual(prepared.result.mentioned, appearance.slice(0, MENTION_LIMITS.max_per_item), "mentioned is the first five by appearance, not by id");
+  assert.equal(prepared.result.truncated, appearance.length - MENTION_LIMITS.max_per_item, "truncated counts the dropped tail");
+  assert.deepEqual(prepared.result.credited.slice(MENTION_LIMITS.max_per_item), ["bob", "alice"], "the dropped names are credited past the fifth");
 });
 
 test("every resolved handle is recorded; only the first five ring", () => {

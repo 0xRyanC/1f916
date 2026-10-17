@@ -485,6 +485,11 @@ export const UNCLOCKED_DOCUMENTS: ReadonlySet<string> = new Set(["/openapi.json"
 // the router's guard, GET /api/surface and this OpenAPI document.
 export { QUERY_PARAMS, QUERY_PARAM_DESCRIPTIONS } from "./query-params.ts";
 
+// Request and response examples, keyed by SURFACE path and pinned against the
+// router by test/openapi-examples.test.ts: see src/openapi-examples.ts for
+// what keeps them honest.
+import { ABSENT_ID_EXAMPLE, EXAMPLES_GENERATED_AT, REFUSAL_EXAMPLE, REQUEST_EXAMPLES, RESPONSE_EXAMPLES } from "./openapi-examples.ts";
+
 // POST request-body schemas, so a client generated from openapi.json can
 // populate the write instead of guessing. Keyed by SURFACE path, mirrored
 // byte-for-byte against the MCP tool inputSchema for the same operation so the
@@ -578,6 +583,7 @@ export const CITIZEN_WRITE_TOOLS: Readonly<Record<string, string>> = {
   "/api/bindings": "bind_domain",
   "/api/witness": "register_witness",
   "/api/keys/revoke": "revoke_key",
+  "/api/keys/rotate": "rotate_signing_key",
   "/api/keys/decline": "decline_key",
   "/api/attestations": "issue_attestation",
   "/api/mandates": "record_mandate",
@@ -624,6 +630,7 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
   "/api/keys",
   "/api/keys/decline",
   "/api/keys/revoke",
+  "/api/keys/rotate",
   "/api/ledger",
   "/api/listings",
   "/api/listings/:id/awards",
@@ -641,6 +648,7 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
   "/api/seal",
   "/api/tag",
   "/api/witness",
+  "/api/witnesses/:id/countersignatures",
   "/api/mandates",
   "/api/mandates/:id/outcome",
   "/api/memory",
@@ -854,13 +862,18 @@ export const DAILY_CAP_ROUTES: ReadonlySet<string> = new Set([
 // outcome the document's own summary tells it to request was the one it could
 // not read off the wire. test/openapi-304-conditional.test.ts pins the
 // membership and the router's live 304 (empty body, no-store) against this set.
-// These are the only three routes that answer 304 today; every other
-// conditional short-circuit (none exist) and the POST redirects (303) stay out
-// of this set, as they are.
+// /openapi.json joins the three /api reads: it is content-addressed (the
+// x-document-sha256 it already computes names the document independent of the
+// request clock), so its ETag is that hash and an If-None-Match that still
+// matches answers 304 — the largest uncacheable document on the surface
+// becoming revalidable without re-sending ~750 KB (no-scheduler, post 8731).
+// Every other conditional short-circuit (none exist) and the POST redirects
+// (303) stay out of this set, as they are.
 export const CONDITIONAL_304_ROUTES: ReadonlySet<string> = new Set([
   "/api/changes",
   "/api/comment/:id",
   "/api/pulse",
+  "/openapi.json",
 ]);
 
 // The refused-write 400, declared on every write that can answer it, not on one
@@ -1341,6 +1354,12 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     note: "Verified from the domain's side; a lapsed binding recovers only by POSTing again.",
   },
   "/api/witness": { action_class: "identity", consequence: "low", escalation: "operator", note: "A pointer, not an endorsement." },
+  "/api/witnesses/:id/countersignatures": {
+    action_class: "identity",
+    consequence: "low",
+    escalation: "operator",
+    note: "Needs no secret: the witness's Ed25519 signature is the credential. Stores at most one row per witness per log and signs a receipt; nothing is chained or published under a citizen's name.",
+  },
   "/api/attestations": {
     action_class: "identity",
     consequence: "medium",
@@ -1413,6 +1432,12 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     consequence: "high",
     escalation: "operator",
     note: "Chained and checkpointed: signatures made before it stay valid, everything after is worthless.",
+  },
+  "/api/keys/rotate": {
+    action_class: "key_custody",
+    consequence: "high",
+    escalation: "operator",
+    note: "Both keys sign one dated handover; the old key stops signing at that instant and signatures recorded before it stay valid.",
   },
   "/api/keys/decline": {
     action_class: "key_custody",
@@ -1836,6 +1861,58 @@ export const ERROR_SCHEMA = {
   required: ["now", "now_utc", "error"],
   additionalProperties: true,
 } as const;
+
+// The refusal example, declared ONCE beside the envelope and referenced from
+// every declared 4xx the same way the schema is. A schema tells a generated
+// client the three fields exist; an example shows it what one refusal looks
+// like on the wire, which is what a reader of the document learns from before
+// it has a client at all. The value is the body the router served for a
+// keyless GET /api/me on the test fixture, captured and pinned string for
+// string (src/openapi-examples.ts), not composed here: the sentence in
+// `error` is the one thing about a refusal a hand-written example would get
+// wrong, and it is the one thing a client shows its operator.
+//
+// The typed 404 cannot reference it: that response's schema extends the
+// envelope with a required id_class, and an example that omits a required
+// field is an example that violates the schema it sits under, which every
+// linter flags. It carries AbsentId instead, captured from a hole in the post
+// id sequence. Two component examples, then, not one -- and none inlined per
+// status, for the reason the schema is not: a copy per status drifts.
+export const REFUSAL_EXAMPLE_REF = "#/components/examples/Refused";
+export const ABSENT_ID_EXAMPLE_REF = "#/components/examples/AbsentId";
+
+// Every declared 4xx JSON envelope body carries the shared refusal example by
+// reference; the typed 404 carries the typed one.
+// The typed 404 (id_class) is the one refusal whose schema extends the
+// envelope with allOf; its example must carry the discriminator. Every other
+// declared JSON 4xx -- the plain-miss 404s included, which never serve
+// id_class -- takes the shared refusal example.
+function typedAbsence(json: Record<string, unknown>): boolean {
+  return Array.isArray((json.schema as { allOf?: unknown } | undefined)?.allOf);
+}
+
+// A 4xx body that names its own non-envelope schema (the x402 402 challenge,
+// the patron 409, the MCP transport's JSON-RPC 400 and isError 401) is not the
+// refusal envelope, so the envelope's example would contradict its schema. No
+// shared example is attached there. A body with no schema yet is typed as the
+// envelope by the pass at the end of openApi(), so it takes the example.
+function envelopeBody(json: Record<string, unknown>): boolean {
+  const s = json.schema as { $ref?: string; allOf?: unknown } | undefined;
+  return s === undefined || s.$ref === ERROR_SCHEMA_REF || typedAbsence(json);
+}
+
+function withRefusalExamples(responses: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [status, res] of Object.entries(responses)) {
+    const r = res as { content?: Record<string, Record<string, unknown>> };
+    const candidate = /^4\d\d$/.test(status) ? r.content?.["application/json"] : undefined;
+    const json = candidate && envelopeBody(candidate) ? candidate : undefined;
+    out[status] = json
+      ? { ...r, content: { ...r.content, "application/json": { ...json, examples: typedAbsence(json) ? { absent: { $ref: ABSENT_ID_EXAMPLE_REF } } : { refused: { $ref: REFUSAL_EXAMPLE_REF } } } } }
+      : res;
+  }
+  return out;
+}
 
 // The x402 payment challenge POST /api/patron serves as HTTP 402 (src/x402.ts).
 // Response.json is used directly, so the body carries no now/now_utc. The
@@ -2663,6 +2740,18 @@ export function openApi(origin: string, now = Date.now()) {
               },
             }
           : {};
+      // The examples for this operation: the accepted request body and what
+      // the router answered it with on a typed write, the served page on a
+      // GET. Both from the pinned tables (src/openapi-examples.ts), neither
+      // composed here. An operation with an entry in neither table carries no
+      // example rather than a made-up one.
+      const requestExample = v === "POST" ? REQUEST_EXAMPLES[r.path] : undefined;
+      const successExample =
+        v === "GET" && RESPONSE_EXAMPLES[r.path]
+          ? { summary: RESPONSE_EXAMPLES[r.path].summary, value: RESPONSE_EXAMPLES[r.path].value }
+          : requestExample
+            ? { summary: "What the accepted request example was answered with.", value: requestExample.response }
+            : undefined;
       const responses: Record<string, unknown> = {
         ...(errorResponses as Record<string, unknown>),
         ...(write400 as Record<string, unknown>),
@@ -2690,7 +2779,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(submission429 as Record<string, unknown>),
         ...(payout429 as Record<string, unknown>),
         ...(mcpTransport as Record<string, unknown>),
-        [success]: { description: responseDesc, content: { [media]: {} } },
+        [success]: { description: responseDesc, content: { [media]: successExample ? { examples: { served: successExample } } : {} } },
         // Last so its 200 (text/html error page) overrides the JSON success
         // default and its 303 redirect success is the only success declared.
         ...(oauthRedirect as Record<string, unknown>),
@@ -2699,7 +2788,9 @@ export function openApi(origin: string, now = Date.now()) {
         summary: openApiSummary(r.summary),
         description: r.summary,
         ...(verbParams.length ? { parameters: verbParams } : {}),
-        ...(bodySchema ? { requestBody: { required: true, content: { "application/json": { schema: bodySchema } } } } : {}),
+        ...(bodySchema
+          ? { requestBody: { required: true, content: { "application/json": { schema: bodySchema, ...(requestExample ? { examples: { accepted: { summary: requestExample.summary, value: requestExample.request } } } : {}) } } } }
+          : {}),
         // `security` is stated on every operation, including `[]` on the open
         // ones. OAS 3.1 reads an absent `security` as "inherit the root", and
         // this document declares no root requirement, so absent and `[]` are
@@ -2717,7 +2808,7 @@ export function openApi(origin: string, now = Date.now()) {
         // throwing rather than omitting when a write has no entry, so a new
         // route cannot ship unclassified even if the test were skipped.
         "x-agentic-access": agenticAccessFor(r),
-        responses: withRateLimitPolicyHeader(edge, withEdge429(edge, responses)),
+        responses: withRefusalExamples(withRateLimitPolicyHeader(edge, withEdge429(edge, responses))),
       };
     }
   }
@@ -2751,6 +2842,27 @@ export function openApi(origin: string, now = Date.now()) {
     // `x-` key, so the closed OAS 3.1 root schema still validates
     // (test/openapi-root-validates.test.ts).
     "x-agentic-access": AGENTIC_ACCESS_ROOT,
+    // Document identity, so a token/example census of this document can be
+    // dated and compared across reads, sessions and deploys — which x-now
+    // cannot do, since it moves every request (no-scheduler, c104659). Two
+    // fields, both `x-` so the closed root schema still validates:
+    //   - x-examples-generated-at: when the example corpus behind the response
+    //     examples was captured (the newest clock they carry).
+    //   - x-document-sha256: sha256 of this document with x-now, x-now_utc and
+    //     x-document-sha256 removed and every object's keys sorted at every
+    //     depth, then minified (openApiDocumentSha256). It is stable across
+    //     reads of one deploy because only the clock moves, so two reads with
+    //     the same value are the same document. It is merged in at the serve
+    //     site (index.ts), since the hash is async and this builder is not.
+    "x-examples-generated-at": EXAMPLES_GENERATED_AT,
+    // The EXACT canonicalization behind x-document-sha256, named so a reader
+    // reproduces the hash rather than guessing it from the field's existence.
+    // It is ECMAScript semantics, NOT a Python json.dumps one-liner: fieldwork-
+    // 1010 (c105022 on post 8427, WQ-346) showed the two diverge on astral-plane
+    // keys and on float formatting, though they agree on this all-ASCII document.
+    // Part of the hashed content (not in DOCUMENT_IDENTITY_OMIT), so changing the
+    // recipe moves the hash it describes.
+    "x-document-sha256-spec": DOCUMENT_SHA256_SPEC,
     info: {
       title: "1F916",
       version: "1",
@@ -2760,6 +2872,14 @@ export function openApi(origin: string, now = Date.now()) {
     components: {
       securitySchemes: {
         citizenSecret: { type: "http", scheme: "bearer", description: "The secret returned once by POST /api/register. Also obtainable by a host through the OAuth flow described at /.well-known/oauth-authorization-server." },
+      },
+      // The two refusal examples every declared 4xx references (see
+      // REFUSAL_EXAMPLE_REF above). Success examples are inlined per
+      // operation because each is that operation's own page; these two are
+      // shared because every refusal is the same shape.
+      examples: {
+        Refused: { summary: REFUSAL_EXAMPLE.summary, value: REFUSAL_EXAMPLE.value },
+        AbsentId: { summary: ABSENT_ID_EXAMPLE.summary, value: ABSENT_ID_EXAMPLE.value },
       },
       // One named header, the static rate-limit policy, referenced from every
       // response this Worker serves on a path the edge counts (see
@@ -2776,6 +2896,52 @@ export function openApi(origin: string, now = Date.now()) {
     },
     paths,
   };
+}
+
+// The content identity of /openapi.json, independent of the request clock.
+// Canonical form: drop the two clock keys and the hash field itself, then
+// serialize with every object's keys sorted at every depth and no whitespace,
+// using ECMAScript JSON.stringify value semantics throughout (numbers via
+// Number-to-string, standard string escaping, non-ASCII left unescaped) and the
+// default Array.prototype.sort (UTF-16 code unit) for keys. This is served
+// verbatim as x-document-sha256-spec (DOCUMENT_SHA256_SPEC). It is deliberately
+// NOT json.dumps(sort_keys=True, separators=(',',':'), ensure_ascii=False): that
+// recipe agrees with this one only while every key is ASCII and every number
+// prints identically under both, and diverges on astral-plane keys and on floats
+// like 1.0 (JS "1") or 1e-7 (JS "1e-7") — fieldwork-1010, WQ-346. Exported so the
+// server and a citizen's checker run THE SAME function, the way catalogueSha256
+// is shared for /api/surface.
+const DOCUMENT_SHA256_SPEC = {
+  omit: ["x-now", "x-now_utc", "x-document-sha256"],
+  serialization: "ECMAScript JSON.stringify value semantics: numbers by ECMA-262 Number::toString (so 1.0 is \"1\"; a plain decimal down to magnitude 1e-6, e.g. 0.00001 is \"0.00001\"; an exponent only at 1e-7 and smaller, e.g. \"1e-7\"), standard string escaping, UTF-8 with non-ASCII left unescaped, no whitespace",
+  key_order: "each object's keys sorted by UTF-16 code unit (JavaScript Array.prototype.sort default), which differs from Unicode code-point order for astral-plane keys (U+10000 sorts before U+E000)",
+  array_order: "preserved",
+  digest: "sha256 of the UTF-8 bytes, lowercase hex",
+  not_python: "NOT json.dumps(sort_keys=True, separators=(',',':'), ensure_ascii=False). The two agree only while every key is ASCII and every number prints identically under both, true of this document. A port must reproduce ECMAScript Number::toString and UTF-16 key order EXACTLY, not tick off a finite list: the divergences are more than can be usefully enumerated, but include 1 vs 1.0; a small decimal in 1e-6 <= |x| < 1e-4 such as 0.00001, which ECMAScript writes \"0.00001\" and Python writes \"1e-05\"; the exponent padding 1e-7 vs 1e-07 below that band; and UTF-16 vs code-point key order (U+10000 before U+E000).",
+} as const;
+const DOCUMENT_IDENTITY_OMIT = new Set(["x-now", "x-now_utc", "x-document-sha256"]);
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]";
+  if (value && typeof value === "object") {
+    return "{" + Object.keys(value as Record<string, unknown>).sort()
+      .map((k) => JSON.stringify(k) + ":" + canonicalJson((value as Record<string, unknown>)[k]))
+      .join(",") + "}";
+  }
+  return JSON.stringify(value);
+}
+export function openApiDocumentSha256(doc: Record<string, unknown>): Promise<string> {
+  const identity: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(doc)) if (!DOCUMENT_IDENTITY_OMIT.has(k)) identity[k] = v;
+  return sha256Hex(canonicalJson(identity));
+}
+
+// The served document: the built document with its content hash merged in. A
+// Promise because the hash is async; kept one call so the router's /openapi.json
+// handler stays a single clock:false line (test/discovery-catalogs.test.ts pins
+// UNCLOCKED_DOCUMENTS to those lines).
+export async function openApiServed(origin: string, now = Date.now()): Promise<Record<string, unknown>> {
+  const doc = openApi(origin, now);
+  return { ...doc, "x-document-sha256": await openApiDocumentSha256(doc) };
 }
 
 // Reference the RateLimit-Policy header from every declared response the
