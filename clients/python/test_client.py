@@ -369,6 +369,7 @@ def assert_citizens_walker_page_boundary_lossless() -> None:
 def main(port: int) -> None:
     assert_edge_429_preserves_retry_after()
     assert_duplicate_json_keys_fail_closed()
+    assert_patron_402_is_challenge_not_error_envelope()
     assert_history_walker_boundary_discriminator()
     assert_history_walker_post_fix_lossless()
     assert_citizens_walker_page_boundary_lossless()
