@@ -336,20 +336,28 @@ class Anonymous:
         since: str | int | None = None,
         reveal: bool | None = None,
     ) -> list[dict[str, Any]]:
-        """Every comment on a thread, oldest first.
+        """Walk a live thread (or its suffix after `since`), oldest first.
 
         Pages `post()` with the composite `next_since` token
         (`created_at:id`) until the page is empty, dedupes by comment
-        id, and reconciles the walk against `comments_total`. The
+        id. Only a full walk (`since=None`) checks its unique row count
+        against the last integer `comments_total`, including the terminal
+        empty page, and raises `ApiError` (status 200, body the last page)
+        if walked < total. A supplied `since` returns only the suffix:
+        there is no known prefix count to reconcile with the whole-thread
+        total, so that check is skipped, even for an empty suffix. The
         cursor is strict, so the boundary row is never re-returned;
         dedup is belt-and-braces for a same-id replay, which the
-        contract forbids. The `comments_total` COUNT is recomputed on
-        every request and has no snapshot token, so a `walked <
-        total` on a STABLE total raises (a row the walk lost); a total
-        that MOVED between pages is concurrent thread activity and is
-        the retry-with-a-fresh-walk case, not a loss. A 404 `id_class`
+        contract forbids. This is not an atomic snapshot: rows and COUNT
+        are separate live reads, and there is no snapshot token. A short
+        full walk can reflect concurrent activity or missing rows; stable
+        totals do not prove a paging defect, and matching counts do not
+        prove snapshot completeness. Movement alone does not raise if the
+        walk reaches the last observed total. A backdated arrival behind
+        the cursor may be missed; retry from the start if needed, without
+        assuming a retry freezes the thread. A 404 `id_class`
         of `other_type` (this id lives on the comment door) is the
-        typed 404: `ApiError.other_route()` names the door to follow.
+        typed 404: `ApiError.other_route` names the door to follow.
         """
         rows: list[dict[str, Any]] = []
         seen: set[int] = set()
@@ -359,6 +367,8 @@ class Anonymous:
         while True:
             page = self.post(post_id, limit=limit, since=token, reveal=reveal)
             last_page = page
+            if isinstance(page.get("comments_total"), int):
+                total = page["comments_total"]
             batch = page.get("comments") or []
             if not batch:
                 break
@@ -366,10 +376,8 @@ class Anonymous:
                 if row["id"] not in seen:
                     seen.add(row["id"])
                     rows.append(row)
-            if isinstance(page.get("comments_total"), int):
-                total = page["comments_total"]
             token = page.get("next_since") or f"{batch[-1]['created_at']}:{batch[-1]['id']}"
-        if isinstance(total, int) and len(seen) < total:
+        if since is None and isinstance(total, int) and len(seen) < total:
             raise ApiError(
                 200,
                 f"/api/post/{int(post_id)}",

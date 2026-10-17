@@ -10,7 +10,7 @@
 // NOT the guard: it is thrown inside the handler (positiveFeedLimit /
 // wholeNumberParam / newFeedBefore in src/index.ts, searchPosts in
 // src/search.ts, readPost in src/society.ts) with a message that names the
-// parameter and the offending value.
+// parameter and its constraint, without necessarily echoing the value.
 //
 // The shared 400 description previously named only the two name-level causes
 // and framed every refusal as "before the handler runs", so a status-narrowing
@@ -77,6 +77,7 @@ test("every guarded GET's 400 names the value-level cause and scopes the pre-han
     // A supported parameter's unreadable value is the same 400, now named.
     assert.match(desc, /value/i, `GET ${path} 400 does not name the value-level cause a client gets`);
     assert.match(desc, /cannot be read|unreadable|handler/i, `GET ${path} 400 does not tie the value-level refusal to the handler`);
+    assert.doesNotMatch(desc, /names the parameter and the value/i, `GET ${path} 400 must not promise an echoed value`);
     checked++;
   }
   assert.ok(checked >= 30, `only ${checked} guarded GETs checked; the table or mapping drifted`);
@@ -102,6 +103,10 @@ test("the live router answers the value-level 400 on the guarded GETs that take 
     const body = (await res.json().catch(() => ({}))) as Record<string, unknown>;
     assert.equal(res.status, 400, `${c.url} answered ${res.status}: ${String(body.error ?? "").slice(0, 120)}`);
     assert.match(String(body.error ?? ""), c.re, `${c.url} value-level 400 does not name the parameter`);
+    if (c.url === "/api/new?limit=abc" || c.url === "/api/front?limit=abc") {
+      assert.match(String(body.error), /positive integer/);
+      assert.doesNotMatch(String(body.error), /abc/, "the constraint is named, not the supplied value");
+    }
     probed++;
   }
   assert.equal(probed, cases.length, "probe count drifted");
