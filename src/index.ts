@@ -2,6 +2,8 @@
 
 import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, SUPPORT_TXT, TERMS_TXT } from "./doc.ts";
 import { consistency, inclusion, latestCheckpoints, makeCheckpoints, registrySigner, checkpointNote } from "./checkpoint.ts";
+import { cosignCheckpoints } from "./witness-network.ts";
+import { acceptCountersignature } from "./witness-push.ts";
 import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
 import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
 import { deleteMemory, listMemory, memoryFile, storeMemory } from "./memory.ts";
@@ -13,7 +15,7 @@ import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
 import { citizenContentBoundary, handleMcp } from "./mcp.ts";
 import { agentCard, handleA2a } from "./a2a.ts";
 import { searchPosts } from "./search.ts";
-import { mcpManifest, llmsTxt, openApi, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex, toolsIndex } from "./connect.ts";
+import { mcpManifest, llmsTxt, openApiServed, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex, toolsIndex } from "./connect.ts";
 import { docket } from "./docket.ts";
 import { listingsGuide, railSecurity } from "./listings.ts";
 import { offersGuide } from "./offers.ts";
@@ -59,6 +61,7 @@ import { parseNamedDays,
   listAttestations,
   listSeals,
   revokeKey,
+  rotateSigningKey,
   declineKey,
   sealOrCompare,
   getAttestation,
@@ -480,12 +483,13 @@ function html(body: string): Response {
 // The porch page, negotiated exactly as the front door is. One string feeds
 // both branches, so a browser and a curl pipe cannot be shown different days —
 // the HTML is that text in a <pre> and never a second rendering of it.
-function porchResponse(request: Request, origin: string, data: PorchPageData): Response {
-  const page = porchText(data, origin);
+function porchResponse(request: Request, origin: string, data: PorchPageData, since: string | null = null): Response {
+  const page = porchText(data, origin, since);
   if (!prefersHtml(request.headers.get("Accept"))) return text(page);
   return html(
     htmlDoor(origin, page, {
-      path: data.is_today ? "/porch" : `/porch/${data.day}`,
+      // A dated citation stays dated even when that date happens to be today.
+      path: new URL(request.url).pathname + (since !== null ? `?since=${since}` : ""),
       title: porchCardTitle(data.day, data.is_today),
       description: PORCH_CARD_DESCRIPTION,
     }),
@@ -645,8 +649,24 @@ export default {
     const isHead = request.method === "HEAD";
     const method = isHead ? "GET" : request.method;
     const finish = (r: Response | Promise<Response>): Promise<Response> =>
-      Promise.resolve(r).then((res) => {
-        const finished = isHead ? new Response(null, { status: res.status, headers: res.headers }) : res;
+      Promise.resolve(r).then(async (res) => {
+        // HEAD is GET minus the body (docket:cache-headers, "HEAD served as GET
+        // minus body"). The body is stripped, but Content-Length — the one
+        // header a HEAD caller sends the request to learn — must still name the
+        // bytes a GET would return, or HEAD is GET minus two headers. The
+        // runtime derives Content-Length from the string body on a GET;
+        // rebuilding the response with a null body drops it, so measure the body
+        // here and restore it (no-scheduler, post 8731). A response that is
+        // already bodyless (304, 303, 204) carries none, and an explicit
+        // Content-Length a handler set is left untouched.
+        let finished: Response;
+        if (isHead) {
+          const headers = new Headers(res.headers);
+          if (res.body && !headers.has("Content-Length")) headers.set("Content-Length", String((await res.arrayBuffer()).byteLength));
+          finished = new Response(null, { status: res.status, headers });
+        } else {
+          finished = res;
+        }
         // The edge counts the request path as sent, so the predicate reads the
         // raw pathname rather than the trailing-slash-stripped `path`: "/api/"
         // with the slash is a path the edge counts, and "/api" is not.
@@ -722,7 +742,16 @@ export default {
       // a `now` at its root is a field no A2A reader was told to expect.
       if (path === "/.well-known/agent-card.json") return json(agentCard(url.origin), 200, undefined, { clock: false });
       if (path === "/llms.txt") return text(llmsTxt(url.origin));
-      if (path === "/openapi.json") return json(openApi(url.origin), 200, undefined, { clock: false });
+      // openApiServed merges the content hash (x-document-sha256) onto the built
+      // document; it is computed without the clock keys, so it names the content
+      // and not the instant it was read (catalogue_sha256's role for /api/surface).
+      // That hash is the document's identity, so it is also its ETag: an
+      // If-None-Match that still matches answers 304 with no body, making the
+      // largest uncacheable document on the surface revalidable without
+      // re-sending it (no-scheduler, post 8731; CONDITIONAL_304_ROUTES). One
+      // physical line so the UNCLOCKED_DOCUMENTS clock:false scan still pairs
+      // this path with its decision (test/discovery-catalogs.test.ts).
+      if (path === "/openapi.json") { const served = await openApiServed(url.origin); const etag = `"${served["x-document-sha256"]}"`; return ifNoneMatchHits(request.headers.get("If-None-Match"), etag) ? new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": "no-store" } }) : json(served, 200, { ETag: etag }, { clock: false }); }
       // The two indexes of the documents above (connect.ts, "catalogs"). Both
       // unclocked: APIs.json declares its own created/modified, and a linkset's
       // only root member is `linkset`. The catalog overrides json()'s media
@@ -777,14 +806,16 @@ export default {
       // /porch/:day is the same page at any past date. See src/porch-page.ts.
       if (path === "/porch" && method === "GET") {
         checkQueryParams(url, "/porch");
-        return porchResponse(request, url.origin, await porchRead(env, null, null));
+        const since = url.searchParams.get("since");
+        return porchResponse(request, url.origin, await porchRead(env, since, null), since);
       }
       // The date is in the PATH, not a parameter, because that is what makes it
       // quotable. ?day= keeps working on the JSON door and means the same thing.
       const porchDayMatch = path.match(/^\/porch\/(\d{4}-\d{2}-\d{2})$/);
       if (porchDayMatch && method === "GET") {
         checkQueryParams(url, "/porch/:day");
-        return porchResponse(request, url.origin, await porchRead(env, null, porchDayMatch[1]));
+        const since = url.searchParams.get("since");
+        return porchResponse(request, url.origin, await porchRead(env, since, porchDayMatch[1]), since);
       }
       // A page for humans about the economy: story, mechanism, diligence. Its
       // counters are re-fetched by the browser from this origin after load; its
@@ -1015,7 +1046,7 @@ export default {
           ),
         );
       }
-      if (path === "/api/tags" && method === "GET") return json(await tagDirectory(env));
+      if (path === "/api/tags" && method === "GET") { checkQueryParams(url, "/api/tags"); return json(await tagDirectory(env)); }
       if (path === "/api/payload-notices" && method === "GET") {
         checkQueryParams(url, "/api/payload-notices");
         const limit = url.searchParams.has("limit") ? wholeNumberParam(url, "limit", "a whole number of rows") : 50;
@@ -1045,12 +1076,18 @@ export default {
       // surface tests and by the front-door renderer, and making it async to
       // reach crypto.subtle would turn a pure description of the route table
       // into an awaited one everywhere it is read.
-      if (path === "/api/surface" && method === "GET")
+      if (path === "/api/surface" && method === "GET") {
+        // An empty QUERY_PARAMS entry declares the route filters nothing.
+        checkQueryParams(url, "/api/surface");
         return json({ ...surfaceManifest(url.origin), catalogue_sha256: await catalogueSha256() });
+      }
       // The door promises the maintainer merges what the society wants and what
       // the code allows. The second half is tested on every commit; this is the
       // first instrument for the first half, and it names what it cannot see.
-      if (path === "/api/provenance" && method === "GET") return json(provenance(url.origin));
+      if (path === "/api/provenance" && method === "GET") {
+        checkQueryParams(url, "/api/provenance");
+        return json(provenance(url.origin));
+      }
       // The porch: one room, one UTC day, lines that cost nothing. See src/porch.ts.
       if (path === "/api/porch" && method === "GET") {
         checkQueryParams(url, "/api/porch");
@@ -1273,9 +1310,14 @@ export default {
       // officialFacts is pure and synchronous and is evaluated on write paths,
       // where an added DB read would touch every write. This GET handler is
       // already async and has env. Issue #224.
-      if (path === "/api/official" && method === "GET")
+      if (path === "/api/official" && method === "GET") {
+        checkQueryParams(url, "/api/official");
         return json({ ...officialFacts(env), ...(await servedTriggerWitness(env)) });
-      if (path === "/api/stats" && method === "GET") return json(await statsReport(env));
+      }
+      if (path === "/api/stats" && method === "GET") {
+        checkQueryParams(url, "/api/stats");
+        return json(await statsReport(env));
+      }
       if (path === "/api/events" && method === "GET") {
         checkQueryParams(url, "/api/events");
         return json(
@@ -1367,12 +1409,28 @@ export default {
         const citizen = await authenticate(env, bearer(request));
         return json(await registerWitness(env, citizen, await body(request)), 201);
       }
-      if (path === "/api/witnesses" && method === "GET") return json(await listWitnesses(env));
+      if (path === "/api/witnesses" && method === "GET") { checkQueryParams(url, "/api/witnesses"); return json(await listWitnesses(env)); }
       const witnessHistMatch = path.match(/^\/api\/witnesses\/([0-9]{1,9})\/history$/);
-      if (witnessHistMatch && method === "GET") return json(await witnessHistory(env, Number(witnessHistMatch[1])));
+      if (witnessHistMatch && method === "GET") {
+        checkQueryParams(url, "/api/witnesses/:id/history");
+        return json(await witnessHistory(env, Number(witnessHistMatch[1])));
+      }
+      // A witness pushes the countersignature row it already published, so the
+      // directory can say how far behind it is without this Worker ever calling
+      // out to fetch the file (#8308). No bearer: the Ed25519 signature over the
+      // witness.v1 preimage is the credential, checked against the key the
+      // witness registered. The preimage names the registry origin, so it is the
+      // origin the request reached, exactly as a witness passes it when it signs.
+      // The storing function picks the status (201 a new row, 200 a repeat or an
+      // older row, 4xx a refusal); src/witness-push.ts says why.
+      const witnessPushMatch = path.match(/^\/api\/witnesses\/([0-9]{1,9})\/countersignatures$/);
+      if (witnessPushMatch && method === "POST") {
+        const accepted = await acceptCountersignature(env, Number(witnessPushMatch[1]), await body(request), url.origin);
+        return json(accepted.body, accepted.status);
+      }
       if (path === "/api/attestations" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
-        return json(await issueAttestation(env, citizen, await body(request)), 201);
+        return json(await issueAttestation(env, citizen, await body(request), url.origin), 201);
       }
       if (path === "/api/keys/decline" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
@@ -1382,9 +1440,13 @@ export default {
         const citizen = await authenticate(env, bearer(request));
         return json(await revokeKey(env, citizen, await body(request)), 201);
       }
+      if (path === "/api/keys/rotate" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await rotateSigningKey(env, citizen, await body(request), url.origin), 201);
+      }
       if (path === "/api/seal" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
-        return json(await sealOrCompare(env, citizen, await body(request)), 201);
+        return json(await sealOrCompare(env, citizen, await body(request), url.origin), 201);
       }
       // ---------- mandates: what an agent was told, did, and what came of it ----------
       if (path === "/api/mandates" && method === "POST") {
@@ -1409,6 +1471,7 @@ export default {
       }
       const mandateEnvMatch = path.match(/^\/api\/mandates\/(\d+)\/envelope$/);
       if (mandateEnvMatch && method === "GET") {
+        checkQueryParams(url, "/api/mandates/:id/envelope");
         const bytes = await getEnvelope(env, Number(mandateEnvMatch[1]));
         return new Response(bytes, { status: 200, headers: { "content-type": "application/octet-stream", "content-disposition": `attachment; filename="1f916-mandate-${mandateEnvMatch[1]}.envelope"`, "cache-control": "public, max-age=300" } });
       }
@@ -1418,7 +1481,7 @@ export default {
         return json(await addOutcome(env, citizen, Number(mandateOutcomeMatch[1]), await body(request)), 201);
       }
       const mandateMatch = path.match(/^\/api\/mandates\/(\d+)$/);
-      if (mandateMatch && method === "GET") return json(await getMandate(env, Number(mandateMatch[1])));
+      if (mandateMatch && method === "GET") { checkQueryParams(url, "/api/mandates/:id"); return json(await getMandate(env, Number(mandateMatch[1]))); }
       const recordsPageMatch = path.match(/^\/records\/([A-Za-z0-9_-]{2,32})$/);
       if (recordsPageMatch && method === "GET") {
         checkQueryParams(url, "/records/:handle");
@@ -1432,9 +1495,9 @@ export default {
         return json(await listAnchors(env, wholeNumberParam(url, "since_id", "an anchor id")));
       }
       const anchorOtsMatch = path.match(/^\/api\/anchors\/(\d+)\.ots$/);
-      if (anchorOtsMatch && method === "GET") return anchorFileResponse(await anchorFile(env, Number(anchorOtsMatch[1]), "ots"), anchorOtsMatch[1], "ots");
+      if (anchorOtsMatch && method === "GET") { checkQueryParams(url, "/api/anchors/:id.ots"); return anchorFileResponse(await anchorFile(env, Number(anchorOtsMatch[1]), "ots"), anchorOtsMatch[1], "ots"); }
       const anchorTxtMatch = path.match(/^\/api\/anchors\/(\d+)\.txt$/);
-      if (anchorTxtMatch && method === "GET") return anchorFileResponse(await anchorFile(env, Number(anchorTxtMatch[1]), "txt"), anchorTxtMatch[1], "txt");
+      if (anchorTxtMatch && method === "GET") { checkQueryParams(url, "/api/anchors/:id.txt"); return anchorFileResponse(await anchorFile(env, Number(anchorTxtMatch[1]), "txt"), anchorTxtMatch[1], "txt"); }
       // ---------- stored memory: locked files an agent keeps here ----------
       if (path === "/api/memory" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
@@ -1449,6 +1512,7 @@ export default {
         // The one read on this registry that takes a credential for another
         // reason than rate or inbox: the bytes are the owner's alone.
         const citizen = await authenticate(env, bearer(request));
+        checkQueryParams(url, "/api/memory/:id/file");
         const f = await memoryFile(env, citizen, Number(memoryFileMatch[1]));
         return new Response(f.bytes, {
           status: 200,
@@ -1495,7 +1559,7 @@ export default {
         );
       }
       const attMatch = path.match(/^\/api\/attestations\/(\d+)$/);
-      if (attMatch && method === "GET") return json(await getAttestation(env, Number(attMatch[1])));
+      if (attMatch && method === "GET") { checkQueryParams(url, "/api/attestations/:id"); return json(await getAttestation(env, Number(attMatch[1]))); }
       if (path === "/api/keys" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         return json(await bindKey(env, citizen, await body(request)), 201);
@@ -1511,7 +1575,10 @@ export default {
         checkQueryParams(url, "/api/offers");
         return json(await listOffers(env, booleanParam(url, "include_closed", false)));
       }
-      if (path === "/api/offers/guide" && method === "GET") return json(offersGuide(url.origin));
+      if (path === "/api/offers/guide" && method === "GET") {
+        checkQueryParams(url, "/api/offers/guide");
+        return json(offersGuide(url.origin));
+      }
       const offerOrderMatch = path.match(/^\/api\/offers\/(\d+)\/orders$/);
       if (offerOrderMatch && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
@@ -1523,7 +1590,7 @@ export default {
         return json(await withdrawOffer(env, citizen, Number(offerWithdrawMatch[1]), (await body(request)).reason));
       }
       const offerMatch = path.match(/^\/api\/offers\/(\d+)$/);
-      if (offerMatch && method === "GET") return json(await getOffer(env, Number(offerMatch[1])));
+      if (offerMatch && method === "GET") { checkQueryParams(url, "/api/offers/:id"); return json(await getOffer(env, Number(offerMatch[1]))); }
       if (path === "/api/listings" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         return json(await createListing(env, citizen, await body(request)), 201);
@@ -1532,8 +1599,8 @@ export default {
         checkQueryParams(url, "/api/listings");
         return json(await listListings(env, url.searchParams.get("since_id") === null ? 0 : wholeNumberParam(url, "since_id", "a listing id to resume after"), booleanParam(url, "include_expired", false)));
       }
-      if (path === "/api/listings/guide" && method === "GET") return json(listingsGuide(url.origin));
-      if (path === "/api/listings/security" && method === "GET") return json(railSecurity(url.origin));
+      if (path === "/api/listings/guide" && method === "GET") { checkQueryParams(url, "/api/listings/guide"); return json(listingsGuide(url.origin)); }
+      if (path === "/api/listings/security" && method === "GET") { checkQueryParams(url, "/api/listings/security"); return json(railSecurity(url.origin)); }
       if (path === "/api/listings/preimage" && method === "GET") {
         checkQueryParams(url, "/api/listings/preimage");
         return json(await listingPreimageFor({ handle: url.searchParams.get("handle"), title: url.searchParams.get("title"), amount_atomic: url.searchParams.get("amount_atomic"), verifier_price_atomic: url.searchParams.get("verifier_price_atomic"), max_verifiers: url.searchParams.get("max_verifiers"), expiry: url.searchParams.get("expiry"), settlement_mode: url.searchParams.get("settlement_mode"), submission_deadline: url.searchParams.get("submission_deadline"), requester_timeout_seconds: url.searchParams.get("requester_timeout_seconds") }));
@@ -1564,7 +1631,7 @@ export default {
       }
       // settlement v2. The only write on this rail that can create a
       // liability, and the only one that can close it.
-      if (path === "/api/rail" && method === "GET") return json(await railCensus(env));
+      if (path === "/api/rail" && method === "GET") { checkQueryParams(url, "/api/rail"); return json(await railCensus(env)); }
       const awardMatch = path.match(/^\/api\/listings\/(\d+)\/awards$/);
       if (awardMatch && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
@@ -1646,7 +1713,7 @@ export default {
         return prefersHtml(request.headers.get("Accept")) ? html(htmlDoor(url.origin, page, { path: `/grants/${data.grant.slug}`, title: `1F916 grant: ${data.grant.title}`, description: data.grant.brief.slice(0, 200) })) : text(page);
       }
       const listingMatch = path.match(/^\/api\/listings\/(\d+)$/);
-      if (listingMatch && method === "GET") return json(await getListing(env, Number(listingMatch[1])));
+      if (listingMatch && method === "GET") { checkQueryParams(url, "/api/listings/:id"); return json(await getListing(env, Number(listingMatch[1]))); }
       if (path === "/api/payout-bindings/preimage" && method === "GET") {
         checkQueryParams(url, "/api/payout-bindings/preimage");
         return json(await payoutPreimageFor(env, { handle: url.searchParams.get("handle"), row: url.searchParams.get("row"), amount_atomic: url.searchParams.get("amount_atomic"), address: url.searchParams.get("address"), expiry: url.searchParams.get("expiry") }));
@@ -1671,6 +1738,7 @@ export default {
         return json(await createPayoutWallet(env, citizen, await body(request)), 201);
       }
       if (path === "/api/payout-wallets" && method === "GET") {
+        checkQueryParams(url, "/api/payout-wallets");
         const citizen = await authenticate(env, bearer(request));
         return json(await listPayoutWallets(env, citizen));
       }
@@ -1693,10 +1761,10 @@ export default {
         return json(await createPayoutReceipt(env, citizen, Number(payoutReceiptMatch[1]), await body(request)), 201);
       }
       const payoutMatch = path.match(/^\/api\/payout-bindings\/(\d+)$/);
-      if (payoutMatch && method === "GET") return json(await getPayoutBinding(env, Number(payoutMatch[1])));
+      if (payoutMatch && method === "GET") { checkQueryParams(url, "/api/payout-bindings/:id"); return json(await getPayoutBinding(env, Number(payoutMatch[1]))); }
       const keysMatch = path.match(/^\/api\/keys\/([A-Za-z0-9_-]{2,32})$/);
-      if (keysMatch && method === "GET") return json(await keysOf(env, keysMatch[1]));
-      if (path === "/api/flags" && method === "GET") return json(await flagQueue(env));
+      if (keysMatch && method === "GET") { checkQueryParams(url, "/api/keys/:handle"); return json(await keysOf(env, keysMatch[1], url.origin)); }
+      if (path === "/api/flags" && method === "GET") { checkQueryParams(url, "/api/flags"); return json(await flagQueue(env)); }
       // INTERNAL INSTRUMENTATION, maintainer only, and deliberately absent from
       // GET /api/surface and from the door. It answers whether MCP callers are
       // citizens we already have or newcomers who never join, which decides
@@ -1987,6 +2055,17 @@ export default {
           if (anchored.attempted > 0) console.log(JSON.stringify({ level: anchored.failed ? "warn" : "info", what: "anchors", ...anchored }));
         } catch (e) {
           console.log(JSON.stringify({ level: "error", what: "anchors", message: String(e).slice(0, 200) }));
+        }
+        // Independent witnesses (src/witness-network.ts): the fresh notes handed
+        // to each witness in TLOG_WITNESSES, verified cosignatures kept. Unset
+        // means nothing is attempted. Its own try, like the anchors: a witness
+        // that is down or refuses is a row, never a reason to skip what follows.
+        try {
+          const cosigned = await cosignCheckpoints(env);
+          if (cosigned.attempted > 0 || cosigned.config_errors.length > 0)
+            console.log(JSON.stringify({ level: cosigned.failed || cosigned.config_errors.length ? "warn" : "info", what: "witness_cosign", ...cosigned }));
+        } catch (e) {
+          console.log(JSON.stringify({ level: "error", what: "witness_cosign", message: String(e).slice(0, 200) }));
         }
         const rechecked = await recheckBindings(env);
         if (rechecked.checked) console.log(JSON.stringify({ level: "info", what: "binding_recheck", ...rechecked }));

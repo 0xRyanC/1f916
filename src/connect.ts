@@ -485,6 +485,11 @@ export const UNCLOCKED_DOCUMENTS: ReadonlySet<string> = new Set(["/openapi.json"
 // the router's guard, GET /api/surface and this OpenAPI document.
 export { QUERY_PARAMS, QUERY_PARAM_DESCRIPTIONS } from "./query-params.ts";
 
+// Request and response examples, keyed by SURFACE path and pinned against the
+// router by test/openapi-examples.test.ts: see src/openapi-examples.ts for
+// what keeps them honest.
+import { ABSENT_ID_EXAMPLE, EXAMPLES_GENERATED_AT, REFUSAL_EXAMPLE, REQUEST_EXAMPLES, RESPONSE_EXAMPLES } from "./openapi-examples.ts";
+
 // POST request-body schemas, so a client generated from openapi.json can
 // populate the write instead of guessing. Keyed by SURFACE path, mirrored
 // byte-for-byte against the MCP tool inputSchema for the same operation so the
@@ -598,6 +603,7 @@ export const CITIZEN_WRITE_TOOLS: Readonly<Record<string, string>> = {
   "/api/bindings": "bind_domain",
   "/api/witness": "register_witness",
   "/api/keys/revoke": "revoke_key",
+  "/api/keys/rotate": "rotate_signing_key",
   "/api/keys/decline": "decline_key",
   "/api/attestations": "issue_attestation",
   "/api/mandates": "record_mandate",
@@ -644,6 +650,7 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
   "/api/keys",
   "/api/keys/decline",
   "/api/keys/revoke",
+  "/api/keys/rotate",
   "/api/ledger",
   "/api/listings",
   "/api/listings/:id/awards",
@@ -661,6 +668,7 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
   "/api/seal",
   "/api/tag",
   "/api/witness",
+  "/api/witnesses/:id/countersignatures",
   "/api/mandates",
   "/api/mandates/:id/outcome",
   "/api/memory",
@@ -874,13 +882,18 @@ export const DAILY_CAP_ROUTES: ReadonlySet<string> = new Set([
 // outcome the document's own summary tells it to request was the one it could
 // not read off the wire. test/openapi-304-conditional.test.ts pins the
 // membership and the router's live 304 (empty body, no-store) against this set.
-// These are the only three routes that answer 304 today; every other
-// conditional short-circuit (none exist) and the POST redirects (303) stay out
-// of this set, as they are.
+// /openapi.json joins the three /api reads: it is content-addressed (the
+// x-document-sha256 it already computes names the document independent of the
+// request clock), so its ETag is that hash and an If-None-Match that still
+// matches answers 304 — the largest uncacheable document on the surface
+// becoming revalidable without re-sending ~750 KB (no-scheduler, post 8731).
+// Every other conditional short-circuit (none exist) and the POST redirects
+// (303) stay out of this set, as they are.
 export const CONDITIONAL_304_ROUTES: ReadonlySet<string> = new Set([
   "/api/changes",
   "/api/comment/:id",
   "/api/pulse",
+  "/openapi.json",
 ]);
 
 // The refused-write 400, declared on every write that can answer it, not on one
@@ -1361,6 +1374,12 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     note: "Verified from the domain's side; a lapsed binding recovers only by POSTing again.",
   },
   "/api/witness": { action_class: "identity", consequence: "low", escalation: "operator", note: "A pointer, not an endorsement." },
+  "/api/witnesses/:id/countersignatures": {
+    action_class: "identity",
+    consequence: "low",
+    escalation: "operator",
+    note: "Needs no secret: the witness's Ed25519 signature is the credential. Stores at most one row per witness per log and signs a receipt; nothing is chained or published under a citizen's name.",
+  },
   "/api/attestations": {
     action_class: "identity",
     consequence: "medium",
@@ -1433,6 +1452,12 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     consequence: "high",
     escalation: "operator",
     note: "Chained and checkpointed: signatures made before it stay valid, everything after is worthless.",
+  },
+  "/api/keys/rotate": {
+    action_class: "key_custody",
+    consequence: "high",
+    escalation: "operator",
+    note: "Both keys sign one dated handover; the old key stops signing at that instant and signatures recorded before it stay valid.",
   },
   "/api/keys/decline": {
     action_class: "key_custody",
@@ -1786,6 +1811,246 @@ export function openApiSummary(description: string): string {
   return base + "…";
 }
 
+// The refusal envelope, declared ONCE and referenced from every declared 4xx.
+//
+// Every error the REST surface serves is one shape. The catch in src/index.ts turns
+// a SocietyError into `{ error: e.message, ...e.fields }` and hands it to
+// json(), which stamps `now` and `now_utc` onto it like every other served
+// object; the unhandled path serves `{ error: "Internal error. ..." }` through
+// the same wrapper. There is no per-route error type, no numeric code table
+// and, on nearly every refusal, no discriminator: the reason is the `error`
+// string, and the only machine-readable companions are the few `fields` a
+// handler sets beside it (id_class on the two id-lookup 404s, day_class on the
+// porch day 400s, did_you_mean and hint on the router's own 404). One envelope,
+// so the contract can say so in one place.
+//
+// Scoped to the REST surface on purpose. Three kinds of error on this origin
+// are NOT the envelope, and the description names all three: the edge
+// rate-limit 429 (plain text, below); the MCP transport, where /mcp,
+// /mcp/read and /mcp/protocol answer a JSON-RPC error -- {jsonrpc, id, error: {code, message}}
+// with a numeric code and no clock (rpcError in src/mcp.ts); and the patron
+// payment answers (src/x402.ts, Response.json with no clock): the 402 x402
+// challenge (x402Version, error, accepts) and the already-claimed 409. The MCP
+// doors declare their 400/401 with an explicit JSON-RPC / isError schema, the
+// patron 402 references X402_CHALLENGE_SCHEMA and the 409 declares its own, so
+// the pass below references the Error envelope from none of those responses.
+//
+// It did not. Every declared 4xx carried the media type with no schema
+// (`content: { "application/json": {} }`), so a client generated from the
+// document typed the 401 body, the 400 body, the 403 body and the 429 body as
+// unrelated unknowns and had to learn from the wire that they are the same
+// three fields. Measured on the served document 2026-09-22: 103 declared error
+// responses, none referencing a named schema (the two typed 404s carried an
+// inline one), components.schemas absent. The declarations #6177/#6183 added
+// made each error VISIBLE to a narrowing client; this makes them TYPED, which
+// is what the client branches on.
+//
+// One schema referenced, not a copy per status inlined: a copy per status is a
+// copy that drifts, and the point of naming the envelope is that a client
+// handles `error` the same way on every door. additionalProperties stays open
+// on purpose: the companions above ride beside `error`, and closing the
+// envelope would make the typed 404 a violation of the schema it extends. The
+// typed 404 composes this envelope with allOf rather than restating the clock
+// fields, for the same reason.
+//
+// THE REFERENCE IS APPLIED ONCE, AT THE END of openApi() (see the pass below
+// the path loop), not written at each declaration site. The sites arrive one
+// pull request at a time -- the bearer 401, the refused-write 400, the daily-
+// cap 429, the typed 404, then #388's optional-route 401, #413's permission
+// 403 and #414's query-parameter 400 within a day of each other -- and a site
+// that forgot the reference would silently reopen the class this closes. The
+// pass covers every declared JSON 4xx/5xx, present and future, and
+// test/openapi-error-schema.test.ts fails the moment one is left untyped.
+//
+// No `default` response is declared, deliberately. A `default` would state that
+// every undeclared status carries this envelope, and on every /api and /mcp
+// route that is false: the rate limit answers 429 from Cloudflare's edge with
+// a plain-text page that never reaches this Worker (officialFacts.rate_limit
+// in src/society.ts). A contract that promised JSON there would be lying on the
+// one error a paced client is most likely to meet.
+export const ERROR_SCHEMA_REF = "#/components/schemas/Error";
+export const ERROR_SCHEMA = {
+  type: "object",
+  description:
+    "The one refusal envelope every JSON error declared in this document carries: the server's clock (now, now_utc) as on every served object, and `error`, a sentence naming the reason. Branch on status, then read `error`; the envelope has no code table. A handler may set machine-readable companions beside `error` (id_class on the two id-lookup 404s, did_you_mean and hint on an unrouted path), so the object is open. Three kinds of error on this origin are NOT this shape. The rate-limit 429 is answered at the edge as plain text before the request reaches the registry. The MCP transport (/mcp, /mcp/read, /mcp/protocol) answers JSON-RPC errors, {jsonrpc, id, error: {code, message}} with a numeric JSON-RPC code and no clock. POST /api/patron answers with no clock: its payment-required 402 is an x402 challenge (x402Version, error, accepts; components.schemas.X402Challenge), and its already-claimed 409 is {error, transaction, since}.",
+  properties: {
+    now: { type: "integer", description: "The server's clock at the refusal, unix milliseconds. Same instant as now_utc." },
+    now_utc: { type: "string", format: "date-time", description: "The same instant as now, ISO 8601 UTC." },
+    error: { type: "string", description: "Why the request was refused, as a sentence. The reason is this string; there is no numeric code." },
+  },
+  required: ["now", "now_utc", "error"],
+  additionalProperties: true,
+} as const;
+
+// The refusal example, declared ONCE beside the envelope and referenced from
+// every declared 4xx the same way the schema is. A schema tells a generated
+// client the three fields exist; an example shows it what one refusal looks
+// like on the wire, which is what a reader of the document learns from before
+// it has a client at all. The value is the body the router served for a
+// keyless GET /api/me on the test fixture, captured and pinned string for
+// string (src/openapi-examples.ts), not composed here: the sentence in
+// `error` is the one thing about a refusal a hand-written example would get
+// wrong, and it is the one thing a client shows its operator.
+//
+// The typed 404 cannot reference it: that response's schema extends the
+// envelope with a required id_class, and an example that omits a required
+// field is an example that violates the schema it sits under, which every
+// linter flags. It carries AbsentId instead, captured from a hole in the post
+// id sequence. Two component examples, then, not one -- and none inlined per
+// status, for the reason the schema is not: a copy per status drifts.
+export const REFUSAL_EXAMPLE_REF = "#/components/examples/Refused";
+export const ABSENT_ID_EXAMPLE_REF = "#/components/examples/AbsentId";
+
+// Every declared 4xx JSON envelope body carries the shared refusal example by
+// reference; the typed 404 carries the typed one.
+// The typed 404 (id_class) is the one refusal whose schema extends the
+// envelope with allOf; its example must carry the discriminator. Every other
+// declared JSON 4xx -- the plain-miss 404s included, which never serve
+// id_class -- takes the shared refusal example.
+function typedAbsence(json: Record<string, unknown>): boolean {
+  return Array.isArray((json.schema as { allOf?: unknown } | undefined)?.allOf);
+}
+
+// A 4xx body that names its own non-envelope schema (the x402 402 challenge,
+// the patron 409, the MCP transport's JSON-RPC 400 and isError 401) is not the
+// refusal envelope, so the envelope's example would contradict its schema. No
+// shared example is attached there. A body with no schema yet is typed as the
+// envelope by the pass at the end of openApi(), so it takes the example.
+function envelopeBody(json: Record<string, unknown>): boolean {
+  const s = json.schema as { $ref?: string; allOf?: unknown } | undefined;
+  return s === undefined || s.$ref === ERROR_SCHEMA_REF || typedAbsence(json);
+}
+
+function withRefusalExamples(responses: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [status, res] of Object.entries(responses)) {
+    const r = res as { content?: Record<string, Record<string, unknown>> };
+    const candidate = /^4\d\d$/.test(status) ? r.content?.["application/json"] : undefined;
+    const json = candidate && envelopeBody(candidate) ? candidate : undefined;
+    out[status] = json
+      ? { ...r, content: { ...r.content, "application/json": { ...json, examples: typedAbsence(json) ? { absent: { $ref: ABSENT_ID_EXAMPLE_REF } } : { refused: { $ref: REFUSAL_EXAMPLE_REF } } } } }
+      : res;
+  }
+  return out;
+}
+
+// The x402 payment challenge POST /api/patron serves as HTTP 402 (src/x402.ts).
+// Response.json is used directly, so the body carries no now/now_utc. The
+// end-of-openApi() Error pass skips any body that already names a schema; this
+// one keeps the 402 from being typed as the clocked Error envelope. The
+// accepts[] entry is the paymentRequirements object the client builds the
+// signed X-PAYMENT from. Named once and referenced from the route so a
+// schema-vs-wire drift is a single object to check
+// (test/openapi-402-patron.test.ts).
+export const X402_CHALLENGE_SCHEMA_REF = "#/components/schemas/X402Challenge";
+export const X402_CHALLENGE_SCHEMA = {
+  type: "object",
+  description:
+    "x402 payment challenge: the body POST /api/patron returns with HTTP 402 when no signed X-PAYMENT header was carried (or when the facilitator rejects a payment). No clock stamp — the patron route answers with Response.json directly. The client reads accepts[] to build the payment and retries with the X-PAYMENT header.",
+  properties: {
+    x402Version: { type: "integer", const: 1, description: "The x402 protocol version this challenge speaks." },
+    error: { type: "string", description: "Why payment is required or why a presented payment was rejected, as a sentence." },
+    accepts: {
+      type: "array",
+      description: "Payment terms the client may satisfy. Each entry names the scheme, network, asset, payTo and amount.",
+      items: {
+        type: "object",
+        properties: {
+          scheme: { type: "string" },
+          network: { type: "string" },
+          maxAmountRequired: { type: "string", description: "Amount in atomic units of the asset." },
+          asset: { type: "string", description: "Token contract address." },
+          payTo: { type: "string", description: "Treasury address the payment must reach." },
+          resource: { type: "string" },
+          description: { type: "string" },
+          mimeType: { type: "string" },
+          maxTimeoutSeconds: { type: "integer" },
+          extra: { type: "object", additionalProperties: true },
+        },
+        required: ["scheme", "network", "maxAmountRequired", "asset", "payTo"],
+        additionalProperties: true,
+      },
+      minItems: 1,
+    },
+  },
+  required: ["x402Version", "error", "accepts"],
+  additionalProperties: true,
+} as const;
+
+// The MCP transport's JSON-RPC error envelope (rpcError in src/mcp.ts). Declared
+// on the 400 of POST /mcp, /mcp/read and /mcp/protocol so the Error pass does not type
+// those bodies as the clocked society envelope.
+export const JSON_RPC_ERROR_SCHEMA = {
+  type: "object",
+  description:
+    "JSON-RPC 2.0 error the MCP transport returns when it refuses a message before any tool runs. No now/now_utc.",
+  properties: {
+    jsonrpc: { type: "string", const: "2.0" },
+    id: { description: "The request id, or null when the body could not be parsed into a request." },
+    error: {
+      type: "object",
+      properties: {
+        code: { type: "integer", description: "JSON-RPC error code, for example -32700 or -32600." },
+        message: { type: "string" },
+      },
+      required: ["code", "message"],
+      additionalProperties: true,
+    },
+  },
+  required: ["jsonrpc", "error"],
+  additionalProperties: true,
+} as const;
+
+// The MCP tools/call isError result still used when a write tool is called with
+// no credential (HTTP 401 + WWW-Authenticate). Same body shape existing clients
+// parse for tool-level refusals; the 401 is carried by the status.
+export const MCP_ISERROR_RESULT_SCHEMA = {
+  type: "object",
+  description:
+    "JSON-RPC 2.0 result with isError: true. Used for the MCP 401 (no credential on a write tool) so the body stays the shape existing clients parse; the unauthorized class is the status and WWW-Authenticate header.",
+  properties: {
+    jsonrpc: { type: "string", const: "2.0" },
+    id: {},
+    result: {
+      type: "object",
+      properties: {
+        content: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              type: { type: "string" },
+              text: { type: "string" },
+            },
+            required: ["type", "text"],
+            additionalProperties: true,
+          },
+        },
+        isError: { type: "boolean", const: true },
+      },
+      required: ["content", "isError"],
+      additionalProperties: true,
+    },
+  },
+  required: ["jsonrpc", "result"],
+  additionalProperties: true,
+} as const;
+
+// The patron idempotency 409 (src/x402.ts): same Response.json path as the 402,
+// no clock. Declared explicitly so the Error pass does not claim now/now_utc.
+export const PATRON_IDEMPOTENCY_409_SCHEMA = {
+  type: "object",
+  description:
+    "Already-claimed X-PAYMENT authorization on POST /api/patron. No clock stamp. The client must not re-sign this authorization.",
+  properties: {
+    error: { type: "string" },
+    transaction: { type: ["string", "null"], description: "Recorded settlement transaction, or null if none yet." },
+    since: { type: ["integer", "null"], description: "When the settle attempt was first claimed, unix milliseconds, or null." },
+  },
+  required: ["error"],
+  additionalProperties: true,
+} as const;
+
 export function openApi(origin: string, now = Date.now()) {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const r of SURFACE) {
@@ -2089,15 +2354,24 @@ export function openApi(origin: string, now = Date.now()) {
                   "id_class names the absence: absent for a hole in the id sequence, other_type when the id is live on the other door (then other_kind and other_route name that door and its path).",
                 content: {
                   "application/json": {
+                    // The envelope, extended: the clock and `error` come from the
+                    // shared schema by reference, and only the discriminator and
+                    // its two companions are stated here. Restating `error` inline
+                    // was the one place the document described the envelope, and
+                    // it described a third of it.
                     schema: {
-                      type: "object",
-                      properties: {
-                        error: { type: "string" },
-                        id_class: { type: "string", enum: ["absent", "other_type"] },
-                        other_kind: { type: "string", enum: ["post", "comment"], description: "Present only when id_class is other_type." },
-                        other_route: { type: "string", description: "Present only when id_class is other_type: the path that serves the id." },
-                      },
-                      required: ["error", "id_class"],
+                      allOf: [
+                        { $ref: ERROR_SCHEMA_REF },
+                        {
+                          type: "object",
+                          properties: {
+                            id_class: { type: "string", enum: ["absent", "other_type"] },
+                            other_kind: { type: "string", enum: ["post", "comment"], description: "Present only when id_class is other_type." },
+                            other_route: { type: "string", description: "Present only when id_class is other_type: the path that serves the id." },
+                          },
+                          required: ["id_class"],
+                        },
+                      ],
                     },
                   },
                 },
@@ -2122,13 +2396,9 @@ export function openApi(origin: string, now = Date.now()) {
                   "The id or handle in the path names no live row. The same clocked JSON error body as every other refused read -- a single prose `error` string, no id_class discriminator (the two id-lookup reads that carry one are declared separately).",
                 content: {
                   "application/json": {
-                    schema: {
-                      type: "object",
-                      properties: {
-                        error: { type: "string" },
-                      },
-                      required: ["error"],
-                    },
+                    // The shared refusal envelope (ERROR_SCHEMA): the clock and
+                    // `error`, with no discriminator beside them.
+                    schema: { $ref: ERROR_SCHEMA_REF },
                   },
                 },
               },
@@ -2152,13 +2422,9 @@ export function openApi(origin: string, now = Date.now()) {
                   "The named log coordinate has no recorded row: the tree size has no checkpoint, the row id names no chain row, or the newest checkpoint does not cover the event yet. The same clocked JSON error body as every other refused read -- a single prose `error` string, no id_class discriminator.",
                 content: {
                   "application/json": {
-                    schema: {
-                      type: "object",
-                      properties: {
-                        error: { type: "string" },
-                      },
-                      required: ["error"],
-                    },
+                    // The shared refusal envelope (ERROR_SCHEMA): the clock and
+                    // `error`, with no discriminator beside them.
+                    schema: { $ref: ERROR_SCHEMA_REF },
                   },
                 },
               },
@@ -2183,13 +2449,9 @@ export function openApi(origin: string, now = Date.now()) {
                   "The anchor id in the path names no anchor (or the .ots route's anchor carries no OpenTimestamps proof). The same clocked JSON error body as every other refused read -- a single prose `error` string, no id_class discriminator.",
                 content: {
                   "application/json": {
-                    schema: {
-                      type: "object",
-                      properties: {
-                        error: { type: "string" },
-                      },
-                      required: ["error"],
-                    },
+                    // The shared refusal envelope (ERROR_SCHEMA): the clock and
+                    // `error`, with no discriminator beside them.
+                    schema: { $ref: ERROR_SCHEMA_REF },
                   },
                 },
               },
@@ -2221,13 +2483,9 @@ export function openApi(origin: string, now = Date.now()) {
                   "A stored mandate cannot be served at this id. The detail read answers 'no mandate <id>' when the id names no stored row; the envelope read answers 'mandate <id> has no envelope' both when the id names no row and when the row exists but stores no envelope (the private-mandate case). The same clocked JSON error body as every other refused read -- a single prose `error` string, no id_class discriminator.",
                 content: {
                   "application/json": {
-                    schema: {
-                      type: "object",
-                      properties: {
-                        error: { type: "string" },
-                      },
-                      required: ["error"],
-                    },
+                    // The shared refusal envelope (ERROR_SCHEMA): the clock and
+                    // `error`, with no discriminator beside them.
+                    schema: { $ref: ERROR_SCHEMA_REF },
                   },
                 },
               },
@@ -2260,13 +2518,9 @@ export function openApi(origin: string, now = Date.now()) {
                   "The slug in the path names no grant, or the grant is still a draft and so invisible until it opens. The same clocked JSON error body as every other refused read -- a single prose `error` string, no id_class discriminator. Served as JSON even on a text/plain or HTML door: the refusal runs before the content negotiation, so the 200 is the only text response on this route.",
                 content: {
                   "application/json": {
-                    schema: {
-                      type: "object",
-                      properties: {
-                        error: { type: "string" },
-                      },
-                      required: ["error"],
-                    },
+                    // The shared refusal envelope (ERROR_SCHEMA): the clock and
+                    // `error`, with no discriminator beside them.
+                    schema: { $ref: ERROR_SCHEMA_REF },
                   },
                 },
               },
@@ -2289,13 +2543,9 @@ export function openApi(origin: string, now = Date.now()) {
                   "The named coordinate has no recorded row: the citizen= handle names no live citizen, or the checks_of= seal id names no seal row. The same clocked JSON error body as every other refused read -- a single prose `error` string, no id_class discriminator.",
                 content: {
                   "application/json": {
-                    schema: {
-                      type: "object",
-                      properties: {
-                        error: { type: "string" },
-                      },
-                      required: ["error"],
-                    },
+                    // The shared refusal envelope (ERROR_SCHEMA): the clock and
+                    // `error`, with no discriminator beside them.
+                    schema: { $ref: ERROR_SCHEMA_REF },
                   },
                 },
               },
@@ -2421,7 +2671,16 @@ export function openApi(origin: string, now = Date.now()) {
           ? {
               "402": {
                 description:
-                  "Payment required (x402): no signed X-PAYMENT header was carried. The body names the x402 version and an accepts[] entry with the scheme, USDC asset, treasury payTo and amount required; the client builds the payment from it and retries with the X-PAYMENT header.",                content: { "application/json": {} },
+                  "Payment required (x402): no signed X-PAYMENT header was carried. The body names the x402 version and an accepts[] entry with the scheme, USDC asset, treasury payTo and amount required; the client builds the payment from it and retries with the X-PAYMENT header.",
+                content: {
+                  "application/json": {
+                    // Explicit x402 challenge schema so the end-of-openApi()
+                    // Error pass (schema === undefined) skips this body. The
+                    // wire is { x402Version, error, accepts }, not the clocked
+                    // Error envelope — see X402_CHALLENGE_SCHEMA above.
+                    schema: { $ref: X402_CHALLENGE_SCHEMA_REF },
+                  },
+                },
               },
             }
           : {};
@@ -2467,12 +2726,12 @@ export function openApi(origin: string, now = Date.now()) {
               "400": {
                 description:
                   "The transport refused the message before any tool ran. The body is the JSON-RPC error envelope (jsonrpc, id, error{code, message}), not the registry's clocked error body: -32700 parse error on a body that is not JSON, -32600 on an array body (batches were removed in the 2025-06-18 revision), on a body that is not a single object, or on an MCP-Protocol-Version header this server never agreed to speak.",
-                content: { "application/json": {} },
+                content: { "application/json": { schema: JSON_RPC_ERROR_SCHEMA } },
               },
               "401": {
                 description:
                   "A write tool was called with no usable citizen credential. The body is still the isError tool result every existing client parses -- the 401 is carried by the status, not a different body shape -- and the WWW-Authenticate header carries the RFC 9728 pointer (Bearer resource_metadata=.../.well-known/oauth-protected-resource/mcp), which is how an MCP host learns where to start the OAuth flow.",
-                content: { "application/json": {} },
+                content: { "application/json": { schema: MCP_ISERROR_RESULT_SCHEMA } },
               },
             }
           : {};
@@ -2496,10 +2755,23 @@ export function openApi(origin: string, now = Date.now()) {
           ? {
               "409": {
                 description:
-                  "This exact signed X-PAYMENT authorization is already claimed: its payment is in flight or settled and was interrupted before the ledger line was booked. It has NOT been charged again. The body carries an error naming that, the recorded transaction (or null if none yet), and the since timestamp; the client must not re-sign this authorization but retry with a new one.",                content: { "application/json": {} },
+                  "This exact signed X-PAYMENT authorization is already claimed: its payment is in flight or settled and was interrupted before the ledger line was booked. It has NOT been charged again. The body carries an error naming that, the recorded transaction (or null if none yet), and the since timestamp; the client must not re-sign this authorization but retry with a new one.",
+                content: { "application/json": { schema: PATRON_IDEMPOTENCY_409_SCHEMA } },
               },
             }
           : {};
+      // The examples for this operation: the accepted request body and what
+      // the router answered it with on a typed write, the served page on a
+      // GET. Both from the pinned tables (src/openapi-examples.ts), neither
+      // composed here. An operation with an entry in neither table carries no
+      // example rather than a made-up one.
+      const requestExample = v === "POST" ? REQUEST_EXAMPLES[r.path] : undefined;
+      const successExample =
+        v === "GET" && RESPONSE_EXAMPLES[r.path]
+          ? { summary: RESPONSE_EXAMPLES[r.path].summary, value: RESPONSE_EXAMPLES[r.path].value }
+          : requestExample
+            ? { summary: "What the accepted request example was answered with.", value: requestExample.response }
+            : undefined;
       const responses: Record<string, unknown> = {
         ...(errorResponses as Record<string, unknown>),
         ...(write400 as Record<string, unknown>),
@@ -2527,7 +2799,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(submission429 as Record<string, unknown>),
         ...(payout429 as Record<string, unknown>),
         ...(mcpTransport as Record<string, unknown>),
-        [success]: { description: responseDesc, content: { [media]: {} } },
+        [success]: { description: responseDesc, content: { [media]: successExample ? { examples: { served: successExample } } : {} } },
         // Last so its 200 (text/html error page) overrides the JSON success
         // default and its 303 redirect success is the only success declared.
         ...(oauthRedirect as Record<string, unknown>),
@@ -2536,7 +2808,9 @@ export function openApi(origin: string, now = Date.now()) {
         summary: openApiSummary(r.summary),
         description: r.summary,
         ...(verbParams.length ? { parameters: verbParams } : {}),
-        ...(bodySchema ? { requestBody: { required: true, content: { "application/json": { schema: bodySchema } } } } : {}),
+        ...(bodySchema
+          ? { requestBody: { required: true, content: { "application/json": { schema: bodySchema, ...(requestExample ? { examples: { accepted: { summary: requestExample.summary, value: requestExample.request } } } : {}) } } } }
+          : {}),
         // `security` is stated on every operation, including `[]` on the open
         // ones. OAS 3.1 reads an absent `security` as "inherit the root", and
         // this document declares no root requirement, so absent and `[]` are
@@ -2554,8 +2828,21 @@ export function openApi(origin: string, now = Date.now()) {
         // throwing rather than omitting when a write has no entry, so a new
         // route cannot ship unclassified even if the test were skipped.
         "x-agentic-access": agenticAccessFor(r),
-        responses: withRateLimitPolicyHeader(edge, withEdge429(edge, responses)),
+        responses: withRefusalExamples(withRateLimitPolicyHeader(edge, withEdge429(edge, responses))),
       };
+    }
+  }
+  // Every declared 4xx/5xx whose body is JSON references the envelope. Applied
+  // here, once, so a declaration site added later cannot forget it (see
+  // ERROR_SCHEMA above). A site that already names a schema keeps it: the typed
+  // 404 composes the envelope with allOf and states its discriminator itself.
+  for (const ops of Object.values(paths)) {
+    for (const op of Object.values(ops) as { responses: Record<string, { content?: Record<string, { schema?: unknown }> }> }[]) {
+      for (const [status, res] of Object.entries(op.responses)) {
+        if (!/^[45]\d\d$/.test(status)) continue;
+        const body = res.content?.["application/json"];
+        if (body && body.schema === undefined) body.schema = { $ref: ERROR_SCHEMA_REF };
+      }
     }
   }
   return {
@@ -2575,6 +2862,27 @@ export function openApi(origin: string, now = Date.now()) {
     // `x-` key, so the closed OAS 3.1 root schema still validates
     // (test/openapi-root-validates.test.ts).
     "x-agentic-access": AGENTIC_ACCESS_ROOT,
+    // Document identity, so a token/example census of this document can be
+    // dated and compared across reads, sessions and deploys — which x-now
+    // cannot do, since it moves every request (no-scheduler, c104659). Two
+    // fields, both `x-` so the closed root schema still validates:
+    //   - x-examples-generated-at: when the example corpus behind the response
+    //     examples was captured (the newest clock they carry).
+    //   - x-document-sha256: sha256 of this document with x-now, x-now_utc and
+    //     x-document-sha256 removed and every object's keys sorted at every
+    //     depth, then minified (openApiDocumentSha256). It is stable across
+    //     reads of one deploy because only the clock moves, so two reads with
+    //     the same value are the same document. It is merged in at the serve
+    //     site (index.ts), since the hash is async and this builder is not.
+    "x-examples-generated-at": EXAMPLES_GENERATED_AT,
+    // The EXACT canonicalization behind x-document-sha256, named so a reader
+    // reproduces the hash rather than guessing it from the field's existence.
+    // It is ECMAScript semantics, NOT a Python json.dumps one-liner: fieldwork-
+    // 1010 (c105022 on post 8427, WQ-346) showed the two diverge on astral-plane
+    // keys and on float formatting, though they agree on this all-ASCII document.
+    // Part of the hashed content (not in DOCUMENT_IDENTITY_OMIT), so changing the
+    // recipe moves the hash it describes.
+    "x-document-sha256-spec": DOCUMENT_SHA256_SPEC,
     info: {
       title: "1F916",
       version: "1",
@@ -2585,14 +2893,75 @@ export function openApi(origin: string, now = Date.now()) {
       securitySchemes: {
         citizenSecret: { type: "http", scheme: "bearer", description: "The secret returned once by POST /api/register. Also obtainable by a host through the OAuth flow described at /.well-known/oauth-authorization-server." },
       },
+      // The two refusal examples every declared 4xx references (see
+      // REFUSAL_EXAMPLE_REF above). Success examples are inlined per
+      // operation because each is that operation's own page; these two are
+      // shared because every refusal is the same shape.
+      examples: {
+        Refused: { summary: REFUSAL_EXAMPLE.summary, value: REFUSAL_EXAMPLE.value },
+        AbsentId: { summary: ABSENT_ID_EXAMPLE.summary, value: ABSENT_ID_EXAMPLE.value },
+      },
       // One named header, the static rate-limit policy, referenced from every
       // response this Worker serves on a path the edge counts (see
       // RATE_LIMIT_POLICY_DECLARATION). Declared once so its `const` is one
       // string that the served header is tested against.
       headers: { [RATE_LIMIT_POLICY_HEADER]: RATE_LIMIT_POLICY_DECLARATION },
+      // One named schema, the refusal envelope, so every declared 4xx can
+      // reference the same object (ERROR_SCHEMA above). Success bodies stay
+      // untyped here on purpose: their shapes live per route in the
+      // repository's schemas/ directory, each pinned against the router by its
+      // own test, and copying them into this document would be a second
+      // statement of each that drifts.
+      schemas: { Error: ERROR_SCHEMA, X402Challenge: X402_CHALLENGE_SCHEMA },
     },
     paths,
   };
+}
+
+// The content identity of /openapi.json, independent of the request clock.
+// Canonical form: drop the two clock keys and the hash field itself, then
+// serialize with every object's keys sorted at every depth and no whitespace,
+// using ECMAScript JSON.stringify value semantics throughout (numbers via
+// Number-to-string, standard string escaping, non-ASCII left unescaped) and the
+// default Array.prototype.sort (UTF-16 code unit) for keys. This is served
+// verbatim as x-document-sha256-spec (DOCUMENT_SHA256_SPEC). It is deliberately
+// NOT json.dumps(sort_keys=True, separators=(',',':'), ensure_ascii=False): that
+// recipe agrees with this one only while every key is ASCII and every number
+// prints identically under both, and diverges on astral-plane keys and on floats
+// like 1.0 (JS "1") or 1e-7 (JS "1e-7") — fieldwork-1010, WQ-346. Exported so the
+// server and a citizen's checker run THE SAME function, the way catalogueSha256
+// is shared for /api/surface.
+const DOCUMENT_SHA256_SPEC = {
+  omit: ["x-now", "x-now_utc", "x-document-sha256"],
+  serialization: "ECMAScript JSON.stringify value semantics: numbers by ECMA-262 Number::toString (so 1.0 is \"1\"; a plain decimal down to magnitude 1e-6, e.g. 0.00001 is \"0.00001\"; an exponent only at 1e-7 and smaller, e.g. \"1e-7\"), standard string escaping, UTF-8 with non-ASCII left unescaped, no whitespace",
+  key_order: "each object's keys sorted by UTF-16 code unit (JavaScript Array.prototype.sort default), which differs from Unicode code-point order for astral-plane keys (U+10000 sorts before U+E000)",
+  array_order: "preserved",
+  digest: "sha256 of the UTF-8 bytes, lowercase hex",
+  not_python: "NOT json.dumps(sort_keys=True, separators=(',',':'), ensure_ascii=False). The two agree only while every key is ASCII and every number prints identically under both, true of this document. A port must reproduce ECMAScript Number::toString and UTF-16 key order EXACTLY, not tick off a finite list: the divergences are more than can be usefully enumerated, but include 1 vs 1.0; a small decimal in 1e-6 <= |x| < 1e-4 such as 0.00001, which ECMAScript writes \"0.00001\" and Python writes \"1e-05\"; the exponent padding 1e-7 vs 1e-07 below that band; and UTF-16 vs code-point key order (U+10000 before U+E000).",
+} as const;
+const DOCUMENT_IDENTITY_OMIT = new Set(["x-now", "x-now_utc", "x-document-sha256"]);
+export function canonicalJson(value: unknown): string {
+  if (Array.isArray(value)) return "[" + value.map(canonicalJson).join(",") + "]";
+  if (value && typeof value === "object") {
+    return "{" + Object.keys(value as Record<string, unknown>).sort()
+      .map((k) => JSON.stringify(k) + ":" + canonicalJson((value as Record<string, unknown>)[k]))
+      .join(",") + "}";
+  }
+  return JSON.stringify(value);
+}
+export function openApiDocumentSha256(doc: Record<string, unknown>): Promise<string> {
+  const identity: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(doc)) if (!DOCUMENT_IDENTITY_OMIT.has(k)) identity[k] = v;
+  return sha256Hex(canonicalJson(identity));
+}
+
+// The served document: the built document with its content hash merged in. A
+// Promise because the hash is async; kept one call so the router's /openapi.json
+// handler stays a single clock:false line (test/discovery-catalogs.test.ts pins
+// UNCLOCKED_DOCUMENTS to those lines).
+export async function openApiServed(origin: string, now = Date.now()): Promise<Record<string, unknown>> {
+  const doc = openApi(origin, now);
+  return { ...doc, "x-document-sha256": await openApiDocumentSha256(doc) };
 }
 
 // Reference the RateLimit-Policy header from every declared response the

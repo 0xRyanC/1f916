@@ -22,6 +22,7 @@ import { SocietyError, type Env } from "./society.ts";
 import { WITNESS_COUNTERSIGNATURE_NOTE, WITNESS_COUNTERSIGNATURE_PAYLOAD_FORMAT } from "./chain.ts";
 import { NOTE_KEY_NAME, checkpointBody, noteFromField, noteKeyId, originOf, signatureField, verifierKey } from "./note.ts";
 import { WITNESS_CADENCE, WITNESS_STANDING, WITNESS_TRIGGER_NEVER_NOTE, WITNESS_TRIGGER_RETIRED_NOTE } from "./witness-cadence.ts";
+import { cosignaturesFor, witnessView } from "./witness-network.ts";
 
 export const CHECKPOINT_PAYLOAD_PREFIX = "1f916.checkpoint.v1";
 const LOGS = ["identity_events", "ledger"] as const;
@@ -263,6 +264,11 @@ export async function latestCheckpoints(env: Env) {
   }
   const sequenceHead = await readCheckpointSequenceHead(env);
   const dispatchRow = await readWitnessDispatch(env);
+  // Independent witnesses' cosignatures of these stamps (src/witness-network.ts).
+  // Absent, not empty, when no witness is configured, so an unconfigured
+  // deployment serves exactly what it did before. Only configured witnesses'
+  // lines are served.
+  const witnesses = await witnessView(env, rows);
   return {
     contract: CHECKPOINT_PAYLOAD_PREFIX,
     registry_public_key: { kty: "OKP", crv: "Ed25519", x: pub },
@@ -279,6 +285,7 @@ export async function latestCheckpoints(env: Env) {
       "Check sig over the payload format above with registry_public_key. Then GET /api/proof?log=&event= for inclusion, /api/checkpoint/consistency?log=&from=&to= for append-only-ness. The witness records checkpoints at github.com/1f916-ai/1f916 under witness/. " +
       `${WITNESS_CADENCE}. ${WITNESS_STANDING}. ` +
       "The achieved cadence is whatever the day file's own `at` timestamps show (the dispatch attempt failed for days at a stretch while GitHub's own schedule held, #1264). Compare roots there before believing ours.",
+    ...(witnesses ?? {}),
   };
 }
 
@@ -295,14 +302,20 @@ export function noNoteSentence(log: string, treeSize: number): string {
 export async function checkpointNote(env: Env, logParam: string | null, sizeParam: number | undefined): Promise<string> {
   const log = assertLog(logParam);
   const wanted = typeof sizeParam === "number" && Number.isFinite(sizeParam) ? sizeParam : null;
-  type NoteRow = { tree_size: number; root: string; signature: string | null };
+  type NoteRow = { id: number; tree_size: number; root: string; signature: string | null };
   const row =
     wanted === null
-      ? await env.DB.prepare("SELECT c.tree_size, c.root, n.signature FROM checkpoints c LEFT JOIN checkpoint_notes n ON n.checkpoint_id = c.id WHERE c.log = ? ORDER BY c.id DESC LIMIT 1").bind(log).first<NoteRow>()
-      : await env.DB.prepare("SELECT c.tree_size, c.root, n.signature FROM checkpoints c LEFT JOIN checkpoint_notes n ON n.checkpoint_id = c.id WHERE c.log = ? AND c.tree_size = ?").bind(log, wanted).first<NoteRow>();
+      ? await env.DB.prepare("SELECT c.id, c.tree_size, c.root, n.signature FROM checkpoints c LEFT JOIN checkpoint_notes n ON n.checkpoint_id = c.id WHERE c.log = ? ORDER BY c.id DESC LIMIT 1").bind(log).first<NoteRow>()
+      : await env.DB.prepare("SELECT c.id, c.tree_size, c.root, n.signature FROM checkpoints c LEFT JOIN checkpoint_notes n ON n.checkpoint_id = c.id WHERE c.log = ? AND c.tree_size = ?").bind(log, wanted).first<NoteRow>();
   if (!row) throw new SocietyError(404, wanted === null ? `no checkpoint yet for log ${log}` : `no checkpoint at tree_size=${wanted} for log ${log}; a note exists only for a size a stamp landed on`);
   if (row.signature === null) throw new SocietyError(404, noNoteSentence(log, row.tree_size));
-  return noteFromField(checkpointBody(originOf(log), row.tree_size, row.root), NOTE_KEY_NAME, row.signature);
+  const note = noteFromField(checkpointBody(originOf(log), row.tree_size, row.root), NOTE_KEY_NAME, row.signature);
+  // Witnesses' cosignatures follow the registry's line, as C2SP tlog-cosignature
+  // lays them out: more signature lines on the same note. Each was verified
+  // against its witness's key before it was kept, and is served only while
+  // that witness is still configured (src/witness-network.ts).
+  const cosigned = await cosignaturesFor(env, row.id);
+  return note + cosigned.map((c) => c.line + "\n").join("");
 }
 
 export async function noteFacts(env: Env) {
@@ -314,6 +327,7 @@ export async function noteFacts(env: Env) {
     origins: Object.fromEntries(LOGS.map((l) => [l, originOf(l)])),
     url: "/api/checkpoint/note/<log>",
     same_key: "A note is signed by the same registry key as its stamp, over that stamp's own log, size and root.",
+    cosignatures: "When independent witnesses are configured, each one's verified cosignature/v1 line (C2SP tlog-cosignature) follows the registry's signature line, one line per witness. A verifier that pins only the registry key ignores them, as the signed-note format says; one that pins a witness's key (GET /api/checkpoint, cosigning_witnesses) checks it.",
     signed_when: "By the stamping job when it runs, for the stamp at the size the log has then. Never on a reader's request: the endpoint serves what was stored. A stamp that was already behind the log when notes began has none.",
   };
 }

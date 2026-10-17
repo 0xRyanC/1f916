@@ -37,6 +37,8 @@ import { makeCheckpoints, readWitnessDispatch, witnessDispatchView, type Witness
 import {
   WITNESS_CADENCE,
   WITNESS_LAST_LINE,
+  WITNESS_RESUMED,
+  WITNESS_RESUMED_WRITTEN,
   WITNESS_SCHEDULE,
   WITNESS_STANDING,
   WITNESS_STANDING_WRITTEN,
@@ -200,23 +202,38 @@ test("the dated sentence carries its own date, and the dates are in order", () =
   }
   assert.equal(
     WITNESS_STANDING,
-    "Written 2026-09-29: the last head line in the witness log is 2026-09-28T16:26:28Z, and from that run until this was written the job did not run and the repository was not publicly readable. This sentence is dated and says nothing of any later day; the day files' own timestamps do",
+    "Written 2026-09-29: the witness log went quiet after 2026-09-28T16:26:28Z, and from that run until this was written the job did not run and the repository was not publicly readable. Updated 2026-10-08: the witness has resumed, its first head line after the gap at 2026-10-08T19:52:35Z. Each clause is dated; the day files' own timestamps are the record",
   );
   assert.ok(WITNESS_STANDING.startsWith(`Written ${WITNESS_STANDING_WRITTEN}: `));
   const t = (s: string) => Date.parse(s.length === 17 ? s.replace("Z", ":00Z") : s);
   assert.ok(t(WITNESS_TRIGGER_FROM) < t(WITNESS_LAST_LINE), "the trigger began before the last head line");
   assert.ok(t(WITNESS_LAST_LINE) < t(WITNESS_TRIGGER_LAST), "the registry went on attempting after the last line landed");
   assert.ok(t(WITNESS_TRIGGER_LAST) < Date.parse(`${WITNESS_STANDING_WRITTEN}T23:59:59Z`), "and stopped on the day the sentence was written");
-  // The last line named is the last line there is: the newest day file ends on it.
-  const days = readdirSync(join(root, "witness")).filter((n) => /^\d{4}-\d{2}-\d{2}\.jsonl$/.test(n)).sort();
-  const lines = readFileSync(join(root, "witness", days[days.length - 1]), "utf8").trim().split("\n");
-  const parsed = lines.map((l) => JSON.parse(l) as { at: string; type?: string });
-  const heads = parsed.filter((l) => l.type === undefined);
-  assert.equal(days[days.length - 1], `${WITNESS_LAST_LINE.slice(0, 10)}.jsonl`);
-  assert.equal(heads[heads.length - 1].at, WITNESS_LAST_LINE);
-  // Whatever follows the last head belongs to the same run: its countersignatures, seconds later.
-  const after = parsed.slice(parsed.lastIndexOf(heads[heads.length - 1]) + 1);
-  assert.ok(after.every((l) => l.type === "witness-countersignature" && Date.parse(l.at) - Date.parse(WITNESS_LAST_LINE) < 60_000));
+  // The gap runs forward: the last line before it, then the resume after it.
+  assert.ok(t(WITNESS_LAST_LINE) < Date.parse(WITNESS_RESUMED), "the witness resumed after it went quiet");
+  assert.ok(Date.parse(`${WITNESS_STANDING_WRITTEN}T23:59:59Z`) < Date.parse(WITNESS_RESUMED), "and the resume is a later day than the standing sentence");
+  // The two lines the sentence names are real lines in their own day files,
+  // not a claim about which file is newest: the witness runs on and writes
+  // newer files, but these two bracket a closed gap and do not move. The day
+  // before the gap ends on WITNESS_LAST_LINE; the day it resumed opens on
+  // WITNESS_RESUMED (the first head of that file, since nothing ran earlier
+  // that day). Each head's countersignatures follow it within the minute.
+  const dayFile = (at: string) =>
+    readFileSync(join(root, "witness", `${at.slice(0, 10)}.jsonl`), "utf8").trim().split("\n").map((l) => JSON.parse(l) as { at: string; type?: string });
+  const before = dayFile(WITNESS_LAST_LINE);
+  const beforeHeads = before.filter((l) => l.type === undefined);
+  assert.equal(beforeHeads[beforeHeads.length - 1].at, WITNESS_LAST_LINE, "the pre-gap file ends on the last line named");
+  const resumed = dayFile(WITNESS_RESUMED);
+  const resumedHeads = resumed.filter((l) => l.type === undefined);
+  assert.equal(resumedHeads[0].at, WITNESS_RESUMED, "the resume file opens on the first line after the gap");
+  // The lines between a named head and the next head (or end of file) are that
+  // run's countersignatures, seconds later.
+  for (const [parsed, head] of [[before, WITNESS_LAST_LINE], [resumed, WITNESS_RESUMED]] as const) {
+    const start = parsed.findIndex((l) => l.type === undefined && l.at === head);
+    const nextHead = parsed.findIndex((l, i) => i > start && l.type === undefined);
+    const after = parsed.slice(start + 1, nextHead === -1 ? undefined : nextHead);
+    assert.ok(after.length > 0 && after.every((l) => l.type === "witness-countersignature" && Date.parse(l.at) - Date.parse(head) < 60_000), `countersignatures follow ${head} within the minute`);
+  }
 });
 
 test("a frozen sequence is not sorted by a field that no longer moves", async () => {
