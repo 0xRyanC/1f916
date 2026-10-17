@@ -10,6 +10,7 @@ old secret is dead -> new secret works. Nothing prints a body.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import sys
 
@@ -1090,6 +1091,74 @@ def main(port: int) -> None:
     except client.ApiError as e:
         assert e.status == 400, client.describe(e.body)
         assert "does not support query parameter" in str(e.body.get("error", "")), client.describe(e.body)
+
+    # Exercise the public Citizen.seal() forwarder against each documented
+    # write/check outcome. Keep this separate from the raw-route ledger fixture
+    # below so a missing check_only forwarding line cannot hide in that path.
+    writer, _ = client.register("seal-write-seat", "test-model", origin=origin)
+
+    def seal_with_201(**kwargs):
+        original = client.urllib.request.urlopen
+        statuses = []
+
+        def capture(*args, **call_kwargs):
+            response = original(*args, **call_kwargs)
+            statuses.append(response.status)
+            return response
+
+        client.urllib.request.urlopen = capture
+        try:
+            body = writer.seal(**kwargs)
+        finally:
+            client.urllib.request.urlopen = original
+        assert statuses == [201], statuses
+        return body
+
+    fresh = seal_with_201(label="client-write-probe", hash="a" * 64)
+    assert fresh.get("sealed") is True, client.describe(fresh)
+    assert fresh.get("hash") == "a" * 64, client.describe(fresh)
+    matched = seal_with_201(label="client-write-probe", hash="a" * 64, check_only=True)
+    assert matched.get("sealed") is False, client.describe(matched)
+    assert matched.get("checked") is True, client.describe(matched)
+    assert isinstance(matched.get("checked_at"), int), client.describe(matched)
+
+    try:
+        writer.seal(label="client-write-probe", hash="b" * 64, check_only=True)
+        raise AssertionError("a differing check_only hash must be 409")
+    except client.ApiError as e:
+        assert e.status == 409, e.status
+        assert e.body.get("matched") is False, client.describe(e.body)
+        assert e.body.get("hash") == "b" * 64, client.describe(e.body)
+        assert e.body.get("latest") == {"id": fresh["id"], "hash": "a" * 64}, client.describe(e.body)
+
+    try:
+        writer.seal(label="client-empty-probe", hash="c" * 64, check_only=True)
+        raise AssertionError("a check_only for an empty label must be 409")
+    except client.ApiError as e:
+        assert e.status == 409, e.status
+        assert e.body.get("matched") is False, client.describe(e.body)
+        assert e.body.get("hash") == "c" * 64, client.describe(e.body)
+        assert e.body.get("latest") is None, client.describe(e.body)
+
+    try:
+        writer.seal(label="client-empty-input", check_only=True)
+        raise AssertionError("check_only without hash or text must be 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "check_only needs something to compare" in str(e.body.get("error", "")), client.describe(e.body)
+
+    text = "client seal text form"
+    text_seal = seal_with_201(label="client-text-probe", text=text)
+    assert text_seal.get("sealed") is True, client.describe(text_seal)
+    assert text_seal.get("from_text") is True, client.describe(text_seal)
+    assert text_seal.get("hash") == hashlib.sha256(text.encode("utf-8")).hexdigest(), client.describe(text_seal)
+
+    assert writer.seals("seal-write-seat", label="client-write-probe").get("total") == 1
+    assert writer.seals("seal-write-seat", label="client-empty-probe").get("total") == 0
+    assert writer.seals("seal-write-seat", label="client-empty-input").get("total") == 0
+    assert writer.seals("seal-write-seat").get("total") == 2
+    check_rows = writer.seal_checks("seal-write-seat", fresh["id"])
+    assert check_rows.get("total") == 1, client.describe(check_rows)
 
     # GET /api/seals: a citizen's seal ledger plus, on a sub-surface, that
     # seal's checks. Both sub-surfaces give the SAME honest has_more answer:
