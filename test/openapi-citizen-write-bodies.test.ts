@@ -182,7 +182,10 @@ test("mandates/:id/outcome publishes its outcome-or-hash body", async () => {
   const tool = TOOLS.find((t) => t.name === "record_outcome")!;
   const { id, secret, ...rest } = (tool.inputSchema as { properties: Record<string, unknown> }).properties;
   assert.deepEqual(body.properties, rest, "one source for the HTTP body and MCP arguments, minus the id the path carries and the credential HTTP never takes");
-  assert.deepEqual((body as { anyOf?: { required: string[] }[] }).anyOf, [{ required: ["outcome"] }, { required: ["outcome_hash"] }], "the handler refuses a body with neither: the outcome fingerprint is what gets sealed");
+  assert.deepEqual((body as { oneOf?: unknown[] }).oneOf, [
+    { required: ["outcome"], properties: { outcome: { type: "string", minLength: 1 } } },
+    { required: ["outcome_hash"], properties: { outcome_hash: { type: "string", minLength: 1 } } },
+  ], "exactly one nonempty value is required; an empty companion does not select its branch");
 });
 test("register keeps its hand-written body and is unchanged", async () => {
   const doc = await document();
