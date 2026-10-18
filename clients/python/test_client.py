@@ -352,6 +352,158 @@ def assert_citizens_walker_page_boundary_lossless() -> None:
         assert e.status == 200, e.status
 
 
+def assert_thread_walker_composite_cursor() -> None:
+    # /api/post/:id walks with `since` as a `created_at:id` composite
+    # (next_since), not a bare row id. Page size 3 here so the boundary is
+    # visible; production is 1000. The strict cursor never re-serves the
+    # boundary row, so dedup by comment id is the belt-and-braces guard. A
+    # full walk below the last observed comments_total raises whether that
+    # total held steady or moved; neither observation is a snapshot guarantee.
+    class Scripted(client.Anonymous):
+        def __init__(self, pages):
+            super().__init__(origin="https://example.invalid")
+            self._pages = list(pages)
+
+        def post(self, post_id, *, limit=None, since=None, reveal=None):
+            return self._pages.pop(0)
+
+    def page(total, rows, has_more, next_since=None):
+        d = {
+            "comments_total": total,
+            "comments_returned": len(rows),
+            "has_more": has_more,
+            "comments": [{"id": cid, "created_at": ca, "author": f"c{cid}"} for cid, ca in rows],
+        }
+        if next_since is not None:
+            d["next_since"] = next_since
+        return d
+
+    # 1. Clean walk, 5 comments, boundary between ids 3 and 4. The walker
+    # stops on an empty page, not on has_more false (the boundary-page trap
+    # every other walker in this file is named for).
+    clean = Scripted([
+        page(5, [(1, 100), (2, 200), (3, 300)], True, next_since="300:3"),
+        page(5, [(4, 400), (5, 500)], False),
+        page(5, [], False),
+    ])
+    walked = clean.walk_thread(42)
+    ids = [r["id"] for r in walked]
+    assert ids == [1, 2, 3, 4, 5], ids
+    assert len(ids) == len(set(ids)), "the walk must stay disjoint, not re-serve"
+
+    # 2. A total that moves 5 -> 7 while only 5 rows are ever served: the
+    # walk pages to an empty page, finds walked (5) < total (7), and raises
+    # rather than return a silently short list.
+    moved = Scripted([
+        page(5, [(1, 100), (2, 200)], True, next_since="200:2"),
+        page(7, [(3, 300)], True, next_since="300:3"),
+        page(7, [], False),
+    ])
+    try:
+        moved.walk_thread(42)
+        raise AssertionError("moving-total thread walk must raise")
+    except client.ApiError as e:
+        assert e.status == 200, e.status
+
+
+class ScriptedThread(client.Anonymous):
+    """Deterministic pages and an independent receipt of forwarded controls."""
+
+    def __init__(self, pages):
+        super().__init__(origin="https://example.invalid")
+        self.pages = list(pages)
+        self.calls = []
+
+    def post(self, post_id, *, limit=None, since=None, reveal=None):
+        self.calls.append((post_id, limit, since, reveal))
+        assert self.pages, "walker requested beyond the terminal empty page"
+        return self.pages.pop(0)
+
+
+def thread_page(total, ids, next_since=None):
+    # Gapped ids: a suffix's prefix size cannot be inferred from its cursor id.
+    page = {
+        "comments_total": total,
+        "comments": [{"id": cid, "created_at": cid * 100} for cid in ids],
+        "has_more": False,  # still walk through the terminal empty page
+    }
+    if next_since is not None:
+        page["next_since"] = next_since
+    return page
+
+
+def assert_thread_walker_resume_suffix() -> None:
+    for since in ("300:3", 300):  # composite and legacy timestamp remain supported
+        site = ScriptedThread([thread_page(5, [8, 13]), thread_page(5, [])])
+        rows = site.walk_thread(42, since=since, limit=2, reveal=True)
+        assert [row["id"] for row in rows] == [8, 13]
+        assert site.calls == [(42, 2, since, True), (42, 2, "1300:13", True)]
+        assert not site.pages
+
+
+def assert_thread_walker_resume_empty() -> None:
+    site = ScriptedThread([thread_page(5, [])])
+    assert site.walk_thread(42, since="1300:13") == []
+    assert site.calls == [(42, None, "1300:13", None)]
+
+
+def assert_thread_short_walk(pages) -> None:
+    site = ScriptedThread(pages)
+    terminal = pages[-1]
+    try:
+        site.walk_thread(42)
+        raise AssertionError("full walk below the last observed total must raise")
+    except client.ApiError as exc:
+        assert exc.status == 200
+        assert exc.path == "/api/post/42"
+        assert exc.body == terminal, "retain the terminal response for diagnosis"
+    assert not site.pages
+
+
+def assert_thread_walker_stable_short() -> None:
+    assert_thread_short_walk([thread_page(3, [1, 8]), thread_page(3, [])])
+
+
+def assert_thread_walker_moving_short() -> None:
+    assert_thread_short_walk([
+        thread_page(2, [1], "100:1"), thread_page(4, [8]), thread_page(4, []),
+    ])
+
+
+def assert_thread_walker_terminal_total() -> None:
+    # A backdated arrival behind the held cursor can change only the final COUNT.
+    assert_thread_short_walk([thread_page(1, [8]), thread_page(2, [])])
+
+
+def assert_thread_walker_initial_empty_total() -> None:
+    # COUNT and rows need not describe one atomic snapshot, even on page one.
+    assert_thread_short_walk([thread_page(1, [])])
+
+
+def assert_thread_walker_live_count_controls() -> None:
+    # Reconciliation is a lower-bound check, not rejection of every live change.
+    for pages, expected in [
+        ([thread_page(0, [])], []),
+        ([thread_page(1, [1]), thread_page(2, [8]), thread_page(2, [])], [1, 8]),
+        ([thread_page(3, [1]), thread_page(1, [])], [1]),
+    ]:
+        site = ScriptedThread(pages)
+        assert [row["id"] for row in site.walk_thread(42)] == expected
+        assert not site.pages
+
+
+def assert_thread_walker_duplicate_replay() -> None:
+    first = thread_page(3, [1, 8], "800:8")
+    replay = thread_page(3, [8, 13])
+    replay["comments"][0]["author"] = "replayed decoration"
+    site = ScriptedThread([first, replay, thread_page(3, [])])
+    rows = site.walk_thread(42, limit=2, reveal=False)
+    assert [row["id"] for row in rows] == [1, 8, 13], "a real duplicate id must appear only once"
+    assert rows[1] == first["comments"][1], "retain the first occurrence"
+    assert site.calls == [(42, 2, None, False), (42, 2, "800:8", False), (42, 2, "1300:13", False)]
+    assert not site.pages
+
+
 def main(port: int) -> None:
     assert_edge_429_preserves_retry_after()
     assert_registry_429_is_api_error()
@@ -359,6 +511,15 @@ def main(port: int) -> None:
     assert_history_walker_boundary_discriminator()
     assert_history_walker_post_fix_lossless()
     assert_citizens_walker_page_boundary_lossless()
+    assert_thread_walker_composite_cursor()
+    assert_thread_walker_resume_suffix()
+    assert_thread_walker_resume_empty()
+    assert_thread_walker_stable_short()
+    assert_thread_walker_moving_short()
+    assert_thread_walker_terminal_total()
+    assert_thread_walker_initial_empty_total()
+    assert_thread_walker_live_count_controls()
+    assert_thread_walker_duplicate_replay()
     origin = f"http://127.0.0.1:{port}"
     site = client.Anonymous(origin)
 
@@ -616,6 +777,21 @@ def main(port: int) -> None:
         assert e.status == 400, e.status
         assert "created_at" not in str(e)
         assert "comment id" not in str(e)
+
+    # A static fixture full walk reconciles comments_total; a resume returns
+    # only its suffix. Use page size 1 to exercise the real transport cursor.
+    walked = site.walk_thread(post_id, limit=1, reveal=True)
+    walked_ids = [row["id"] for row in walked]
+    assert len(walked_ids) == len(set(walked_ids)), "no comment twice"
+    assert len(walked_ids) == total, (len(walked_ids), total)
+    assert [row["created_at"] for row in walked] == sorted(row["created_at"] for row in walked)
+    assert set(walked_ids) == {row["id"] for row in whole["comments"]}, "walk must cover the thread"
+    ordered = sorted(whole["comments"], key=lambda row: (row["created_at"], row["id"]))
+    first = ordered[0]
+    resumed = site.walk_thread(post_id, limit=1, since=f"{first['created_at']}:{first['id']}", reveal=False)
+    assert [row["id"] for row in resumed] == [row["id"] for row in ordered[1:]]
+    last = ordered[-1]
+    assert site.walk_thread(post_id, since=f"{last['created_at']}:{last['id']}") == []
 
     # Rule 9: auth class from what we sent + status, never the error sentence.
     # Live 2026-09-21: all four refusals are {error, now, now_utc}; no auth_class
