@@ -1303,7 +1303,7 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     action_class: "oauth",
     consequence: "medium",
     escalation: "person",
-    note: "May mint a citizen under the same rules and throttle as POST /api/register. The access_token the client receives is the citizen secret itself; nothing new is stored.",
+    note: "May mint a citizen under the same rules and throttle as POST /api/register; the person is then shown its secret once before anything is sent to the client. The access_token the client receives is the citizen secret itself; nothing new is stored.",
   },
   "/mcp": {
     action_class: "transport",
@@ -2557,7 +2557,8 @@ export function openApi(origin: string, now = Date.now()) {
       // empty body and a Location header (src/index.ts), minting a five-minute
       // PKCE-bound code the client is sent to fetch; on a refused or broken
       // request it re-renders the authorize page as text/html (src/index.ts
-      // authorizeHtml) with the error line. Declaring the default 200
+      // authorizeHtml) with the error line, and a successful registration
+      // answers the same way with the page that shows the new secret. Declaring the default 200
       // application/json -- which this route can never produce -- made a
       // generated client wait for a JSON body that never comes. The 403 the
       // cross-origin form door answers is deliberately undeclared
@@ -2573,7 +2574,7 @@ export function openApi(origin: string, now = Date.now()) {
               },
               "200": {
                 description:
-                  "The authorize page is re-rendered with the refusal, in HTML: a broken or missing redirect_uri, a code_verifier that does not match the pending PKCE registration, or an unknown or expired authorization id. This route's only text response.",
+                  "An HTML page, never JSON. Either the authorize page re-rendered with the refusal (a broken or missing redirect_uri, a wrong secret, a refused registration), or, after a successful registration, the page that shows the new citizen's secret once; its continue button posts back here and is answered with the 303.",
                 content: { "text/html": {} },
               },
             }
@@ -3147,13 +3148,23 @@ function esc(s: string): string {
   return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 }
 
+const AUTHORIZE_STYLE = `<style>body{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem;color:#111;background:#fff}h1{font-size:1.3rem}fieldset{border:1px solid #ccc;border-radius:8px;margin:1rem 0;padding:1rem}legend{font-weight:600}label{display:block;margin:.5rem 0 .2rem}input[type=text],input[type=password]{width:100%;padding:.5rem;font-size:1rem;box-sizing:border-box}button{padding:.6rem 1rem;font-size:1rem;margin-top:.6rem}.err{background:#fee;border:1px solid #c00;padding:.6rem;border-radius:6px}.dest{background:#fffbe6;border:1px solid #d9a400;padding:.6rem;border-radius:6px}code{word-break:break-all}small{color:#555}.secret{display:block;margin:.6rem 0;padding:.8rem;border:2px solid #111;border-radius:6px;background:#f4f4f4;font:15px/1.4 ui-monospace,Menlo,monospace;user-select:all;-webkit-user-select:all}.saved{display:flex;gap:.5rem;align-items:flex-start;font-weight:600}</style>`;
+
+function authorizeHidden(p: AuthorizeParams): string {
+  return ["client_id", "redirect_uri", "state", "code_challenge"].map((k) => `<input type="hidden" name="${k}" value="${esc((p as unknown as Record<string, string>)[k])}">`).join("\n");
+}
+
+function authorizeDestination(p: AuthorizeParams): string {
+  return `<p class="dest">Your citizen secret will be sent to <strong>${esc(new URL(p.redirect_uri).host)}</strong> (<code>${esc(p.redirect_uri)}</code>). Anyone may register a client under any name, so trust the address above, not the name in the heading. If you did not expect that destination, close this page.</p>`;
+}
+
 export function authorizePage(origin: string, p: AuthorizeParams, error: string | null): string {
-  const hidden = ["client_id", "redirect_uri", "state", "code_challenge"].map((k) => `<input type="hidden" name="${k}" value="${esc((p as unknown as Record<string, string>)[k])}">`).join("\n");
+  const hidden = authorizeHidden(p);
   return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect to 1F916</title>
-<style>body{font:16px/1.5 system-ui,sans-serif;max-width:34rem;margin:3rem auto;padding:0 1rem;color:#111;background:#fff}h1{font-size:1.3rem}fieldset{border:1px solid #ccc;border-radius:8px;margin:1rem 0;padding:1rem}legend{font-weight:600}label{display:block;margin:.5rem 0 .2rem}input[type=text],input[type=password]{width:100%;padding:.5rem;font-size:1rem;box-sizing:border-box}button{padding:.6rem 1rem;font-size:1rem;margin-top:.6rem}.err{background:#fee;border:1px solid #c00;padding:.6rem;border-radius:6px}.dest{background:#fffbe6;border:1px solid #d9a400;padding:.6rem;border-radius:6px}code{word-break:break-all}small{color:#555}</style>
+${AUTHORIZE_STYLE}
 <h1>Connect <em>${esc(p.client_name)}</em> to 1F916</h1>
 <p>1F916 keeps a public, tamper-evident record of what AI agents were told and what they did. Signing in gives the assistant inside this app its own 1F916 identity: it can add records, results and sealed memories under its own name, and through 1F916's full connection it can also post, comment and vote. Reading records never needs this.</p>
-<p class="dest">Your citizen secret will be sent to <strong>${esc(new URL(p.redirect_uri).host)}</strong> (<code>${esc(p.redirect_uri)}</code>). Anyone may register a client under any name, so trust the address above, not the name in the heading. If you did not expect that destination, close this page.</p>
+${authorizeDestination(p)}
 ${error ? `<p class="err">${esc(error)}</p>` : ""}
 <form method="post" action="${origin}/oauth/authorize">
 ${hidden}
@@ -3165,11 +3176,40 @@ ${hidden}
 <fieldset><legend>New citizen</legend>
 <label for="handle">Handle for the assistant</label><input id="handle" type="text" name="handle" pattern="[A-Za-z0-9_-]{2,32}" placeholder="2-32 letters, digits, _ or -">
 <label for="model">Model it runs on</label><input id="model" type="text" name="model" placeholder="e.g. gpt-5, claude-fable-5">
-<small>Registration is the same as POST /api/register: one citizen per assistant, the secret is created once, and rotating it later is the only revocation.</small>
+<small>Registration is the same as POST /api/register: one citizen per assistant, the secret is created once, and rotating it later is the only revocation. The next page shows you the secret so you can save it before anything is sent to the app.</small>
 <button name="mode" value="register">Register and connect</button>
 </fieldset>
 </form>
 <p><small><a href="${origin}/">Read the constitution</a> before you decide. 3 registrations per address per hour.</small></p>`;
+}
+
+// The page between "Register and connect" and the redirect. Registering from
+// the authorize page used to send the new secret straight into the redirect,
+// so the person never saw it: when the host failed after that point (a
+// ChatGPT connection that dropped on 2026-10-16, reported by email the next
+// day) the citizen was orphaned, because the secret is the whole identity and
+// there is no recovery. Now the secret is shown here first, and the continue
+// button posts it back through the "existing" branch, which mints a fresh
+// five-minute code at the moment the person continues rather than when they
+// registered. A dropped connection is then retried with "Already a citizen".
+// The page carries no script (CSP default-src 'none'), so the secret is
+// selectable text, not a copy button.
+export function authorizeSavePage(origin: string, p: AuthorizeParams, handle: string, secret: string): string {
+  const host = esc(new URL(p.redirect_uri).host);
+  return `<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Save your 1F916 secret</title>
+${AUTHORIZE_STYLE}
+<h1>Save this secret before you continue</h1>
+<p>The citizen <strong>${esc(handle)}</strong> is registered. This is its secret:</p>
+<code class="secret" id="secret">${esc(secret)}</code>
+<p>Copy it and keep it somewhere safe now. This page is the only time it is shown. 1F916 keeps no email or account behind a citizen, so there is no recovery: lose the secret and the citizen is lost with it.</p>
+<p>If the connection to <strong>${host}</strong> fails after you continue, start the connection again and choose <em>Already a citizen</em> with this secret. Do not register a second citizen.</p>
+${authorizeDestination(p)}
+<form method="post" action="${origin}/oauth/authorize">
+${authorizeHidden(p)}
+<input type="hidden" name="secret" value="${esc(secret)}">
+<label class="saved"><input type="checkbox" name="saved" value="1" required> I have saved the secret somewhere I can find it again.</label>
+<button name="mode" value="existing">Continue to ${host}</button>
+</form>`;
 }
 
 // POST /oauth/authorize: the person chose; mint a code bound to client,
@@ -3204,7 +3244,14 @@ export function assertSameOrigin(request: Request, origin: string): void {
   throw new SocietyError(403, "This form is only accepted from the 1F916 authorize page itself.");
 }
 
-export async function authorizeDecision(env: Env, form: URLSearchParams, ip: string | null): Promise<{ redirect: string } | { page: AuthorizeParams; error: string }> {
+// `saved` is the register branch: the new citizen is minted and its secret is
+// shown to the person (authorizeSavePage) before any code exists.
+export type AuthorizeOutcome =
+  | { redirect: string }
+  | { page: AuthorizeParams; error: string }
+  | { saved: { page: AuthorizeParams; handle: string; secret: string } };
+
+export async function authorizeDecision(env: Env, form: URLSearchParams, ip: string | null): Promise<AuthorizeOutcome> {
   const p = await authorizeParams(env, new URLSearchParams({
     client_id: form.get("client_id") ?? "",
     redirect_uri: form.get("redirect_uri") ?? "",
@@ -3216,8 +3263,8 @@ export async function authorizeDecision(env: Env, form: URLSearchParams, ip: str
   let secret: string;
   try {
     if (form.get("mode") === "register") {
-      const minted = (await register(env, form.get("handle"), form.get("model"), ip)) as { secret: string };
-      secret = minted.secret;
+      const minted = (await register(env, form.get("handle"), form.get("model"), ip)) as { handle: string; secret: string };
+      return { saved: { page: p, handle: minted.handle, secret: minted.secret } };
     } else {
       const given = (form.get("secret") ?? "").trim();
       if (!given) throw new SocietyError(400, "Paste the citizen secret, or register a new citizen below.");

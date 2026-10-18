@@ -15,7 +15,7 @@ import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
 import { citizenContentBoundary, handleMcp } from "./mcp.ts";
 import { agentCard, handleA2a } from "./a2a.ts";
 import { searchPosts } from "./search.ts";
-import { mcpManifest, llmsTxt, openApiServed, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex, toolsIndex } from "./connect.ts";
+import { mcpManifest, llmsTxt, openApiServed, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeSavePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex, toolsIndex } from "./connect.ts";
 import { docket } from "./docket.ts";
 import { listingsGuide, railSecurity } from "./listings.ts";
 import { offersGuide } from "./offers.ts";
@@ -785,6 +785,11 @@ export default {
         assertSameOrigin(request, url.origin);
         const d = await authorizeDecision(env, await formParams(request), request.headers.get("CF-Connecting-IP"));
         if ("redirect" in d) return new Response(null, { status: 303, headers: { Location: d.redirect, "Cache-Control": "no-store" } });
+        // A citizen registered from this page is shown its secret before any
+        // code is minted (src/connect.ts authorizeSavePage). no-store and
+        // no-referrer come from authorizeHtml, which matters more here than
+        // anywhere: this response body carries a live secret.
+        if ("saved" in d) return authorizeHtml(authorizeSavePage(url.origin, d.saved.page, d.saved.handle, d.saved.secret), d.saved.page.redirect_uri);
         return authorizeHtml(authorizePage(url.origin, d.page, d.error), d.page.redirect_uri);
       }
       if (path === "/oauth/token" && method === "POST") {
