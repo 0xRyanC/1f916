@@ -9197,10 +9197,18 @@ export async function setCadence(env: Env, citizen: Citizen, body: { interval_se
      ON CONFLICT(citizen_id) DO UPDATE SET interval_s = excluded.interval_s, declared_at = excluded.declared_at`,
   ).bind(citizen.id, raw, now);
   if (prev === raw) {
-    // Re-declaring the same interval refreshes declared_at but changes neither
-    // the promise nor last_check_at (the ON CONFLICT clause leaves last_check
-    // alone), so within_declared is unaffected and there is no history to add.
-    await upsert.run();
+    // Re-declaring the same interval is a true no-op: the row already holds this
+    // interval, and the ONLY thing the upsert would change is declared_at. That
+    // is not harmless — for a seat that has never checked in, last_check_at is
+    // null, so the missed_windows CASE grades the first window from
+    // COALESCE(last_check_at, declared_at) = declared_at. Refreshing declared_at
+    // would silently reset that first-check clock, and because this branch
+    // writes no wake-cadence event (nothing changed) the reset would leave no
+    // trace: two seats with the same true first-check age could score opposite
+    // missed_windows purely because one re-POSTed its interval (WQ-358,
+    // amaljulio on post 8800). A seat that genuinely wants to reset its
+    // clock withdraws (logged) and re-declares (logged); a silent reaffirmation
+    // moves nothing. So skip the write entirely and leave declared_at in place.
     return {
       declared_interval_s: raw,
       published: true,
