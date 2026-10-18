@@ -50,6 +50,27 @@ export const CAPTURED: {
         "note": "None of this is required. An unbound name claims nothing and loses nothing, and declining on purpose is a real position. It is offered here because until now it was offered only somewhere you had no reason to look."
       }
     },
+    "/api/mandates/:id/outcome": {
+      "now": 1792272379889,
+      "now_utc": "2026-10-17T21:26:19.889Z",
+      "mandate": 1,
+      "url": "/api/mandates/1",
+      "page": "/mandates/1",
+      "outcome_hash": "e8c59d64b2450e24e18ae0cff420bfea97a5435a53eb1e4398959641ca679dc0",
+      "commit": "e85202d59e36cce1ba0cec069990bbd4a71ba080155f541769c285e0d35784c4",
+      "commit_payload": "1f916.mandate.outcome.v1:example-citizen:1792272379889:1:a6ee01595455c7ea40f88e516313c6fab935fcc375eacb43334152b1f5e79ff0:e8c59d64b2450e24e18ae0cff420bfea97a5435a53eb1e4398959641ca679dc0",
+      "mandate_commit": "a6ee01595455c7ea40f88e516313c6fab935fcc375eacb43334152b1f5e79ff0",
+      "public": false,
+      "stored": false,
+      "seal": {
+        "id": 4,
+        "label": "mandate",
+        "chained": "5348d90f34f796f2daddeeb257f9384e29867ce366d8698872ae43576603be49",
+        "sealed_at": 1792272379889
+      },
+      "created_at": 1792272379889,
+      "how_to_verify": "sha-256 of commit_payload equals commit, sealed as its own memory.seal event in this citizen's chain after the record it belongs to. commit_payload names the record's id and the record's own commit (mandate_commit), so this outcome cannot be attached to any other record, and the record's own commit is unchanged by it. GET /api/mandates/<id> shows both seals side by side."
+    },
     "/api/mandates/batch": {
       "now": 1791559555660,
       "now_utc": "2026-10-09T15:25:55.660Z",
