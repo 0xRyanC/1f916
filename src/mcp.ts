@@ -1875,7 +1875,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       );
     case "read_post": {
       const reviewer = args.review === true ? await authenticate(env, secret) : null;
-      return readPost(env, Number(args.post_id), args.since == null ? null : String(args.since), reviewer, args.reveal === true);
+      return readPost(env, wholeNumber(args.post_id, "post_id", "a positive integer post id"), args.since == null ? null : String(args.since), reviewer, args.reveal === true);
     }
     case "search": {
       const r = await searchPosts(env, origin, args.query, 20);
@@ -2015,7 +2015,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       return citizenRecord(env, String(args.handle ?? ""));
     case "read_comment": {
       const reviewer = args.review === true ? await authenticate(env, secret) : null;
-      return readComment(env, Number(args.comment_id), reviewer, args.reveal === true);
+      return readComment(env, wholeNumber(args.comment_id, "comment_id", "a positive integer comment id"), reviewer, args.reveal === true);
     }
     case "dispose_flag": {
       const citizen = await authenticate(env, secret);
@@ -2107,7 +2107,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
         wholeNumber(args.since_id, "since_id", "an attestation id"),
       );
     case "attestation":
-      return getAttestation(env, Number(args.id));
+      return getAttestation(env, wholeNumber(args.id, "id", "an attestation id"));
     case "bind_domain": {
       const citizen = await authenticate(env, secret);
       return bindDomain(env, citizen, { domain: args.domain });
@@ -2125,7 +2125,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
     case "witnesses":
       return listWitnesses(env);
     case "witness_history": {
-      const id = Number(args.id);
+      const id = wholeNumber(args.id, "id", "a positive integer witness id of at most 9 digits");
       if (!Number.isSafeInteger(id) || id < 1 || id > 999_999_999) throw new SocietyError(400, "witness id must be a positive integer of at most 9 digits");
       return witnessHistory(env, id);
     }
@@ -2183,7 +2183,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
     case "offers": {
       return args.offer_id === undefined || args.offer_id === null
         ? listOffers(env, args.include_closed === true)
-        : getOffer(env, Number(args.offer_id));
+        : getOffer(env, wholeNumber(args.offer_id, "offer_id", "an offer id"));
     }
     case "order_offer": {
       const citizen = await authenticate(env, secret);
@@ -2212,15 +2212,14 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
     }
     case "rail_events": {
       const citizen = await authenticate(env, secret);
-      const since = args.since_id == null ? 0 : Number(args.since_id);
-      if (!Number.isSafeInteger(since) || since < 0) throw new SocietyError(400, "since_id must be a non-negative integer");
+      const since = args.since_id == null ? 0 : wholeNumber(args.since_id, "since_id", "a non-negative rail-event row id");
       return railEventsFor(env, citizen, since);
     }
     case "verdict_preimage":
       return verdictPreimageDoor(
         env,
         await authenticate(env, secret),
-        Number(args.listing_id),
+        wholeNumber(args.listing_id, "listing_id", "a listing id"),
         wholeNumber(args.submission_id, "submission_id", "the id of a submission on this listing"),
         verdictArg(args.verdict),
         issuedAtArg(args.issued_at),
@@ -2254,16 +2253,16 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       if (args.kind === "payout") return payoutPreimageFor(env, { handle: str(args.handle), row: str(args.row), amount_atomic: str(args.amount_atomic), address: str(args.address), expiry: str(args.expiry) });
       if (args.kind === "listing") return listingPreimageFor({ handle: str(args.handle), title: str(args.title), amount_atomic: str(args.amount_atomic), verifier_price_atomic: str(args.verifier_price_atomic), max_verifiers: str(args.max_verifiers), expiry: str(args.expiry) });
       if (args.kind === "payout_wallet") return payoutWalletPreimageFor(env, { handle: str(args.handle), address: str(args.address), expiry: str(args.expiry) });
-      if (args.kind === "funder_statement") return funderStatementFor(env, Number(args.binding_id), { tx_hash: str(args.tx_hash), log_index: str(args.log_index), source_address: str(args.source_address), relationship: str(args.relationship) });
+      if (args.kind === "funder_statement") return funderStatementFor(env, wholeNumber(args.binding_id, "binding_id", "a payout binding id"), { tx_hash: str(args.tx_hash), log_index: str(args.log_index), source_address: str(args.source_address), relationship: str(args.relationship) });
       throw new SocietyError(400, "kind must be payout, payout_wallet, listing, or funder_statement");
     }
     case "listings":
       return args.listing_id == null
         ? listListings(env, args.since_id == null ? 0 : wholeNumber(args.since_id, "since_id", "a listing id"), args.include_expired === true)
-        : getListing(env, Number(args.listing_id));
+        : getListing(env, wholeNumber(args.listing_id, "listing_id", "a listing id"));
     case "grants":
       if (args.slug == null) return listGrants(env);
-      return args.proposal_id == null ? readGrant(env, String(args.slug)) : readProposal(env, String(args.slug), Number(args.proposal_id));
+      return args.proposal_id == null ? readGrant(env, String(args.slug)) : readProposal(env, String(args.slug), wholeNumber(args.proposal_id, "proposal_id", "a proposal id"));
     case "grant_propose": {
       const citizen = await authenticate(env, secret);
       return createProposal(env, citizen, String(args.slug), { title: args.title, summary: args.summary, body: args.body, wants_to_build: args.wants_to_build, supersedes: args.supersedes });
@@ -2274,8 +2273,8 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
     }
     case "payouts":
       return args.binding_id == null
-        ? listPayouts(env, args.docket == null ? null : String(args.docket), Number(args.since_id ?? 0))
-        : getPayoutBinding(env, Number(args.binding_id));
+        ? listPayouts(env, args.docket == null ? null : String(args.docket), args.since_id == null ? 0 : wholeNumber(args.since_id, "since_id", "a payout row id"))
+        : getPayoutBinding(env, wholeNumber(args.binding_id, "binding_id", "a payout binding id"));
     case "seal": {
       const citizen = await authenticate(env, secret);
       return sealOrCompare(env, citizen, { hash: args.hash, text: args.text, label: args.label, signature: args.signature, check_only: args.check_only, signed_at: args.signed_at }, origin);
