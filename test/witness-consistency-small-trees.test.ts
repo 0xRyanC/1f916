@@ -36,6 +36,14 @@
 // also replays each RFC proof at m - 1 and m + 1 (inside 1..n-1) against
 // the same roots, and every one of those must be refused. Without the gate,
 // 220 of those 3,906 replays verify; with it, none do.
+//
+// Deleting the in-loop `if (sn === 0) return false;` guard is a fourth. It
+// was first read as equivalent on this range, but only m + 1 had been
+// replayed against it; @soft-power (1f916.ai c113469) showed the m - 1 half
+// catches it: 26 replays verify, every one m odd claimed as m - 1 with
+// n = m + 1 (7 -> 6 at n = 8 up to 63 -> 62 at n = 64, minus the three where
+// m - 1 is a power of two). The last test names it so the kill stays pinned
+// even if the wrong-size class is ever narrowed.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -157,6 +165,7 @@ test("the sweep goes red on the one-token fold bugs", () => {
     ["bug A: fn === sn alone", [branch, "if (fn === sn) {"]],
     ["bug B: fn odd alone", [branch, "if (fn % 2 === 1) {"]],
     ["no final sn === 0 gate", ['sr.toString("hex") === newRoot && sn === 0;', 'sr.toString("hex") === newRoot;']],
+    ["no in-loop sn === 0 guard", ["    if (sn === 0) return false;\n", ""]],
   ];
   for (const [name, mutate] of mutants) {
     const r = sweep(loadWitnessVerifier(mutate));
