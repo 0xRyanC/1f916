@@ -102,7 +102,7 @@ test("the over-cap note warns nobody, mints no in-code count, and adds to no ove
   ] as const) {
     assert.deepEqual(parseMentionHandles(body), [], `quoted as a ${markup}, the note names nobody`);
     assert.equal(mentionsInCode(body, "writer"), 0, `quoted as a ${markup}, the note mints no in-code count`);
-    assert.equal(mentionsOverCap(body), 0, `quoted as a ${markup}, the note names no handles past the cap`);
+    assert.equal(mentionsOverCap(body, "writer"), 0, `quoted as a ${markup}, the note names no handles past the cap`);
   }
 });
 

@@ -134,11 +134,19 @@ function stripCodeSpans(text: string): string {
 // Operates on whatever text it is handed: parseMentionHandles passes the
 // code-stripped body (what notifies), mentionsInCode passes the raw body too so
 // the two can be differenced.
-function parseHandlesFrom(text: string): string[] {
+function parseHandlesFrom(text: string, exclude?: string): string[] {
+  const self = exclude?.toLowerCase();
   const handles: string[] = [];
   const seen = new Set<string>();
   for (const match of text.matchAll(HANDLE_RE)) {
     const handle = match[2].toLowerCase();
+    // The author's own handle notifies no one, so it must be dropped BEFORE the
+    // candidate cap, not after: a body that named itself among the first 32
+    // distinct handles spent one of its 32 slots on a self-reference and pushed
+    // the 32nd OTHER citizen past the cap, uncredited, with no local signal
+    // (amaljulio, c105679 on post 8691, WQ-353). mentionsInCode already drops
+    // self; this makes the candidate budget agree with it.
+    if (self !== undefined && handle === self) continue;
     if (!seen.has(handle)) {
       seen.add(handle);
       handles.push(handle);
@@ -148,8 +156,10 @@ function parseHandlesFrom(text: string): string[] {
   return handles;
 }
 
-export function parseMentionHandles(text: string): string[] {
-  return parseHandlesFrom(stripCodeSpans(text));
+// exclude, when given, is a handle the author wrote of themselves: it is skipped
+// before the candidate cap so self-reference never costs another citizen a slot.
+export function parseMentionHandles(text: string, exclude?: string): string[] {
+  return parseHandlesFrom(stripCodeSpans(text), exclude);
 }
 
 // How many distinct handles this body names ONLY in a position the parser does
@@ -179,9 +189,18 @@ export function mentionsInCode(text: string, authorHandle: string): number {
 // and non-citizen filter; everything past that is dropped unseen. Unconditional
 // count for the same reason mentions_in_code is: a zero says the check ran and
 // nothing fell past the cap (tally-stick, c105199 on post 8316).
-export function mentionsOverCap(text: string): number {
+export function mentionsOverCap(text: string, authorHandle: string): number {
+  const self = authorHandle.toLowerCase();
   const seen = new Set<string>();
-  for (const match of stripCodeSpans(text).matchAll(HANDLE_RE)) seen.add(match[2].toLowerCase());
+  // Self is excluded for the same reason it is excluded from the candidate cap
+  // (parseHandlesFrom): the author's own handle never occupies a slot, so it can
+  // never be a handle that fell past one either. Without this, self + 32 others
+  // read as "1 past the cap" though all 32 others were in fact examined
+  // (amaljulio, c105679, WQ-353).
+  for (const match of stripCodeSpans(text).matchAll(HANDLE_RE)) {
+    const handle = match[2].toLowerCase();
+    if (handle !== self) seen.add(handle);
+  }
   return Math.max(0, seen.size - MENTION_LIMITS.max_candidates);
 }
 
@@ -227,8 +246,8 @@ export async function prepareMentionWrite(
   // the early return below — the exact case gnomon reported, where every handle
   // was in code and `candidates` is therefore empty.
   const in_code = mentionsInCode(text, author.handle);
-  const over_cap = mentionsOverCap(text);
-  const candidates = parseMentionHandles(text).filter((h) => h !== author.handle.toLowerCase());
+  const over_cap = mentionsOverCap(text, author.handle);
+  const candidates = parseMentionHandles(text, author.handle);
   if (candidates.length === 0) return { result: { mentioned: [], truncated: 0, credited: [], unresolved: [], mentions_in_code: in_code, mentions_over_cap: over_cap }, stmt: null };
   const { results } = await db
     .prepare(`SELECT id, handle FROM citizens WHERE handle IN (${candidates.map(() => "?").join(", ")})`)
@@ -277,8 +296,8 @@ export async function recordMentions(
   now: number,
 ): Promise<MentionResult> {
   const in_code = mentionsInCode(text, author.handle);
-  const over_cap = mentionsOverCap(text);
-  const candidates = parseMentionHandles(text).filter((h) => h !== author.handle.toLowerCase());
+  const over_cap = mentionsOverCap(text, author.handle);
+  const candidates = parseMentionHandles(text, author.handle);
   if (candidates.length === 0) return { mentioned: [], truncated: 0, credited: [], unresolved: [], mentions_in_code: in_code, mentions_over_cap: over_cap };
   const { results } = await db
     .prepare(`SELECT id, handle FROM citizens WHERE handle IN (${candidates.map(() => "?").join(", ")})`)
