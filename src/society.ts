@@ -13477,15 +13477,16 @@ const NULLS_NOTE =
 // already has.
 // A page is BOUNDED when both streams walk a snapshot (`snap:…`, which pins
 // `id <= maxId`) or are exhausted (`done`). New rows take higher ids, so they
-// cannot enter such a page: its contents are fixed for all time except for
-// moderation. That distinction is the difference between this being worth
+// cannot enter such a page. Existing rows can still gain amended_by links,
+// so comment-bearing bounded pages also track the amendment relation's head.
+// That distinction is the difference between this being worth
 // shipping and not. With the global row watermarks in every tag, one new
 // comment anywhere invalidates every page — including page 1 of a from-zero
 // walk, which cannot have changed — and this board takes a comment every
 // couple of minutes, so an archive re-walker would never see a 304 and the
 // most expensive read on the site would be untouched. Bounded pages drop the
-// row watermarks and keep only the moderation one, which is what lets a
-// repeated archive walk go quiet.
+// ordinary row watermarks, keeping moderation and (when comments are served)
+// amendments, which lets a repeated archive walk go quiet between real changes.
 //
 // `init` is deliberately NOT bounded: it samples MAX(id) at request time, so
 // its baseline moves. Legacy timestamp mode is not bounded either — its window
@@ -13511,6 +13512,9 @@ export function changesEtag(v: {
   maxCommentId: number;
   maxEventId: number;
   bounded?: boolean;
+  // A later corrector can decorate an existing bounded row without entering
+  // its snapshot. Ordinary comment arrivals must still leave the tag alone.
+  maxAmenderId?: number;
   // The nulls stream (docket:log-the-null). maxNullId is the nulls head, and
   // it is present EXACTLY when the response carries the nulls section — so
   // the tag invalidates when a nulls row lands inside the window. When the
@@ -13551,10 +13555,11 @@ export function changesEtag(v: {
   const sinceKey = sinceIsInput(v.postsSince) || sinceIsInput(v.commentsSince) || nullsActive ? String(v.since) : "";
   const scope = `${sinceKey}:${v.postsSince ?? ""}:${v.commentsSince ?? ""}:${nullsActive ? (v.nullsSince ?? "window") : ""}`;
   const nullsHead = nullsActive ? `.${v.maxNullId}` : "";
+  const amendmentHead = v.maxAmenderId === undefined ? "" : `.a${v.maxAmenderId}`;
   // Distinct prefixes so a bounded and an unbounded tag can never compare
   // equal, even if the watermarks behind them happened to line up.
   return v.bounded
-    ? `"chg1b-${scope}-${v.maxEventId}${nullsHead}"`
+    ? `"chg1b-${scope}-${v.maxEventId}${nullsHead}${amendmentHead}"`
     : `"chg1-${scope}-${v.maxPostId}.${v.maxCommentId}.${v.maxEventId}${nullsHead}"`;
 }
 
@@ -13580,8 +13585,8 @@ export function resolveChangesSince(since: number, postsCursor: ChangesCursor): 
   throw new SocietyError(400, CHANGES_SINCE_REQUIRED);
 }
 
-// The three watermark reads behind changesEtag. Cheap by construction: each is
-// MAX over a primary key.
+// The watermark reads behind changesEtag. Cheap by construction: each is MAX
+// over a primary key or its leading column.
 export async function changesValidator(
   env: Env,
   since: number,
@@ -13600,14 +13605,19 @@ export async function changesValidator(
   // refused, not answered 304 by a matching ETag.
   parseNullsCursor(nullsSince);
   const bounded = changesPageIsBounded(postsCursor, commentsCursor);
-  // A bounded page needs only the moderation watermark, so it does not pay for
-  // the two row reads at all. The nulls head is one more PK seek, paid only
-  // while the nulls stream is live on the page (silenced by nulls_since=done).
+  // A later correction can change amended_by on an older snapshot row without
+  // moving identity_events. The relation's leading primary-key column detects
+  // that change without invalidating on every ordinary comment. This can
+  // conservatively invalidate unrelated comment snapshots too; a silenced
+  // comment stream cannot serve the changed field and needs no extra seek.
+  const maxAmenderId = bounded && commentsCursor !== "done"
+    ? Number((await env.DB.prepare("SELECT COALESCE(MAX(amender_id), 0) AS m FROM comment_amends").all<{ m: number }>()).results[0]?.m ?? 0)
+    : undefined;
   const nullsSuppressed = nullsSince !== null && nullsSince.trim() === "done";
   const [maxPostId, maxCommentId, maxEventId, maxNullId] = bounded
     ? [0, 0, await head("identity_events"), nullsSuppressed ? null : await head("nulls")]
     : await Promise.all([head("posts"), head("comments"), head("identity_events"), nullsSuppressed ? null : head("nulls")]);
-  return changesEtag({ since, postsSince, commentsSince, maxPostId, maxCommentId, maxEventId, bounded, nullsSince, maxNullId });
+  return changesEtag({ since, postsSince, commentsSince, maxPostId, maxCommentId, maxEventId, bounded, maxAmenderId, nullsSince, maxNullId });
 }
 
 // RFC 9110 If-None-Match: `*`, or a comma-separated list of entity-tags, `*`
