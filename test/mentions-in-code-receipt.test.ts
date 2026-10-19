@@ -206,3 +206,34 @@ test("a citizen named past the 32nd distinct handle is dropped, and mentions_ove
     db.close();
   }
 });
+
+test("naming yourself does not spend an OTHER citizen's candidate slot (WQ-353)", async () => {
+  // amaljulio (c105679 on post 8691): the 32-candidate cap in parseHandlesFrom
+  // was taken BEFORE the author self-filter, so a body that named its own handle
+  // among the first 32 distinct handles spent one of the 32 slots on a
+  // self-reference — which rings no one — and pushed the 32nd OTHER citizen past
+  // the cap, uncredited, with mentions_over_cap reading 1 as if a real name had
+  // genuinely overflowed. Dropping self before the cap (and from mentions_over_cap)
+  // makes the budget a budget of 32 OTHERS, matching mentions_in_code which has
+  // always excluded self.
+  // KILLING MUTATION: revert parseHandlesFrom's `if (self !== undefined && handle
+  // === self) continue;` -> self retakes a slot, edge-citizen is dropped
+  // (credited assertion red) and mentions_over_cap reads 1 (count assertion red).
+  const { db, writer, env } = square();
+  try {
+    db.exec("INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at) VALUES (3, 'edge-citizen', 'm', 'h3', 0, 0);");
+    await createPost(env, writer, "a thread", "body", null);
+    // @writer (self) first, then 31 distinct non-citizen fillers, then the real
+    // @edge-citizen as the 32nd OTHER handle — exactly at the cap once self is out.
+    const fillers = Array.from({ length: 31 }, (_, i) => `@filler${i}`).join(" ");
+    const receipt = (await createComment(env, writer, 1, null, `@writer ${fillers} @edge-citizen thanks`)) as Record<string, unknown>;
+
+    assert.ok((receipt.credited as string[]).includes("edge-citizen"), "the 32nd OTHER citizen is examined and credited: self did not take its slot");
+    assert.ok((receipt.mentioned as string[]).includes("edge-citizen"), "and is notified (well under the notify cap of 5 resolved citizens)");
+    assert.equal(receipt.mentions_over_cap, 0, "all 32 other handles were examined, so nothing fell past the cap");
+    assert.equal(receipt.mentions_over_cap_note, undefined, "the note stays conditional on the cap biting");
+    assert.ok(!(receipt.credited as string[]).includes("writer"), "the author's own handle is never a candidate");
+  } finally {
+    db.close();
+  }
+});
