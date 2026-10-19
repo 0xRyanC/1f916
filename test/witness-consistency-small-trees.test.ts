@@ -28,6 +28,14 @@
 // turns the sweep red, and the last test below checks exactly that against
 // the loaded file, so the sweep is shown to be able to fail. A fold that
 // ignores a proof node turns the tampered count red.
+//
+// Deleting the final `sn === 0` gate is a third one-token mutant, and the
+// accepted/tampered/from-zero counts cannot see it: honest proofs still
+// verify and a replaced node still fails the root comparison. What the gate
+// does is refuse a valid proof replayed at the wrong old size. So the sweep
+// also replays each RFC proof at m - 1 and m + 1 (inside 1..n-1) against
+// the same roots, and every one of those must be refused. Without the gate,
+// 220 of those 3,906 replays verify; with it, none do.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -101,7 +109,7 @@ test("the reference MTH reproduces the Certificate Transparency test-tree roots"
 // with 1 <= m <= n <= 64), tampered proofs refused (of the 2,016 with m < n),
 // and non-empty proofs from size 0 refused (of 64).
 function sweep(verifyConsistency: Verify) {
-  let ok = 0, okTotal = 0, refused = 0, tampered = 0, fromZero = 0;
+  let ok = 0, okTotal = 0, refused = 0, tampered = 0, fromZero = 0, wrongSize = 0, wrongSizeRefused = 0;
   const firstFail: string[] = [];
   for (let n = 1; n <= 64; n++) {
     const d = Array.from({ length: n }, (_, i) => refLeaf(`1f916-small-tree:${n}:${i}`));
@@ -116,6 +124,13 @@ function sweep(verifyConsistency: Verify) {
         tampered++;
         if (!verifyConsistency(m, n, roots[m], roots[n], tamper(p))) refused++;
         else if (firstFail.length < 5) firstFail.push(`tampered(${m},${n})`);
+        // The same valid proof, claimed at a neighbouring old size.
+        for (const m2 of [m - 1, m + 1]) {
+          if (m2 < 1 || m2 >= n) continue;
+          wrongSize++;
+          if (!verifyConsistency(m2, n, roots[m], roots[n], p)) wrongSizeRefused++;
+          else if (firstFail.length < 5) firstFail.push(`wrong-size(${m}->${m2},${n})`);
+        }
       }
     }
     // From the empty tree the RFC's proof is empty, so a non-empty one must be
@@ -125,11 +140,12 @@ function sweep(verifyConsistency: Verify) {
   }
   assert.equal(okTotal, 2080);
   assert.equal(tampered, 2016);
-  return { accepted: ok, tamperedRefused: refused, fromZeroRefused: fromZero, firstFail };
+  assert.equal(wrongSize, 3906);
+  return { accepted: ok, tamperedRefused: refused, fromZeroRefused: fromZero, wrongSizeRefused, firstFail };
 }
 
 test("the witness's verifyConsistency accepts every RFC proof and refuses every tampered one, all m <= n <= 64", () => {
-  assert.deepEqual(sweep(loadWitnessVerifier()), { accepted: 2080, tamperedRefused: 2016, fromZeroRefused: 64, firstFail: [] });
+  assert.deepEqual(sweep(loadWitnessVerifier()), { accepted: 2080, tamperedRefused: 2016, fromZeroRefused: 64, wrongSizeRefused: 3906, firstFail: [] });
 });
 
 // The sweep must be able to fail. Each mutant is a one-token fold bug from
@@ -140,9 +156,10 @@ test("the sweep goes red on the one-token fold bugs", () => {
   const mutants: [string, [string, string]][] = [
     ["bug A: fn === sn alone", [branch, "if (fn === sn) {"]],
     ["bug B: fn odd alone", [branch, "if (fn % 2 === 1) {"]],
+    ["no final sn === 0 gate", ['sr.toString("hex") === newRoot && sn === 0;', 'sr.toString("hex") === newRoot;']],
   ];
   for (const [name, mutate] of mutants) {
     const r = sweep(loadWitnessVerifier(mutate));
-    assert.ok(r.accepted < 2080 || r.tamperedRefused < 2016 || r.fromZeroRefused < 64, `${name} passed the whole sweep`);
+    assert.ok(r.accepted < 2080 || r.tamperedRefused < 2016 || r.fromZeroRefused < 64 || r.wrongSizeRefused < 3906, `${name} passed the whole sweep`);
   }
 });
