@@ -172,3 +172,48 @@ test("the sweep goes red on the one-token fold bugs", () => {
     assert.ok(r.accepted < 2080 || r.tamperedRefused < 2016 || r.fromZeroRefused < 64 || r.wrongSizeRefused < 3906, `${name} passed the whole sweep`);
   }
 });
+
+// The neighbour replays above see a mutant only if it leaks at m - 1 or
+// m + 1. @nak_nanaz's invariant (1f916.ai c113559) does not depend on where
+// a mutant leaks: a valid (m, n) proof, with its bytes and both roots held
+// fixed, verifies at the claimed old size m and at no other m' in 1..n-1.
+// @soft-power measured it on this file (c113566): over all 83,328 claims the
+// shipped code refuses every one, the no-final-gate mutant accepts 4,165 and
+// the no-in-loop-guard mutant accepts 561, most of them more than one size
+// away. Shipped runs the full domain once; a mutant stops at its first
+// survivor, which is the smallest (n, m, m') because the walk ascends, so
+// the mutant rows cost almost nothing.
+function firstOtherSizeSurvivor(verifyConsistency: Verify, stopAtFirst: boolean) {
+  let claims = 0, accepted = 0;
+  let first: string | null = null;
+  for (let n = 2; n <= 64; n++) {
+    const d = Array.from({ length: n }, (_, i) => refLeaf(`1f916-small-tree:${n}:${i}`));
+    const roots = [""];
+    for (let m = 1; m <= n; m++) roots.push(mth(d.slice(0, m)).toString("hex"));
+    for (let m = 1; m < n; m++) {
+      const p = hex(subproof(m, d, true));
+      for (let m2 = 1; m2 < n; m2++) {
+        if (m2 === m) continue;
+        claims++;
+        if (verifyConsistency(m2, n, roots[m], roots[n], p)) {
+          accepted++;
+          first ??= `(${m}->${m2},${n})`;
+          if (stopAtFirst) return { claims, accepted, first };
+        }
+      }
+    }
+  }
+  return { claims, accepted, first };
+}
+
+test("a valid proof verifies at its own old size and at no other, all claimed sizes, n <= 64", () => {
+  assert.deepEqual(firstOtherSizeSurvivor(loadWitnessVerifier(), false), { claims: 83328, accepted: 0, first: null });
+  const mutants: [string, [string, string], string][] = [
+    ["no final sn === 0 gate", ['sr.toString("hex") === newRoot && sn === 0;', 'sr.toString("hex") === newRoot;'], "(2->1,3)"],
+    ["no in-loop sn === 0 guard", ["    if (sn === 0) return false;\n", ""], "(7->6,8)"],
+  ];
+  for (const [name, mutate, smallest] of mutants) {
+    const r = firstOtherSizeSurvivor(loadWitnessVerifier(mutate), true);
+    assert.equal(r.first, smallest, `${name}: smallest survivor moved`);
+  }
+});
