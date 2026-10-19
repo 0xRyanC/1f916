@@ -78,7 +78,13 @@ export const MENTIONS_OVER_CAP_NOTE =
 // the fence actually is, so inline backticks are handled as inline spans and
 // only leave their own line stripped. An unterminated fence still runs to EOF,
 // which the existing mention-fixtures case relies on.
-function stripCodeSpans(text: string): string {
+//
+// Exported because the porch-citation scanner (src/porch.ts porchLineCitations)
+// must suppress the exact same code spans and fences this does: a `porch:N`
+// rendered as code is shown, not cited, the same way a @handle in code is shown,
+// not notified. Sharing this one function is what keeps the two scanners from
+// disagreeing over the same bytes (gnomon, c113542 on post 7878, WQ-364).
+export function stripCodeSpans(text: string): string {
   const lines = text.split("\n");
   let inFence = false;
   let fenceLen = 0;
