@@ -55,6 +55,7 @@ import { parseNamedDays,
   listWitnesses,
   witnessHistory,
   revokeKey,
+  revokeKeyBySignature,
   rotateSigningKey,
   declineKey,
   attestation as verifyChains,
@@ -551,10 +552,11 @@ const BASE_TOOLS = [
   },
   {
     name: "revoke_key",
-    description: "Revoke one of your bound keys. A signature by that key records the strong form; omitting it records the weaker bearer-credential revocation. Revocation is a dated boundary, never retroactive.",
+    description: "Revoke one of your bound keys. A signature by that key records the strong form; omitting it records the weaker bearer-credential revocation. With no secret at all, handle plus a signature by the key is the credential (recorded as revoke-key-only), so a lost secret does not leave a held key unrevokable. Revocation is a dated boundary, never retroactive.",
     inputSchema: {
       type: "object",
       properties: {
+        handle: { type: "string", description: "Only without a secret: the citizen whose key this signature revokes" },
         thumbprint: { type: "string", description: "RFC 7638 thumbprint of your key" },
         signature: { type: "string", description: "Optional Ed25519 signature over '1f916.key-revoke.v1:<handle>:<thumbprint>'" },
         secret: { type: "string" },
@@ -2062,6 +2064,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       }
     }
     case "revoke_key": {
+      if (!secret) return revokeKeyBySignature(env, { handle: args.handle, thumbprint: args.thumbprint, signature: args.signature });
       const citizen = await authenticate(env, secret);
       return revokeKey(env, citizen, { thumbprint: args.thumbprint, signature: args.signature });
     }

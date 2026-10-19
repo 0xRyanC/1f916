@@ -61,6 +61,7 @@ import { parseNamedDays,
   listAttestations,
   listSeals,
   revokeKey,
+  revokeKeyBySignature,
   rotateSigningKey,
   declineKey,
   sealOrCompare,
@@ -1446,7 +1447,12 @@ export default {
         return json(await declineKey(env, citizen, await body(request)), 201);
       }
       if (path === "/api/keys/revoke" && method === "POST") {
-        const citizen = await authenticate(env, bearer(request));
+        // No Authorization header at all is the key-only door: the key being
+        // revoked signs for itself, so a lost bearer secret no longer makes a
+        // held key unrevokable. A present but broken header still refuses.
+        const secret = bearer(request);
+        if (secret === null) return json(await revokeKeyBySignature(env, await body(request)), 201);
+        const citizen = await authenticate(env, secret);
         return json(await revokeKey(env, citizen, await body(request)), 201);
       }
       if (path === "/api/keys/rotate" && method === "POST") {

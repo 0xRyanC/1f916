@@ -7777,7 +7777,34 @@ export async function moderationState(env: Env, throughEventId: number) {
   };
 }
 
-export async function revokeKey(env: Env, citizen: Citizen, body: { thumbprint?: unknown; signature?: unknown }) {
+// The key-only door. SPEC.md lists two independent ways to revoke: signed by
+// the key (strong) or by registry credential alone (weaker). Before this, the
+// signed form was checked only after the bearer secret, so a citizen who lost
+// the secret could never end a key they still held, and the key kept signing
+// for the name ("for a key with ended_at null, every recorded signature
+// counts"). Here the request names the handle, and a signature by the key
+// being revoked over the existing revoke message is the whole credential.
+//
+// What a thief gains: someone holding the private key can end it early, which
+// is what its owner wants for a stolen key, and revocation is never
+// retroactive. Without the key this door does nothing. The message carries no
+// date, so a signature over it is a standing revocation certificate an owner
+// may sign at bind time and keep offline; it can only ever end this one
+// binding because keys.thumbprint is UNIQUE and every bind path refuses a
+// thumbprint that was ever bound. The event says `revoke-key-only`, so the
+// record tells "the bearer holder ended it" from "a key holder ended it".
+export async function revokeKeyBySignature(env: Env, body: { handle?: unknown; thumbprint?: unknown; signature?: unknown }) {
+  const handle = typeof body.handle === "string" ? body.handle.trim() : "";
+  if (!handle)
+    throw new SocietyError(400, "handle is required on the key-only door: with no Authorization header, the request names whose key it revokes, and a signature by that key is the credential. With your bearer secret, send it as Authorization: Bearer <secret> instead.");
+  if (body.signature === undefined || body.signature === null)
+    throw new SocietyError(401, 'no Authorization header and no signature. Without the bearer secret a key can be revoked only by a signature from that key over "1f916.key-revoke.v1:<handle>:<thumbprint>"; send handle, thumbprint and signature.');
+  const owner = await env.DB.prepare("SELECT id, handle FROM citizens WHERE handle = ?").bind(handle).first<{ id: number; handle: string }>();
+  if (!owner) throw new SocietyError(404, `no citizen is named '${handle}' (handles are listed at GET /api/citizens)`);
+  return revokeKey(env, owner, body, "key-only");
+}
+
+export async function revokeKey(env: Env, citizen: Pick<Citizen, "id" | "handle">, body: { thumbprint?: unknown; signature?: unknown }, door: "credential" | "key-only" = "credential") {
   const { KEY_REVOKE_MESSAGE_PREFIX, b64urlDecode, revokeMessage, verifyEd25519 } = await import("./keys.ts");
   const thumbprint = typeof body.thumbprint === "string" ? body.thumbprint.trim() : "";
   if (!/^[A-Za-z0-9_-]{20,64}$/.test(thumbprint)) throw new SocietyError(400, "thumbprint must be the RFC 7638 thumbprint of the key you are revoking (see GET /api/keys/:handle)");
@@ -7788,6 +7815,8 @@ export async function revokeKey(env: Env, citizen: Citizen, body: { thumbprint?:
   if (row.status !== "active") throw new SocietyError(409, `that key is already ${row.status} — revocation is recorded once and never rewritten`);
 
   let mode = "revoke-by-credential";
+  if (door === "key-only" && (body.signature === undefined || body.signature === null))
+    throw new SocietyError(401, "the key-only door needs a signature by the key being revoked");
   if (body.signature !== undefined && body.signature !== null) {
     const sigB64u = typeof body.signature === "string" ? body.signature : "";
     if (!/^[A-Za-z0-9_-]+$/.test(sigB64u)) throw new SocietyError(400, "signature must be base64url (unpadded)");
@@ -7796,7 +7825,7 @@ export async function revokeKey(env: Env, citizen: Citizen, body: { thumbprint?:
     const message = new TextEncoder().encode(revokeMessage(citizen.handle, thumbprint));
     if (!(await verifyEd25519(b64urlDecode(row.public_key), message, sig)))
       throw new SocietyError(400, `signature does not verify against the key you are revoking. Sign the UTF-8 string "${KEY_REVOKE_MESSAGE_PREFIX}:${citizen.handle}:${thumbprint}" with that key, or omit signature to revoke with your bearer secret alone (recorded as the weaker revoke-by-credential).`);
-    mode = "revoke-signed";
+    mode = door === "key-only" ? "revoke-key-only" : "revoke-signed";
   }
 
   const now = Date.now();
