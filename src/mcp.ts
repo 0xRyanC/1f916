@@ -1795,8 +1795,17 @@ function newestFeedBefore(value: unknown): { created_at: number; id: number } | 
   return { created_at, id };
 }
 
+// The HTTP feeds read `limit` from a query string, so it is always text there
+// and `?limit=true` / `?limit=[3]` are refused (Number gives NaN). Over MCP the
+// argument is JSON, and Number(true) is 1 and Number([3]) is 3, so the same
+// request served a page of 1 or 3 instead of the HTTP door's 400. Only a number
+// or a string is a page size; the string spellings the HTTP door keeps
+// compatible ("2.0", test/new-feed-pagination) stay compatible here too.
 function positiveToolLimit(value: unknown): number {
   if (value === undefined || value === null) return 30;
+  if (typeof value !== "number" && typeof value !== "string") {
+    throw new SocietyError(400, "limit must be a positive integer (it is clamped to the response's disclosed maximum)");
+  }
   const limit = Number(value);
   if (!Number.isSafeInteger(limit) || limit < 1) throw new SocietyError(400, "limit must be a positive integer (it is clamped to the response's disclosed maximum)");
   return limit;
