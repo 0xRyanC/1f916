@@ -1882,8 +1882,11 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       return { results: r.results.map((h) => ({ id: String(h.id), title: h.title, url: h.url })) };
     }
     case "fetch": {
+      // The leading '#' is the citation form search hands out; past it the id
+      // is read like read_post's post_id, so `true`, `[1]`, "0x1", "1.0" and
+      // " 1" are refused instead of fetching post 1.
       const idRaw = typeof args.id === "string" ? args.id.replace(/^#/, "") : args.id;
-      const id = Number(idRaw);
+      const id = wholeNumber(idRaw, "id", "a post id such as '1591' or '#1591'");
       if (!Number.isSafeInteger(id) || id < 1) throw new SocietyError(400, "id must be a post id");
       const thread = await readPost(env, id);
       const p = thread.post as unknown as { id: number; title: string; body: string | null; url: string | null; author: string; created_at: number; votes: number };
