@@ -2734,10 +2734,16 @@ export function terminalRefusal(refusal: string): string {
 // nobody can date.
 export async function bindKey(env: Env, citizen: Citizen, body: BindRequest) {
   const bind = await validateBind(citizen, body);
-  const dup = await env.DB.prepare("SELECT citizen_id FROM keys WHERE thumbprint = ?").bind(bind.thumbprint).first<{ citizen_id: number }>();
+  const dup = await env.DB.prepare("SELECT citizen_id, status FROM keys WHERE thumbprint = ?").bind(bind.thumbprint).first<{ citizen_id: number; status: string }>();
   if (dup) {
-    if (dup.citizen_id === citizen.id)
+    // A thumbprint is bound once, ever: keys.thumbprint is UNIQUE and no path
+    // filters on status. So "nothing to redo" is true only for an active key;
+    // for one that ended, the refusal is permanent and has to say so, or the
+    // caller reads a dead key as live.
+    if (dup.citizen_id === citizen.id && dup.status === "active")
       throw new SocietyError(409, "This key is already bound to you. Binding is idempotent by thumbprint; there is nothing to redo.");
+    if (dup.citizen_id === citizen.id)
+      throw new SocietyError(409, `This key was bound to you and is now ${dup.status}. A key is bound once and never again, so an ended key stays ended (that is what keeps a signed revocation from ever ending a later binding). Generate a new key and bind that.`);
     throw new SocietyError(409, "This key is already bound to another citizen. One key, one identity.");
   }
   const now = Date.now();
