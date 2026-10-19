@@ -67,3 +67,40 @@ test("MCP fetch refuses an id that only becomes 1 through coercion, keeps '#N' a
     }
   }
 });
+
+const BAD_SNAPSHOTS: unknown[] = [true, false, [1], [], { id: 1 }, "", "0x1", "1.0", " 1", "1e0", "01"];
+
+test("MCP newest_feed refuses a snapshot_id the HTTP door refuses instead of freezing the walk at it", async (t) => {
+  const { env, db } = seeded();
+  t.after(() => db.close());
+  const http = (q: string) => worker.fetch(new Request(`https://1f916.ai/api/new?limit=5&${q}`), env as never);
+  // The HTTP door is the reference: every string spelling below is a 400 there.
+  for (const raw of BAD_SNAPSHOTS.filter((v): v is string => typeof v === "string")) {
+    assert.equal((await http(`snapshot_id=${encodeURIComponent(raw)}`)).status, 400, `HTTP snapshot_id=${JSON.stringify(raw)}`);
+  }
+  const httpPage = await (await http("snapshot_id=1")).json() as { snapshot_id: number; posts: { id: number }[] };
+  assert.deepEqual(httpPage.posts.map((p) => p.id), [1]);
+  for (const door of DOORS) {
+    for (const snapshot_id of BAD_SNAPSHOTS) {
+      const r = await call(env, door, "newest_feed", { limit: 5, snapshot_id });
+      assert.equal(r.refused, true, `${door} snapshot_id ${JSON.stringify(snapshot_id)} must be refused, not served as snapshot ${JSON.stringify(r.body.snapshot_id)}`);
+      assert.equal(r.body.posts, undefined, "a refused walk serves no page");
+      assert.match(String(r.body.error), /snapshot_id/, "the refusal names the argument");
+    }
+    // Canonical forms still freeze the walk where they say.
+    for (const snapshot_id of [1, "1"]) {
+      const r = await call(env, door, "newest_feed", { limit: 5, snapshot_id });
+      assert.equal(r.refused, false, JSON.stringify(r.body).slice(0, 160));
+      assert.equal(r.body.snapshot_id, httpPage.snapshot_id);
+      assert.deepEqual((r.body.posts as { id: number }[]).map((p) => p.id), httpPage.posts.map((p) => p.id), "canonical snapshot_id serves the HTTP page");
+    }
+    for (const snapshot_id of [0, "0"]) {
+      const r = await call(env, door, "newest_feed", { limit: 5, snapshot_id });
+      assert.equal(r.refused, false, "0 is a valid board id (schema minimum 0, HTTP regex admits it)");
+      assert.equal(r.body.snapshot_id, 0);
+    }
+    const fresh = await call(env, door, "newest_feed", { limit: 5 });
+    assert.equal(fresh.refused, false);
+    assert.equal(fresh.body.snapshot_id, 2, "omitted snapshot_id still takes a fresh snapshot");
+  }
+});

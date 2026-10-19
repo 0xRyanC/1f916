@@ -1822,11 +1822,13 @@ function issuedAtArg(value: unknown): number {
   return Number.isFinite(issuedAt) ? issuedAt : Date.now();
 }
 
+// snapshot_id freezes the walk at a board id, so it selects rows like any id:
+// the HTTP door (src/index.ts newFeedSnapshot) refuses anything but a canonical
+// decimal. Bare Number() here let `true`, `[1]` and `"0x1"` freeze the walk at
+// post 1 and `""` at 0 (an empty board), each answered as a normal page.
 function optionalSnapshotId(value: unknown): number | null {
   if (value === undefined || value === null) return null;
-  const id = Number(value);
-  if (!Number.isSafeInteger(id) || id < 0) throw new SocietyError(400, "snapshot_id must be a non-negative safe integer");
-  return id;
+  return wholeNumber(value, "snapshot_id", "a non-negative board id returned by the previous page");
 }
 
 
