@@ -44,6 +44,18 @@
 // n = m + 1 (7 -> 6 at n = 8 up to 63 -> 62 at n = 64, minus the three where
 // m - 1 is a power of two). The last test names it so the kill stays pinned
 // even if the wrong-size class is ever narrowed.
+//
+// Deleting the old-root comparison from the final return is a fifth, and
+// every class above passes it: each one hands the verifier the true old
+// root, so `fr === oldRoot` is never what refuses. It is the comparison that
+// stops a forked history. The witness passes its own stored head as oldRoot;
+// a registry that rewrote a leaf below that size can still serve a proof
+// that folds to its forked new root, and only fr against the stored root
+// sees the fork. With it deleted, a sweep of 196 one-token mutants of this
+// function (1f916.ai, head-of-experiments) found it the only survivor that
+// accepts a forgery: every forked claim whose old size is not a power of two
+// verifies (when m is a power of two the old root seeds the fold, so the
+// new-root check still catches it). The last test replays every such fork.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -216,4 +228,58 @@ test("a valid proof verifies at its own old size and at no other, all claimed si
     const r = firstOtherSizeSurvivor(loadWitnessVerifier(mutate), true);
     assert.equal(r.first, smallest, `${name}: smallest survivor moved`);
   }
+});
+
+// A forked history: the registry rewrites leaf j < m, serves the forked
+// tree's own (m, n) proof and its forked new root, and the witness still holds
+// the honest old root at m. Every one must be refused. Each forked tree is
+// built once per (n, j) with memoised subtree hashes, so the whole domain
+// (43,680 claims for n <= 64) costs about as much as test 4.
+function treeOf(d: Buffer[]) {
+  const memo = new Map<number, Buffer>();
+  const h = (a: number, b: number): Buffer => {
+    if (b - a === 1) return d[a];
+    const key = a * 1024 + b;
+    let v = memo.get(key);
+    if (!v) { const k = split(b - a); v = refNode(h(a, a + k), h(a + k, b)); memo.set(key, v); }
+    return v;
+  };
+  const sp = (m: number, a: number, b: number, flag: boolean): Buffer[] => {
+    if (m === b - a) return flag ? [] : [h(a, b)];
+    const k = split(b - a);
+    return m <= k ? [...sp(m, a, a + k, flag), h(a + k, b)] : [...sp(m - k, a + k, b, false), h(a, a + k)];
+  };
+  return { root: (m: number) => h(0, m).toString("hex"), proof: (m: number) => hex(sp(m, 0, d.length, true)) };
+}
+
+function firstForkSurvivor(verifyConsistency: Verify, stopAtFirst: boolean) {
+  let claims = 0, accepted = 0;
+  let first: string | null = null;
+  for (let n = 2; n <= 64; n++) {
+    const d = Array.from({ length: n }, (_, i) => refLeaf(`1f916-small-tree:${n}:${i}`));
+    const honest = treeOf(d);
+    const roots = [""];
+    for (let m = 1; m < n; m++) roots.push(honest.root(m));
+    for (let j = 0; j < n - 1; j++) {
+      const f = d.slice();
+      f[j] = refLeaf(`1f916-fork:${n}:${j}`);
+      const forked = treeOf(f);
+      const forkedRoot = forked.root(n);
+      for (let m = j + 1; m < n; m++) {
+        claims++;
+        if (verifyConsistency(m, n, roots[m], forkedRoot, forked.proof(m))) {
+          accepted++;
+          first ??= `(m=${m},n=${n},j=${j})`;
+          if (stopAtFirst) return { claims, accepted, first };
+        }
+      }
+    }
+  }
+  return { claims, accepted, first };
+}
+
+test("a proof from a forked history never verifies against the honest old root, n <= 64", () => {
+  assert.deepEqual(firstForkSurvivor(loadWitnessVerifier(), false), { claims: 43680, accepted: 0, first: null });
+  const r = firstForkSurvivor(loadWitnessVerifier(['return fr.toString("hex") === oldRoot && ', "return "]), true);
+  assert.equal(r.first, "(m=3,n=4,j=0)", "no old-root comparison: smallest survivor moved");
 });
