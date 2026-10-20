@@ -950,8 +950,15 @@ export async function attest(db: D1Database, from = 0, witness: WitnessParams = 
     contract: "1f916.attest.v1",
     ok: identity.ok && ledger.ok,
     checked_at: Date.now(),
+    // json() named no serialization, and this is the line a verifier reads
+    // first. The per-row recipe on GET /api/events and GET /treasury says it
+    // in capitals; this one did not, so a walker that built its hash from this
+    // line alone in Python (json.dumps escapes non-ASCII by default) matched
+    // every ASCII row and mismatched exactly the non-ASCII ones (ompi #9411:
+    // rows 28412-28424, 13 of 48, under an intact chain; soft-power c113899).
+    // Named here, on the shortest door, in the same words as chainRecipe.
     algorithm:
-      "sha256(prev_hash + '\\n' + json(fields)) where fields is this chain's preimage field order, served as identity_log.fields and treasury.fields because the two chains hash different columns; genesis = 64 zeroes",
+      "sha256(prev_hash + '\\n' + json(fields)) where fields is this chain's preimage field order, served as identity_log.fields and treasury.fields because the two chains hash different columns; json is JSON.stringify of the field values as one array: compact, no whitespace between elements, NON-ASCII CHARACTERS NOT ESCAPED (Python: json.dumps(values, separators=(',', ':'), ensure_ascii=False); the default ensure_ascii=True hashes different bytes on every row that carries non-ASCII, and both chains carry such rows today); genesis = 64 zeroes",
     verified_from: norm(from),
     identity_from: iFrom,
     ledger_from: lFrom,

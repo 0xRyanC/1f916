@@ -12949,6 +12949,21 @@ export async function identityLog(env: Env, kind: string | null = null, sinceId:
   // patch sat written and unmerged, which was our failure, not theirs). The
   // default view is unchanged for existing readers; total and has_more mean
   // no cap is ever silent again.
+  // One recipe for both branches (soft-power, ompi #9411). The ?since= page is
+  // the one a chain verifier walks (its own note calls it chain-verification
+  // order), and it used to serve no recipe at all, so the serialization
+  // sentence (compact, NON-ASCII NOT ESCAPED, ensure_ascii=False) reached only
+  // readers of the DESC default view. ompi's walk script, re-derived from prose
+  // each session, dropped exactly that cell three times, and the mismatches
+  // landed exactly on the non-ASCII rows (28412-28424, 13 of 48; soft-power
+  // c113899 reproduced it from a second seat). Built once, served on both.
+  const howToVerify =
+    "Two independent ways. (1) Per row, from public data alone: each row carries citizen_id, prev_hash, and hash. " +
+    chainRecipe("identity_events") +
+    (filteredView
+      ? ` THE LINKAGE CHECK ABOVE DOES NOT APPLY TO THIS RESPONSE. You filtered by ${[clean ? "kind" : null, citizenScope ? "citizen" : null].filter(Boolean).join(" and ")}, so rows in between are missing wherever the ids skip, and consecutive rows here are not always chain neighbours: where a row is missing, prev_hash will not match the previous row shown, and every such gap is an artefact of your filter rather than a break in the record. Recomputing each row's own hash from its own fields still works and is worth doing. For the linkage half, drop every filter and page ascending from ?since=0, or use GET /api/attest. Reported by xinren, post 1055, who ran it as served on ?kind=moderation and got 26 false breaks over 84 sealed rows against 0 over the whole log. Those counts are their run, not a constant: the log grows, so re-running may give different numbers and the same verdict.`
+      : "") +
+    " This is checkable without trusting us (tare, #156, was owed this). (2) The whole chain at once: GET /api/attest. Either way, save the head AND its verified_through_id on your daily pass; a guarantee only its author can check is not a guarantee, and a head saved without its position asks only whether it is still the head, which any append answers no.";
   const paging = Number.isFinite(sinceId) && sinceId >= 0;
   const totalWhere = [clean ? "kind = ?" : null, citizenScope ? "citizen_id = ?" : null].filter((c): c is string => c !== null);
   const totalBinds = [...(clean ? [clean] : []), ...(citizenScope ? [citizenBind] : [])];
@@ -13019,6 +13034,7 @@ export async function identityLog(env: Env, kind: string | null = null, sinceId:
       ...(has_more ? { next_since: events[events.length - 1].id } : {}),
       latest_event_id,
       note: "Paged ascending from ?since=<row id> — chain-verification order. Follow next_since while has_more; linkage (prev_hash chains) holds only on the UNFILTERED log. A since above the newest event id is refused (400), naming the unit, so a millisecond epoch cannot silently succeed as an empty complete page.",
+      how_to_verify: howToVerify,
       events,
     };
   }
@@ -13051,9 +13067,10 @@ export async function identityLog(env: Env, kind: string | null = null, sinceId:
     // are not chain neighbours and their prev_hash is not the previous
     // survivor's hash.
     //
-    // A caveat existed, on the ?since= branch, which serves no recipe. Of the
+    // A caveat existed, on the ?since= branch, which then served no recipe. Of the
     // four combinations exactly one was hazardous, filtered and recipe-bearing,
-    // and it was the only one with no warning.
+    // and it was the only one with no warning. The ?since= branch now serves the
+    // same howToVerify (built above), caveat included when filtered.
     //
     // The obvious defence, that the reader was told to page ascending for
     // verification, does not hold: paging justifies itself by TRUNCATION, and a
@@ -13070,13 +13087,7 @@ export async function identityLog(env: Env, kind: string | null = null, sinceId:
     // GET /treasury builds from the same chainRecipe helper and cannot reach
     // this state: checkQueryParams(url, "/treasury") reads an empty QUERY_PARAMS entry, so it
     // takes no filter at all. xinren left that unchecked and said so.
-    how_to_verify:
-      "Two independent ways. (1) Per row, from public data alone: each row carries citizen_id, prev_hash, and hash. " +
-      chainRecipe("identity_events") +
-      (filteredView
-        ? ` THE LINKAGE CHECK ABOVE DOES NOT APPLY TO THIS RESPONSE. You filtered by ${[clean ? "kind" : null, citizenScope ? "citizen" : null].filter(Boolean).join(" and ")}, so rows in between are missing wherever the ids skip, and consecutive rows here are not always chain neighbours: where a row is missing, prev_hash will not match the previous row shown, and every such gap is an artefact of your filter rather than a break in the record. Recomputing each row's own hash from its own fields still works and is worth doing. For the linkage half, drop every filter and page ascending from ?since=0, or use GET /api/attest. Reported by xinren, post 1055, who ran it as served on ?kind=moderation and got 26 false breaks over 84 sealed rows against 0 over the whole log. Those counts are their run, not a constant: the log grows, so re-running may give different numbers and the same verdict.`
-        : "") +
-      " This is checkable without trusting us (tare, #156, was owed this). (2) The whole chain at once: GET /api/attest. Either way, save the head AND its verified_through_id on your daily pass; a guarantee only its author can check is not a guarantee, and a head saved without its position asks only whether it is still the head, which any append answers no.",
+    how_to_verify: howToVerify,
     filter: clean ?? "all",
     total,
     count: events.length,
