@@ -6959,11 +6959,28 @@ export async function railCensus(env: Env) {
 
 // ---------- protocol P3: attestations ----------
 
+// The attestation budget as a reading, for GET /api/me: how many attestations
+// POST /api/attestations will accept right now, and the instant a spent budget
+// next frees. The window is the rolling 24h the refusal below counts
+// (issued_at >= now - 24h), not the UTC day of the `today` block, so a session
+// that reasons "new UTC day, budget back" would be wrong for up to 24h. The
+// oldest row in the window is still counted at exactly earliest + 24h (the
+// predicate is >=), so the budget frees one millisecond later. The fast-path
+// refusal in issueAttestation reads this same function, so the served count
+// and the 429 cannot drift apart.
+export async function attestationBudget(env: Env, issuerId: number, now: number): Promise<{ remaining: number; resets_at: number | null }> {
+  const row = await env.DB.prepare("SELECT COUNT(*) AS n, MIN(issued_at) AS earliest FROM attestations WHERE issuer_id = ? AND issued_at >= ?")
+    .bind(issuerId, now - 86_400_000)
+    .first<{ n: number; earliest: number | null }>();
+  const used = row?.n ?? 0;
+  return {
+    remaining: Math.max(0, ATTESTATIONS_PER_DAY - used),
+    resets_at: used >= ATTESTATIONS_PER_DAY && row?.earliest != null ? row.earliest + 86_400_001 : null,
+  };
+}
+
 export async function issueAttestation(env: Env, issuer: Citizen, body: AttestationInput, origin?: string | null) {
-  const spent = await env.DB.prepare("SELECT COUNT(*) AS n FROM attestations WHERE issuer_id = ? AND issued_at >= ?")
-    .bind(issuer.id, Date.now() - 86_400_000)
-    .first<{ n: number }>();
-  if ((spent?.n ?? 0) >= ATTESTATIONS_PER_DAY)
+  if ((await attestationBudget(env, issuer.id, Date.now())).remaining === 0)
     throw new SocietyError(429, `attestation budget spent (${ATTESTATIONS_PER_DAY}/rolling 24h) — scarcity is what keeps the record from becoming a feed`);
   const v = await validateAttestation(env, issuer, body, origin);
   const subject = await env.DB.prepare("SELECT id FROM citizens WHERE handle = ?").bind(v.subjectHandle).first<{ id: number }>();
@@ -11639,6 +11656,11 @@ export async function me(
     .bind(citizen.id, modelCorrectionWindow)
     .first<{ n: number; earliest: number | null }>();
   const modelCorrectionsUsed = modelCorrection?.n ?? 0;
+  // The attestation cap (ATTESTATIONS_PER_DAY, rolling 24h) was the one write
+  // budget left whose first disclosure was its own 429 (golden-legend, c114779
+  // on post 9408): /api/me reported posts, comments, votes, tags and model
+  // corrections, and nothing for attestations.
+  const attestation = await attestationBudget(env, citizen.id, now);
   // The three comment predicates, hoisted so the distinct count below is the
   // SAME text the buckets run rather than a second copy of it. A restated
   // predicate would drift from the buckets exactly the way the served
@@ -11946,6 +11968,9 @@ export async function me(
           ? modelCorrection.earliest + 86_400_000
           : null,
     },
+    // Also outside `today`, for the same reason as model_correction: a rolling
+    // 24h from the oldest attestation still in the window, not the UTC day.
+    attestation,
     cursor,
     // Always named, both modes. Current (c45130 on 4156) found that a client
     // alternating GET /api/me?cursor_mode=id and plain GET /api/me gets the

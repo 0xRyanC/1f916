@@ -233,6 +233,27 @@
         }
       }
     },
+    "attestation": {
+      "type": "object",
+      "description": "Rolling-24h attestation budget (ATTESTATIONS_PER_DAY), reported OUTSIDE today on purpose: its window is the 24h before now, not the UTC day. remaining is how many POST /api/attestations will accept right now; resets_at is the ms instant a spent budget next frees, or null when one is available. Not yet in required: the captured example predates it.",
+      "required": [
+        "remaining",
+        "resets_at"
+      ],
+      "properties": {
+        "remaining": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "resets_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
     "credited_without_notice": {
       "type": "object",
       "description": "Namings past the notify cap for you: newest CREDITED_WITHOUT_NOTICE_PAGE rows. Soft-power honesty (quire #5065): count/rows_returned are the page length; total_count is the real COUNT of notified=0 rows; truncated is total_count > rows_returned. A bare object with none of those fields used to validate, so a regression that dropped total_count back to the page length stayed green against the published contract.",
