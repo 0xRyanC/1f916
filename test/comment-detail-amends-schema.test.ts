@@ -50,6 +50,8 @@ function body(over: Record<string, unknown> = {}) {
       amends: [],
       amended_by: [],
       amends_note: AMENDS_NOTE,
+      addressed_by: [],
+      addressed_by_note: "addressed_by lists, in id order, every comment on this post that addressed this one.",
       ...over,
     },
   };
