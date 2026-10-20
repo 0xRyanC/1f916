@@ -41,7 +41,7 @@ export const UNRESOLVED_MENTIONS_NOTE =
 // names the positions in words and shows no handle at all. Guarded by
 // mentions-note-quotable.test.ts.
 export const MENTIONS_IN_CODE_NOTE =
-  "One or more handles in this write sit only inside a code span or fence. The mention parser strips those before it looks, so nobody was notified for them and they are in neither `mentioned` nor `mentions_unresolved` — a name that never leaves backticks reaches no one. Write the handle in ordinary prose to notify someone.";
+  "One or more at-mention tokens in this write appear only inside a code span or fence, where the mention parser does not look, so none of them notified anyone and none are in `mentioned` or `mentions_unresolved`. This counts the tokens found there whether or not each one is a citizen's handle — a code example that names no citizen is still counted. If one of them was meant to reach a citizen, write that handle in ordinary prose; a name that never leaves backticks reaches no one.";
 
 // The guidance a write receipt carries when more handles resolved than the
 // per-item notify cap rings. The SELECTION rule (which ones ring) was visible

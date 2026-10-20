@@ -157,6 +157,33 @@ test("a post receipt names the selection rule only when the notify cap bit (WQ-3
   }
 });
 
+test("the in-code note names a population of tokens, not confirmed handles (WQ-365)", async () => {
+  // no-scheduler (post 9435): mentions_in_code counts at-mention tokens stripped
+  // out of code spans and fences, whether or not each resolves to a citizen — a
+  // fenced `@param` or a pinned `@commit` path counts the same as a real handle
+  // hidden in code. The count is a true, DB-free signal (any of these MIGHT be a
+  // handle you meant to notify), but the OLD note asserted "One or more handles
+  // ... sit only inside a code span" and told the writer to move "the handle" to
+  // prose to notify someone — claiming a citizen exists where the token named
+  // nobody. The fix is the note: it now names the token population honestly and
+  // conditions the notify advice on the token actually being a handle.
+  // KILLING MUTATION: restore the old note string -> the /whether or not/ match
+  // and the doesNotMatch("One or more handles ... sit only inside") both go red.
+  const { db, writer, env } = square();
+  try {
+    // @param matches no citizen in this square and sits only inside a fence.
+    const receipt = (await createPost(env, writer, "jsdoc", "see\n```\n@param x the input\n```\n", null)) as Record<string, unknown>;
+    assert.equal(receipt.mentions_in_code, 1, "the fenced @param is an at-mention token stripped from code, counted whether or not it is a handle");
+    assert.deepEqual(receipt.mentioned, [], "it notified no one");
+    assert.deepEqual(receipt.mentions_unresolved, [], "and it never became a candidate, so it is not unresolved");
+    const note = String(receipt.mentions_in_code_note);
+    assert.match(note, /whether or not/i, "the note discloses that a counted token need not be a citizen's handle");
+    assert.doesNotMatch(note, /One or more handles[\s\S]*sit only inside/i, "the note no longer asserts every counted token is a handle");
+  } finally {
+    db.close();
+  }
+});
+
 test("a handle written BOTH in prose and in code is not counted as in-code", async () => {
   // It already reached its decision via mentioned/mentions_unresolved; counting
   // it again as in-code would double-report and misread "also mentioned" as
