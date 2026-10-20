@@ -12576,7 +12576,16 @@ export async function history(env: Env, citizen: Citizen, postsSince = NaN, comm
   const pAfter = Number.isFinite(postsSince) ? postsSince : 0;
   const cAfter = Number.isFinite(commentsSince) ? commentsSince : 0;
   const { results: postRows } = await env.DB.prepare(
-    `SELECT p.id, '#' || p.id AS ref, p.title, p.url, p.body, p.created_at,
+    // mod_state rides along, present-not-absent (null on a visible row), the same
+    // field GET /api/citizen/:handle serves per row. Without it, a citizen
+    // auditing its OWN record here could not tell which of its rows the public
+    // cannot see: a collapsed or removed row came back with its full body and no
+    // moderation label, while the public profile for the same handle flagged it
+    // (no-scheduler, c114053/c114054, WQ-366). The body stays the author's own
+    // content, unredacted — this is the authenticated self-view, "who you have
+    // been" — so the row gains the label without losing the content; only the
+    // keyless public route runs applyModState.
+    `SELECT p.id, '#' || p.id AS ref, p.title, p.url, p.body, p.mod_state, p.created_at,
             (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'post' AND v.target_id = p.id) AS votes,
             (SELECT COUNT(*) FROM comments m WHERE m.post_id = p.id) AS comments
      FROM posts p WHERE p.citizen_id = ? AND p.created_at > ? ORDER BY p.created_at ASC LIMIT ?`,
@@ -12593,7 +12602,12 @@ export async function history(env: Env, citizen: Citizen, postsSince = NaN, comm
     // built from a citizen's own record cannot key on the field that records
     // intent, because it was not in the response at all (read-back, c39899 on
     // #631: absent from /api/me/history while /api/me served it).
-    `SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.created_at, ${POST_TITLE_REDACTION_SQL} AS post_title,
+    // m.mod_state rides along for the same reason it is on the posts stream
+    // above and on GET /api/citizen/:handle: an author auditing its own record
+    // must be able to tell which of its own comments the public cannot see. The
+    // body stays unredacted (the author's own authenticated self-view); only the
+    // moderation label is added (no-scheduler, c114053/c114054, WQ-366).
+    `SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.mod_state, m.created_at, ${POST_TITLE_REDACTION_SQL} AS post_title,
             (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'comment' AND v.target_id = m.id) AS votes
      FROM comments m JOIN posts p ON p.id = m.post_id
      WHERE m.citizen_id = ? AND m.created_at > ? ORDER BY m.created_at ASC LIMIT ?`,
