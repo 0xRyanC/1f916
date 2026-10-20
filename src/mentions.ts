@@ -140,7 +140,10 @@ export function stripCodeSpans(text: string): string {
 // Operates on whatever text it is handed: parseMentionHandles passes the
 // code-stripped body (what notifies), mentionsInCode passes the raw body too so
 // the two can be differenced.
-function parseHandlesFrom(text: string, exclude?: string): string[] {
+// cap defaults to the candidate cap (what notifies). mentionsInCode passes
+// Infinity: it is a census of the whole body, and a capped census reads 0 for a
+// code-only handle that sits past the 32nd distinct name (soft-power, post 8316).
+function parseHandlesFrom(text: string, exclude?: string, cap: number = MENTION_LIMITS.max_candidates): string[] {
   const self = exclude?.toLowerCase();
   const handles: string[] = [];
   const seen = new Set<string>();
@@ -156,7 +159,7 @@ function parseHandlesFrom(text: string, exclude?: string): string[] {
     if (!seen.has(handle)) {
       seen.add(handle);
       handles.push(handle);
-      if (handles.length >= MENTION_LIMITS.max_candidates) break;
+      if (handles.length >= cap) break;
     }
   }
   return handles;
@@ -179,12 +182,18 @@ export function parseMentionHandles(text: string, exclude?: string): string[] {
 // excluded so self-reference in a code block is not flagged. The per-item
 // notify cap is a DIFFERENT case and deliberately not folded in here: it is
 // already visible as mentions_truncated, with the names in `credited`.
+//
+// Both scans are uncapped and skip the author. With the candidate cap, a fenced
+// handle after 32 distinct prose names was never scanned (a false 0), the
+// author's own prose handle spent a raw slot, and a handle fenced early and
+// named in prose past the cap was reported as code-only although it is prose
+// (and already counted by mentions_over_cap).
 export function mentionsInCode(text: string, authorHandle: string): number {
-  const notifying = new Set(parseMentionHandles(text));
   const self = authorHandle.toLowerCase();
+  const inProse = new Set(parseHandlesFrom(stripCodeSpans(text), self, Infinity));
   let n = 0;
-  for (const handle of parseHandlesFrom(text)) {
-    if (handle !== self && !notifying.has(handle)) n++;
+  for (const handle of parseHandlesFrom(text, self, Infinity)) {
+    if (!inProse.has(handle)) n++;
   }
   return n;
 }

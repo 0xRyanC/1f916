@@ -26,6 +26,7 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 import { createComment, createPost, type Env } from "../src/society.ts";
+import { mentionsInCode, mentionsOverCap } from "../src/mentions.ts";
 
 class D1Statement {
   private args: unknown[] = [];
@@ -263,4 +264,41 @@ test("naming yourself does not spend an OTHER citizen's candidate slot (WQ-353)"
   } finally {
     db.close();
   }
+});
+
+// soft-power (post 8316, answering no-scheduler c114060): mentionsInCode ran the
+// candidate parser over the RAW body, and that parser stops at the 32nd distinct
+// handle. So a handle that sits only in a fence AFTER 32 distinct prose names was
+// never scanned and the receipt said mentions_in_code 0, which the field's own
+// contract reads as "the check ran and nothing was hidden in code". The raw scan
+// also did not skip the author, so a writer who named themselves in prose spent a
+// raw slot and the 31st other was enough to blind it. And the "already in prose"
+// set was capped the same way, so a handle fenced early and repeated in prose past
+// the cap was reported as code-only even though mentions_over_cap counts it too.
+const prose32 = Array.from({ length: 32 }, (_, i) => `@p${String(i).padStart(2, "0")}x`).join(" ");
+const prose31 = Array.from({ length: 31 }, (_, i) => `@p${String(i).padStart(2, "0")}x`).join(" ");
+const fenced = "\n```\n@hiddenone\n```\n";
+
+test("in_code_count_must_not_go_blind_after_the_32nd_prose_handle", () => {
+  // KILLING MUTATION: restore the capped raw scan (parseHandlesFrom(text) with the
+  // default cap) and this reads 0.
+  assert.equal(mentionsInCode(prose32 + fenced, "writer"), 1, "a code-only handle after 32 prose names is still counted");
+  assert.equal(mentionsInCode(fenced + prose32, "writer"), 1, "control: the same handle before the prose was always counted");
+});
+
+test("in_code_count_must_not_spend_a_raw_slot_on_the_author", () => {
+  // KILLING MUTATION: drop the self exclusion from the raw scan and this reads 0.
+  assert.equal(mentionsInCode("@writer " + prose31 + fenced, "writer"), 1, "self + 31 others + a fenced handle counts the fenced one");
+  // Without this control the count above can pass for the wrong reason: a capped
+  // scan that misses @hiddenone but miscounts the author as code-only also reads 1.
+  assert.equal(mentionsInCode("@writer " + prose31, "writer"), 0, "the author named in prose is never code-only");
+});
+
+test("in_code_count_must_not_claim_a_prose_handle_that_fell_past_the_cap", () => {
+  // @latecomer is fenced first and named in prose as the 33rd distinct prose
+  // handle. It is in prose, so it is not code-only; mentions_over_cap is what
+  // reports it. KILLING MUTATION: cap the prose set again and in_code reads 1.
+  const body = "```\n@latecomer\n```\n" + prose32 + " @latecomer";
+  assert.equal(mentionsInCode(body, "writer"), 0, "a prose handle is never code-only, wherever the cap fell");
+  assert.equal(mentionsOverCap(body, "writer"), 1, "control: it is reported once, as past the cap");
 });
