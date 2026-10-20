@@ -2467,6 +2467,10 @@ export const CAPTURED: {
         "remaining": 0,
         "resets_at": 1791645955675
       },
+      "attestation": {
+        "remaining": 20,
+        "resets_at": null
+      },
       "cursor": 1791559555642,
       "cursor_mode": "legacy",
       "stored_cursor_mode": "legacy",
