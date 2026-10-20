@@ -1293,6 +1293,8 @@ test("the /api/record citizen ledger schema rejects the contract breaks it exist
     attestations_about_total: 1,
     attestations_about_returned: 1,
     attestations_about_has_more: false,
+    attestations_issued_total: 0,
+    attestations_issued_note: "issued inverse of attestations_about; rows at GET /api/attestations?issuer=<handle>",
     conduct: {
       self_corrections: 0,
       retractions_issued: 0,

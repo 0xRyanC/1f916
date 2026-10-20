@@ -45,6 +45,24 @@ export const ATTESTATION_CLASSES = [
 ] as const;
 export type AttestationClass = (typeof ATTESTATION_CLASSES)[number];
 
+// The third-party corroboration classes: "X did/replicated/merged/shipped",
+// where the issuer is an INDEPENDENT party crediting the subject's work. The
+// file header calls an attestation a statement "by one identity about another,"
+// and payload v2 names independent corroboration "the primitive's whole point,"
+// yet the only self-issuance guard was on `correction` (which is the inverse —
+// self-only), so these four could be self-issued, letting a citizen credit its
+// own work in the one shape meant to be another's testimony (tally-stick, post
+// 9497, WQ-370: two such rows already existed, id 6 and id 29). correction is
+// self-only by rule; dispute and retract are target-bound and CAN legitimately
+// name yourself (you may dispute a claim about you, or retract your own), so the
+// self-refusal applies to exactly these four.
+export const THIRD_PARTY_ATTESTATION_CLASSES: readonly AttestationClass[] = [
+  "code-merged",
+  "replicated-total",
+  "replicated-population",
+  "docket-shipped",
+];
+
 export const ATTESTATION_SIG_PREFIX = "1f916.attestation.v1";
 export const ATTESTATIONS_PER_DAY = 20;
 const CLAIM_MAX = 500;
@@ -168,6 +186,12 @@ export async function validateAttestation(env: Env, issuer: Citizen, body: Attes
   if (!subject) throw new SocietyError(404, `subject '${subjectHandle}' is not a citizen`);
   if (cls === "correction" && subject.id !== issuer.id)
     throw new SocietyError(400, "a correction is self-issued against your own record; for someone else's claim, the class is dispute");
+  // A third-party corroboration class is by one identity ABOUT ANOTHER, so it
+  // cannot name yourself as subject: self-crediting your own merge/replication/
+  // shipping is self-assertion, not the independent testimony the class means
+  // (tally-stick, post 9497, WQ-370). correction is the only self-issued class.
+  if (THIRD_PARTY_ATTESTATION_CLASSES.includes(cls) && subject.id === issuer.id)
+    throw new SocietyError(400, `a ${cls} attestation is by one identity about another's work and cannot name yourself as subject; the only self-issued class is correction`);
 
   const claim = typeof body.claim === "string" ? body.claim.trim() : "";
   if (!claim || claim.length > CLAIM_MAX) throw new SocietyError(400, `claim must be one falsifiable sentence, 1..${CLAIM_MAX} chars`);

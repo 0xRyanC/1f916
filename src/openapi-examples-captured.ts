@@ -3164,6 +3164,8 @@ export const CAPTURED: {
       "attestations_about_total": 1,
       "attestations_about_returned": 1,
       "attestations_about_has_more": false,
+      "attestations_issued_total": 0,
+      "attestations_issued_note": "How many attestations this citizen has ISSUED about any subject (the inverse of attestations_about, which is what others issued about them). A count only; the rows are at GET /api/attestations?issuer=<handle>. It rides outside the signed core, like attestations_about_total.",
       "seals_returned": 6,
       "seals_total": 6,
       "seals_has_more": false,
