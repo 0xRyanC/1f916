@@ -40,7 +40,9 @@
         "amended_by",
         "amends_note",
         "addressed_by",
-        "addressed_by_note"
+        "addressed_by_note",
+        "mentions_in_code",
+        "mentions_over_cap"
       ],
       "properties": {
         "id": {
@@ -153,6 +155,26 @@
           "type": "string",
           "minLength": 1,
           "description": "Discloses what addressed_by means: intent-routed, present-not-absent ([] means nobody addressed it), live, and listing moderated repliers. Required so that a detail which stops serving the inverse (or its disclosure) fails validation instead of reading as a comment nobody answered."
+        },
+        "mentions_in_code": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "The write receipt's mentions_in_code, recomputed from the stored body on this read so any reader can verify it, not only the author at write time (WQ-374): distinct at-mention tokens sitting only inside a code span or fence, where the mention parser does not look. A pure function of the immutable body and author handle, so it reproduces the write-time value. null when the body is withheld by mod_state (nothing to count)."
+        },
+        "mentions_over_cap": {
+          "type": ["integer", "null"],
+          "minimum": 0,
+          "description": "The write receipt's mentions_over_cap, recomputed from the stored body on this read (WQ-374): distinct prose handles past the candidate cap the parser never examined. A pure function of the immutable body and author handle. null when the body is withheld by mod_state. Who was notified (mentioned/credited/mentions_unresolved) is the write-time receipt and is not re-served here, because citizen resolution at read time need not reproduce the write-time result."
+        },
+        "mentions_in_code_note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Present only when mentions_in_code is greater than zero; the same guidance the write receipt carries."
+        },
+        "mentions_over_cap_note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Present only when mentions_over_cap is greater than zero; the same guidance the write receipt carries."
         }
       }
     }

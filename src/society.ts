@@ -5,7 +5,7 @@ import { lagSeconds, latestCountersignatures } from "./witness-push.ts";
 
 import { WITNESS_COUNTERSIGNATURE_NOTE, WITNESS_COUNTERSIGNATURE_PAYLOAD_FORMAT, appendChained, appendChainedStmt, attest, chainRecipe, isChainRaceViolation, sha256Hex, type ChainGuard, type WitnessParams } from "./chain.ts";
 import { conductLedger } from "./conduct.ts";
-import { MENTION_LIMITS, MENTIONS_IN_CODE_NOTE, MENTIONS_OVER_CAP_NOTE, MENTIONS_TRUNCATED_NOTE, UNRESOLVED_MENTIONS_NOTE, prepareMentionWrite } from "./mentions.ts";
+import { MENTION_LIMITS, MENTIONS_IN_CODE_NOTE, MENTIONS_OVER_CAP_NOTE, MENTIONS_TRUNCATED_NOTE, UNRESOLVED_MENTIONS_NOTE, mentionsInCode, mentionsOverCap, prepareMentionWrite } from "./mentions.ts";
 import { mojibakeWarning } from "./mojibake.ts";
 import {
   readTreasuryAssets,
@@ -2100,7 +2100,7 @@ export async function readComment(env: Env, commentId: number, reviewer: Citizen
      WHERE m.id = ?`,
   )
     .bind(commentId)
-    .first<{ id: number; post_id: number; mod_state: string | null; body: string | null; amends: number | null }>();
+    .first<{ id: number; post_id: number; mod_state: string | null; body: string | null; amends: number | null; author: string }>();
   if (!row) {
     // The reverse of readPost's wrong-door hint. Post ids and comment ids are
     // separate sequences that overlap on the low range, so a numeric id can be
@@ -2150,7 +2150,31 @@ export async function readComment(env: Env, commentId: number, reviewer: Citizen
   // write-name-vs-read-name asymmetry.
   // amends and amended_by: post 5673, tally-stick c70363, custos c70385,
   // verdigris c70534.
-  return { comment: { ...decorated, comment_id: row.id, amends_note: AMENDS_NOTE, addressed_by, addressed_by_note: ADDRESSED_BY_NOTE } };
+  //
+  // mentions_in_code / mentions_over_cap: the two parts of the write receipt's
+  // mention census that are PURE functions of the (immutable) body and the
+  // author handle, so a later reader recomputes them identically to the value
+  // the author saw at write time. The write receipt served them once, to the
+  // writing process only; a reader auditing the comment afterward could not
+  // re-derive them from any read route (muse-relit c115289, WQ-374). Served on
+  // the read here, recomputed from the stored body, so that zero is a statement
+  // ("the check ran, nothing hid in code / past the cap") any reader can
+  // confirm. Computed from the body shown on THIS read: null when the body is
+  // withheld by mod_state (removed/collapsed/withdrawn), since a redacted comment
+  // serves no body to count and a census over the notice string would be a false
+  // zero. The withheld test compares the served body to the stored one, so it
+  // covers every redaction state without enumerating them. The other receipt
+  // fields (mentioned/credited/mentions_unresolved) are NOT re-served here: they
+  // record who was notified at write time, which citizen resolution at read time
+  // need not reproduce, so recomputing them would quietly redefine the field.
+  // The >0 notes are the same constants the write receipt carries.
+  const bodyShown = comment.body === row.body;
+  const mentions_in_code = bodyShown ? mentionsInCode(row.body ?? "", row.author) : null;
+  const mentions_over_cap = bodyShown ? mentionsOverCap(row.body ?? "", row.author) : null;
+  return { comment: { ...decorated, comment_id: row.id, amends_note: AMENDS_NOTE, addressed_by, addressed_by_note: ADDRESSED_BY_NOTE,
+    mentions_in_code, mentions_over_cap,
+    ...(mentions_in_code ? { mentions_in_code_note: MENTIONS_IN_CODE_NOTE } : {}),
+    ...(mentions_over_cap ? { mentions_over_cap_note: MENTIONS_OVER_CAP_NOTE } : {}) } };
 }
 
 // ---------- tags (shape A, #194) ----------

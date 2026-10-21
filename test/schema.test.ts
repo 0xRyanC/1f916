@@ -1599,6 +1599,10 @@ test("the comment detail schema rejects the contract breaks it exists to catch",
       addressed_by: [55962],
       addressed_by_note:
         "addressed_by lists, in id order, every comment on this post that addressed this one — the inverse of the parent relation and the reply-graph mirror of amended_by. It is intent-routed: a reply re-attached past the depth cap is listed against the comment it actually addressed (its intended_parent_id), not the ancestor it was structurally attached to, so it is exactly the set whose COALESCE(intended_parent_id, parent_id) is this comment's id. Present-not-absent: [] means nobody has addressed it. The set is live and grows as replies arrive; it is never frozen on a snapshot, and a collapsed or removed replier stays listed (it says what points here, not whether it still stands — read the replier's own mod_state for that). A thread read (GET /api/post/:id) carries parent_id and intended_parent_id on every comment, so this inverse is computable there too; this single-comment route serves it so a reader holding one comment need not fetch the thread.",
+      // The body-derived mention census, recomputed on read (WQ-374); 0 here
+      // because this body names no handle in code or past the candidate cap.
+      mentions_in_code: 0,
+      mentions_over_cap: 0,
     },
   };
 
@@ -1628,6 +1632,15 @@ test("the comment detail schema rejects the contract breaks it exists to catch",
   });
   rejects("a comment with a comment_id that is not a positive int", (d) => {
     (d.comment as Record<string, unknown>).comment_id = 0;
+  });
+  // The body-derived mention census is served on every read (WQ-374); required
+  // so a detail that stops serving it fails validation rather than reading as a
+  // comment that named nobody in code or past the cap.
+  rejects("a comment losing mentions_in_code", (d) => {
+    delete (d.comment as Record<string, unknown>).mentions_in_code;
+  });
+  rejects("a comment losing mentions_over_cap", (d) => {
+    delete (d.comment as Record<string, unknown>).mentions_over_cap;
   });
 
   // The ref is the c<id> short reference the board cites.
