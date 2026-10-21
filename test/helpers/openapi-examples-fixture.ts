@@ -178,6 +178,16 @@ export async function seedExamplesFixture(env: Env): Promise<{ secret: string; n
 
   for (const path of typedWritePaths()) {
     if (path === "/api/register" || path === "/api/keys/decline" || DEFERRED_WRITES.includes(path)) continue;
+    if (path === "/api/mandates/:id/outcome") {
+      // The earlier batch made outcome-free mandates. Resolve the path id
+      // from its real receipt rather than posting the literal template or
+      // inventing an id/body field the HTTP route does not accept.
+      const records = writes["/api/mandates/batch"]?.body.results as { recorded: boolean; id: number }[] | undefined;
+      const mandate = records?.find((record) => record.recorded);
+      if (!mandate || !Number.isSafeInteger(mandate.id)) throw new Error("outcome example needs a recorded batch mandate");
+      writes[path] = await postJson(env, `/api/mandates/${mandate.id}/outcome`, REQUEST_EXAMPLES[path].request, secret);
+      continue;
+    }
     const send = () => postJson(env, path, REQUEST_EXAMPLES[path].request, secret);
     // The domain is bound by the neighbor, not the fixture citizen: GET
     // /api/record/:handle serves a domain binding under `bindings`, which
@@ -346,9 +356,9 @@ export const RESPONSE_PROBES: Readonly<Record<string, Probe>> = {
   "/api/memory": { url: "/api/memory?citizen=example-citizen", schema: null },
   "/api/journal": { url: "/api/journal", auth: true, schema: null },
   "/api/attestations/:id": { url: "/api/attestations/1", schema: null },
-  // The fixture's one identity_events stamp, compared with itself: the only
-  // pair one checkpoint run offers. Its size is the fixture's event count.
-  "/api/checkpoint/consistency": { url: "/api/checkpoint/consistency?log=identity_events&from=20&to=20", schema: "checkpoint-consistency.json" },
+  // Compare the fixture's checkpoint with itself. probe() resolves its real
+  // tree size, which changes when a newly typed write appends an event.
+  "/api/checkpoint/consistency": { url: "/api/checkpoint/consistency", schema: "checkpoint-consistency.json" },
   "/api/checkpoint/note/:log": { url: "/api/checkpoint/note/identity_events", schema: null, text: "header" },
   "/support": { url: "/support", schema: null, text: "exact" },
   "/about": { url: "/about", schema: null, text: "exact" },
@@ -364,6 +374,15 @@ export const RESPONSE_PROBES: Readonly<Record<string, Probe>> = {
 };
 
 export async function probe(env: Env, p: Probe, secret: string): Promise<{ status: number; contentType: string; text: string }> {
-  const res = await worker.fetch(requestFor(p.url, {}, p.auth ? secret : undefined), env);
+  let url = p.url;
+  if (url === "/api/checkpoint/consistency") {
+    const checkpoint = await worker.fetch(requestFor("/api/checkpoint"), env);
+    if (checkpoint.status !== 200) throw new Error(`fixture checkpoint answered ${checkpoint.status}`);
+    const body = await checkpoint.json() as { checkpoints: { log: string; tree_size: number }[] };
+    const identity = body.checkpoints.find((row) => row.log === "identity_events");
+    if (!identity || !Number.isSafeInteger(identity.tree_size)) throw new Error("fixture has no identity checkpoint");
+    url += `?log=identity_events&from=${identity.tree_size}&to=${identity.tree_size}`;
+  }
+  const res = await worker.fetch(requestFor(url, {}, p.auth ? secret : undefined), env);
   return { status: res.status, contentType: res.headers.get("content-type") ?? "", text: await res.text() };
 }

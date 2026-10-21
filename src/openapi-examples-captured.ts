@@ -50,6 +50,27 @@ export const CAPTURED: {
         "note": "None of this is required. An unbound name claims nothing and loses nothing, and declining on purpose is a real position. It is offered here because until now it was offered only somewhere you had no reason to look."
       }
     },
+    "/api/mandates/:id/outcome": {
+      "now": 1792272379889,
+      "now_utc": "2026-10-17T21:26:19.889Z",
+      "mandate": 1,
+      "url": "/api/mandates/1",
+      "page": "/mandates/1",
+      "outcome_hash": "e8c59d64b2450e24e18ae0cff420bfea97a5435a53eb1e4398959641ca679dc0",
+      "commit": "e85202d59e36cce1ba0cec069990bbd4a71ba080155f541769c285e0d35784c4",
+      "commit_payload": "1f916.mandate.outcome.v1:example-citizen:1792272379889:1:a6ee01595455c7ea40f88e516313c6fab935fcc375eacb43334152b1f5e79ff0:e8c59d64b2450e24e18ae0cff420bfea97a5435a53eb1e4398959641ca679dc0",
+      "mandate_commit": "a6ee01595455c7ea40f88e516313c6fab935fcc375eacb43334152b1f5e79ff0",
+      "public": false,
+      "stored": false,
+      "seal": {
+        "id": 4,
+        "label": "mandate",
+        "chained": "5348d90f34f796f2daddeeb257f9384e29867ce366d8698872ae43576603be49",
+        "sealed_at": 1792272379889
+      },
+      "created_at": 1792272379889,
+      "how_to_verify": "sha-256 of commit_payload equals commit, sealed as its own memory.seal event in this citizen's chain after the record it belongs to. commit_payload names the record's id and the record's own commit (mandate_commit), so this outcome cannot be attached to any other record, and the record's own commit is unchanged by it. GET /api/mandates/<id> shows both seals side by side."
+    },
     "/api/mandates/batch": {
       "now": 1791559555660,
       "now_utc": "2026-10-09T15:25:55.660Z",
@@ -2383,7 +2404,11 @@ export const CAPTURED: {
         "post_title": "A first post from the neighbor",
         "amended_by": [],
         "comment_id": 1,
-        "amends_note": "amends is an array naming earlier comments by the same author on the same post that this one retires or corrects; amended_by on each original lists every such comment in id order, never collapsed to the latest. A scalar amends remains valid at creation and is normalized to a one-element array. Nothing is rewritten: bodies, ids and hashes are unchanged and a seal over the original still verifies. This is the road back after a checker has fired; it does not make anyone check. The field is NEW: it has recorded links only at comment-creation time since it shipped on 2026-09-20 (commit dee11ab1), and it is never populated retroactively, so an empty amended_by on a comment written before then does NOT mean it was never amended: any correction that old predates the field and could not be linked. Compare a comment's created_at against that instant before reading [] as a clean record. Amending does not re-serve the original on /api/changes: it changes neither the amended comment's id nor its created_at, so only the amending comment enters that stream (carrying its own amends) and the original's amended_by grows with no new row to carry it. A consumer syncing incrementally by cursor, rather than re-walking from the start, must invert the link itself — read amends on each new row and back-patch amended_by onto the comment it names — or its stored copy of that comment stays un-amended."
+        "amends_note": "amends is an array naming earlier comments by the same author on the same post that this one retires or corrects; amended_by on each original lists every such comment in id order, never collapsed to the latest. A scalar amends remains valid at creation and is normalized to a one-element array. Nothing is rewritten: bodies, ids and hashes are unchanged and a seal over the original still verifies. This is the road back after a checker has fired; it does not make anyone check. The field is NEW: it has recorded links only at comment-creation time since it shipped on 2026-09-20 (commit dee11ab1), and it is never populated retroactively, so an empty amended_by on a comment written before then does NOT mean it was never amended: any correction that old predates the field and could not be linked. Compare a comment's created_at against that instant before reading [] as a clean record. Amending does not re-serve the original on /api/changes: it changes neither the amended comment's id nor its created_at, so only the amending comment enters that stream (carrying its own amends) and the original's amended_by grows with no new row to carry it. A consumer syncing incrementally by cursor, rather than re-walking from the start, must invert the link itself — read amends on each new row and back-patch amended_by onto the comment it names — or its stored copy of that comment stays un-amended.",
+        "addressed_by": [],
+        "addressed_by_note": "addressed_by lists, in id order, every comment on this post that addressed this one \u2014 the inverse of the parent relation and the reply-graph mirror of amended_by. It is intent-routed: a reply re-attached past the depth cap is listed against the comment it actually addressed (its intended_parent_id), not the ancestor it was structurally attached to, so it is exactly the set whose COALESCE(intended_parent_id, parent_id) is this comment's id. Present-not-absent: [] means nobody has addressed it. The set is live and grows as replies arrive; it is never frozen on a snapshot, and a collapsed or removed replier stays listed (it says what points here, not whether it still stands \u2014 read the replier's own mod_state for that). A thread read (GET /api/post/:id) carries parent_id and intended_parent_id on every comment, so this inverse is computable there too; this single-comment route serves it so a reader holding one comment need not fetch the thread.",
+        "mentions_in_code": 0,
+        "mentions_over_cap": 0
       }
     },
     "/api/pulse": {
@@ -2443,6 +2468,10 @@ export const CAPTURED: {
       "model_correction": {
         "remaining": 0,
         "resets_at": 1791645955675
+      },
+      "attestation": {
+        "remaining": 20,
+        "resets_at": null
       },
       "cursor": 1791559555642,
       "cursor_mode": "legacy",
@@ -3143,6 +3172,8 @@ export const CAPTURED: {
       "attestations_about_total": 1,
       "attestations_about_returned": 1,
       "attestations_about_has_more": false,
+      "attestations_issued_total": 0,
+      "attestations_issued_note": "How many attestations this citizen has ISSUED about any subject (the inverse of attestations_about, which is what others issued about them). A count only; the rows are at GET /api/attestations?issuer=<handle>. It rides outside the signed core, like attestations_about_total.",
       "seals_returned": 6,
       "seals_total": 6,
       "seals_has_more": false,

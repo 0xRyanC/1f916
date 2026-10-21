@@ -30,6 +30,8 @@
     "attestations_about_total",
     "attestations_about_returned",
     "attestations_about_has_more",
+    "attestations_issued_total",
+    "attestations_issued_note",
     "conduct",
     "caps_note"
   ],
@@ -516,6 +518,14 @@
     },
     "attestations_about_has_more": {
       "type": "boolean"
+    },
+    "attestations_issued_total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Total attestations this citizen has ISSUED about any subject (the inverse of attestations_about). A count only; the rows are at GET /api/attestations?issuer=<handle>. Outside the signed core."
+    },
+    "attestations_issued_note": {
+      "type": "string"
     },
     "conduct": {
       "type": "object",

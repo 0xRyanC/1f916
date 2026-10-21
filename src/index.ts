@@ -15,7 +15,7 @@ import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
 import { citizenContentBoundary, handleMcp } from "./mcp.ts";
 import { agentCard, handleA2a } from "./a2a.ts";
 import { searchPosts } from "./search.ts";
-import { mcpManifest, llmsTxt, openApiServed, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex, toolsIndex } from "./connect.ts";
+import { mcpManifest, llmsTxt, openApiServed, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeSavePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex, toolsIndex } from "./connect.ts";
 import { docket } from "./docket.ts";
 import { listingsGuide, railSecurity } from "./listings.ts";
 import { offersGuide } from "./offers.ts";
@@ -61,6 +61,7 @@ import { parseNamedDays,
   listAttestations,
   listSeals,
   revokeKey,
+  revokeKeyBySignature,
   rotateSigningKey,
   declineKey,
   sealOrCompare,
@@ -785,6 +786,11 @@ export default {
         assertSameOrigin(request, url.origin);
         const d = await authorizeDecision(env, await formParams(request), request.headers.get("CF-Connecting-IP"));
         if ("redirect" in d) return new Response(null, { status: 303, headers: { Location: d.redirect, "Cache-Control": "no-store" } });
+        // A citizen registered from this page is shown its secret before any
+        // code is minted (src/connect.ts authorizeSavePage). no-store and
+        // no-referrer come from authorizeHtml, which matters more here than
+        // anywhere: this response body carries a live secret.
+        if ("saved" in d) return authorizeHtml(authorizeSavePage(url.origin, d.saved.page, d.saved.handle, d.saved.secret), d.saved.page.redirect_uri);
         return authorizeHtml(authorizePage(url.origin, d.page, d.error), d.page.redirect_uri);
       }
       if (path === "/oauth/token" && method === "POST") {
@@ -1114,7 +1120,10 @@ export default {
         // ?review=1 + the maintainer key reads any moderated row unredacted.
         // ?reveal=1 is public and reads COLLAPSED content only — no key, never
         // removed. See readPost for the tier rationale.
-        const reviewer = url.searchParams.get("review") === "1" ? await authenticate(env, bearer(request)) : null;
+        // review is the same canonical boolean as reveal below: ?review=true
+        // asks for the key like ?review=1 does, and a spelling that is not a
+        // boolean is a 400, not a 200 that silently dropped the review.
+        const reviewer = booleanParam(url, "review", false) ? await authenticate(env, bearer(request)) : null;
         // reveal is a canonical boolean (1/0/true/false); a non-boolean spelling
         // is a 400 naming the valid forms, not a silent fall-through to the
         // collapsed placeholder. Before, only the literal "1" was true and
@@ -1127,7 +1136,8 @@ export default {
       const commentMatch = path.match(/^\/api\/comment\/(\d+)$/);
       if (commentMatch && method === "GET") {
         checkQueryParams(url, "/api/comment/:id");
-        const reviewer = url.searchParams.get("review") === "1" ? await authenticate(env, bearer(request)) : null;
+        // review is a canonical boolean (see /api/post/:id above).
+        const reviewer = booleanParam(url, "review", false) ? await authenticate(env, bearer(request)) : null;
         // reveal is a canonical boolean (see /api/post/:id above): ?reveal=true
         // now reveals, and a non-boolean spelling is a 400, not a silent 200
         // carrying the collapsed stub.
@@ -1437,7 +1447,12 @@ export default {
         return json(await declineKey(env, citizen, await body(request)), 201);
       }
       if (path === "/api/keys/revoke" && method === "POST") {
-        const citizen = await authenticate(env, bearer(request));
+        // No Authorization header at all is the key-only door: the key being
+        // revoked signs for itself, so a lost bearer secret no longer makes a
+        // held key unrevokable. A present but broken header still refuses.
+        const secret = bearer(request);
+        if (secret === null) return json(await revokeKeyBySignature(env, await body(request)), 201);
+        const citizen = await authenticate(env, secret);
         return json(await revokeKey(env, citizen, await body(request)), 201);
       }
       if (path === "/api/keys/rotate" && method === "POST") {
