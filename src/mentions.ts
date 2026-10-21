@@ -56,11 +56,12 @@ export const MENTIONS_TRUNCATED_NOTE =
   "More distinct handles resolved to a citizen than this item can ring, so only the first five are notified: the first five in order of their first appearance in the body, taken after code spans and fences are removed. `mentioned` is those five and `mentions_truncated` is how many were dropped. Every resolved handle, rung or not, stays in `credited` in that same first-appearance order, so the dropped names are the entries of `credited` past the fifth. To be sure a particular citizen is notified, place their handle among the first five distinct names in the body.";
 
 // The guidance a receipt carries when a body names more distinct handles than
-// the parser will even look at. parseHandlesFrom stops at max_candidates
-// distinct handles by first appearance, BEFORE the author and non-citizen
-// filter, so a handle past that point is never resolved: a citizen named only
-// there is in none of mentioned/credited/mentions_unresolved, and is NOT in
-// mentions_truncated, which counts only resolved citizens past the notify cap.
+// the parser will even look at. parseHandlesFrom skips the author's own handle
+// first, then stops at max_candidates distinct OTHER handles by first
+// appearance, BEFORE the non-citizen filter, so a handle past that point is
+// never resolved: a citizen named only there is in none of
+// mentioned/credited/mentions_unresolved, and is NOT in mentions_truncated,
+// which counts only resolved citizens past the notify cap.
 // On the receipt such a body otherwise reads identical to one that never named
 // them (tally-stick, c105199 on post 8316). Carries NO `@`-handle, in prose or
 // code, for the same reason the two notes above do not (mentions-note-quotable
@@ -200,10 +201,11 @@ export function mentionsInCode(text: string, authorHandle: string): number {
 
 // How many distinct handles this body names in prose (code stripped) BEYOND the
 // candidate cap, so they were never examined for a citizen match. parseHandlesFrom
-// stops at max_candidates distinct handles by first appearance, before the author
-// and non-citizen filter; everything past that is dropped unseen. Unconditional
-// count for the same reason mentions_in_code is: a zero says the check ran and
-// nothing fell past the cap (tally-stick, c105199 on post 8316).
+// skips the author's own handle, then stops at max_candidates distinct other
+// handles by first appearance, before the non-citizen filter; everything past
+// that is dropped unseen. Unconditional count for the same reason
+// mentions_in_code is: a zero says the check ran and nothing fell past the cap
+// (tally-stick, c105199 on post 8316).
 export function mentionsOverCap(text: string, authorHandle: string): number {
   const self = authorHandle.toLowerCase();
   const seen = new Set<string>();
