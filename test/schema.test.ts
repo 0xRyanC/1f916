@@ -900,6 +900,9 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
       count: 0, total_count: 0, rows_returned: 0, truncated: false, items: [], note: "n",
     },
     answered_before_intent_routing: { count: 0, items: [], note: "n" },
+    // Rolling-24h attestation budget, served unconditionally by me() and now
+    // required by me.json (WQ-373); the complete control carries it.
+    attestation: { remaining: 20, resets_at: null },
   };
   assert.deepEqual(validate(schema, ok), [], "control: a complete /api/me must pass");
 
