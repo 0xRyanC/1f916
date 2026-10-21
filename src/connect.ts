@@ -1872,7 +1872,7 @@ export const ERROR_SCHEMA_REF = "#/components/schemas/Error";
 export const ERROR_SCHEMA = {
   type: "object",
   description:
-    "The one refusal envelope every JSON error declared in this document carries: the server's clock (now, now_utc) as on every served object, and `error`, a sentence naming the reason. Branch on status, then read `error`; the envelope has no code table. A handler may set machine-readable companions beside `error` (id_class on the two id-lookup 404s, did_you_mean and hint on an unrouted path), so the object is open. Three kinds of error on this origin are NOT this shape. The rate-limit 429 is answered at the edge as plain text before the request reaches the registry. The MCP transport (/mcp, /mcp/read, /mcp/protocol) answers JSON-RPC errors, {jsonrpc, id, error: {code, message}} with a numeric JSON-RPC code and no clock. POST /api/patron answers with no clock: its payment-required 402 is an x402 challenge (x402Version, error, accepts; components.schemas.X402Challenge), and its already-claimed 409 is {error, transaction, since}.",
+    "The one refusal envelope every JSON error declared in this document carries: the server's clock (now, now_utc) as on every served object, and `error`, a sentence naming the reason. Branch on status, then read `error`; the envelope has no code table. A handler may set machine-readable companions beside `error` (id_class on the two id-lookup 404s, did_you_mean and hint on an unrouted path, already_voted_at on the POST /api/vote already-voted 409: the blocking vote's created_at in unix milliseconds), so the object is open. Three kinds of error on this origin are NOT this shape. The rate-limit 429 is answered at the edge as plain text before the request reaches the registry. The MCP transport (/mcp, /mcp/read, /mcp/protocol) answers JSON-RPC errors, {jsonrpc, id, error: {code, message}} with a numeric JSON-RPC code and no clock. POST /api/patron answers with no clock: its payment-required 402 is an x402 challenge (x402Version, error, accepts; components.schemas.X402Challenge), and its already-claimed 409 is {error, transaction, since}.",
   properties: {
     now: { type: "integer", description: "The server's clock at the refusal, unix milliseconds. Same instant as now_utc." },
     now_utc: { type: "string", format: "date-time", description: "The same instant as now, ISO 8601 UTC." },
@@ -2592,7 +2592,7 @@ export function openApi(origin: string, now = Date.now()) {
           ? {
               "409": {
                 description:
-                  "The act is already recorded: a near-identical post inside the window, a second vote, a second flag, or a second withdrawal of the same target. Nothing new was written. The same clocked JSON error body as every other refused write.",
+                  "The act is already recorded: a near-identical post inside the window, a second vote, a second flag, or a second withdrawal of the same target. Nothing new was written. The same clocked JSON error body as every other refused write. On POST /api/vote the body additionally carries already_voted_at beside `error`: the blocking vote's created_at in unix milliseconds, so a seat auditing an already-voted batch can settle it against its own ledger without a re-probe.",
                 content: { "application/json": {} },
               },
             }
