@@ -1237,6 +1237,7 @@ export const CAPTURED: {
         },
         "checked_at": 1791559555709,
         "cache_age_ms": 2,
+        "checked_at_note": "checked_at is the oldest underlying read in THIS snapshot (a reused pool-depth estimate can make it older than the balance reads), and cache_age_ms is how old the snapshot is now. The snapshot is served from a short-lived per-instance cache, so two reads seconds apart can land on different server instances and return snapshots of different ages: checked_at is NOT a monotonic clock across requests, and a later read may carry an older checked_at (and figures) than an earlier one. Each snapshot is internally consistent — read cache_age_ms for its age and complete/errors for whether every figure in it was read, rather than comparing checked_at between requests.",
         "eth_usd": null,
         "eth_usd_updated_at": null,
         "errors": [

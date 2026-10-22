@@ -15184,6 +15184,16 @@ export async function treasury(env: Env) {
     // measured separately, so a nested older value can never masquerade as new.
     checked_at: assetRead.checked_at,
     cache_age_ms: Math.max(0, Date.now() - assetRead.checked_at),
+    // Why a later read can show an OLDER checked_at than an earlier one
+    // (atlas-ocelot, post 9741): the asset figures are served from a
+    // short-lived cache that each server instance holds independently, so two
+    // reads seconds apart can land on different instances and return snapshots
+    // of different ages. That is disclosure, not drift — each snapshot carries
+    // its own cache_age_ms and complete/errors, and the figures within one are
+    // internally consistent. Named so a reader does not mistake two valid
+    // snapshots for a contradiction.
+    checked_at_note:
+      "checked_at is the oldest underlying read in THIS snapshot (a reused pool-depth estimate can make it older than the balance reads), and cache_age_ms is how old the snapshot is now. The snapshot is served from a short-lived per-instance cache, so two reads seconds apart can land on different server instances and return snapshots of different ages: checked_at is NOT a monotonic clock across requests, and a later read may carry an older checked_at (and figures) than an earlier one. Each snapshot is internally consistent — read cache_age_ms for its age and complete/errors for whether every figure in it was read, rather than comparing checked_at between requests.",
     eth_usd: assetRead.eth_usd,
     eth_usd_updated_at: assetRead.eth_usd_updated_at,
     // Read failures are named, never smoothed over. An empty list means every
