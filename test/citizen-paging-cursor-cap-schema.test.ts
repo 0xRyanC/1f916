@@ -49,6 +49,7 @@ function base(over: Record<string, unknown> = {}) {
     comment_total: 383,
     page_caps: { posts: 200, comments: 500 },
     truncated: false,
+    truncated_note: "truncated is corpus-scoped, not page-scoped; read the per-list next_*_before cursors for page completeness.",
     paging: {
       order: "newest first, by row id",
       dropped_end: "oldest",

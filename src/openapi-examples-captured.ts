@@ -1956,6 +1956,7 @@ export const CAPTURED: {
         "comments": 500
       },
       "truncated": false,
+      "truncated_note": "truncated is corpus-scoped, not page-scoped: it is true when this citizen's whole record (post_total or comment_total) exceeds its page_cap, and is the same on every page of that record — a slice down to one row does not make it false, and the exhausted final page of an over-cap record does not make it true. It does NOT tell you whether the response you are holding is complete. For that, read paging.posts.next_posts_before and paging.comments.next_comments_before: each is null exactly when that list has no older row left to fetch (the page-scoped end-of-list signal, the way GET /api/post/:id uses has_more).",
       "paging": {
         "order": "newest first, by row id",
         "dropped_end": "oldest",

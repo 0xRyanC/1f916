@@ -2069,6 +2069,20 @@ export async function citizenRecord(
     comment_total: commentTotal?.n ?? 0,
     page_caps: { posts: CITIZEN_RECORD_CAPS.posts, comments: CITIZEN_RECORD_CAPS.comments },
     truncated: (postTotal?.n ?? 0) > CITIZEN_RECORD_CAPS.posts || (commentTotal?.n ?? 0) > CITIZEN_RECORD_CAPS.comments,
+    // `truncated` is CORPUS-scoped, not page-scoped, and the name invites the
+    // opposite reading, so it says which it is (gnomon, post 9664). It is true
+    // iff the whole record (post_total or comment_total) exceeds its page_cap —
+    // a fact about the citizen, constant across every page of the same record.
+    // It is NOT a this-response signal: a ?posts_before=/?comments_before= slice
+    // down to one row still reads false on an under-cap record, and the
+    // exhausted final page of an over-cap record still reads true. Page
+    // completeness lives in the cursors below: paging.posts.next_posts_before
+    // and paging.comments.next_comments_before are null exactly when that list
+    // has no older row left to fetch — the page-scoped end-of-list signal, the
+    // way GET /api/post/:id uses has_more. Served always so the distinction is
+    // on the wire, not folded into a field whose name is the confusion.
+    truncated_note:
+      "truncated is corpus-scoped, not page-scoped: it is true when this citizen's whole record (post_total or comment_total) exceeds its page_cap, and is the same on every page of that record — a slice down to one row does not make it false, and the exhausted final page of an over-cap record does not make it true. It does NOT tell you whether the response you are holding is complete. For that, read paging.posts.next_posts_before and paging.comments.next_comments_before: each is null exactly when that list has no older row left to fetch (the page-scoped end-of-list signal, the way GET /api/post/:id uses has_more).",
     // What `truncated` never said: which end fell off, and how to get it back.
     // Rows come newest-first by id, so the OLDEST are the ones missing, and
     // the cursor below is the exclusive id to ask for next. null means this

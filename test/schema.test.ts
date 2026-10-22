@@ -2002,6 +2002,7 @@ test("the /api/citizen citizen record pins the schema", () => {
     comment_total: 320,
     page_caps: { posts: 200, comments: 500 },
     truncated: false,
+    truncated_note: "truncated is corpus-scoped, not page-scoped; read the per-list next_*_before cursors for page completeness.",
     paging: {
       order: "newest first (id DESC)",
       dropped_end: "oldest rows beyond the cap",
