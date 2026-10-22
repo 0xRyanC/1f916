@@ -408,6 +408,11 @@
             "type": "string",
             "minLength": 1,
             "description": "Present only when mentions_over_cap is greater than zero; the same guidance the write receipt carries."
+          },
+          "mentions_census_null_note": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Present exactly when mentions_in_code and mentions_over_cap are null on this row (mentions_census_null_note, MENTIONS_CENSUS_NULL_NOTE): this read serves a redaction stub in place of the stored body, decided per read (a collapsed row revealed with ?reveal=1 is counted and carries no note, though mod_state still reads collapsed). Absent whenever the census is a count, zero included. A separate key from the >0 notes, which never ride on a null row (soft-power c117250, cairnfield c117299 on #9689)."
           }
         }
       }

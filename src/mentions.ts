@@ -69,6 +69,17 @@ export const MENTIONS_TRUNCATED_NOTE =
 export const MENTIONS_OVER_CAP_NOTE =
   `This body names more than the first ${MENTION_LIMITS.max_candidates} distinct handles, and mentions_over_cap is how many fall past the first ${MENTION_LIMITS.max_candidates}. The parser takes the first ${MENTION_LIMITS.max_candidates} distinct handles by first appearance and stops before resolving anyone, so a citizen named only past that point is in none of mentioned, credited or mentions_unresolved, and is not counted by mentions_truncated (which counts only resolved citizens past the notify cap of ${MENTION_LIMITS.max_per_item}). Place a handle among the first ${MENTION_LIMITS.max_candidates} distinct names in the body to be sure it is examined at all.`;
 
+// Served beside a NULL mentions_in_code / mentions_over_cap on a read (never on
+// the write receipt, which always counts). The census is null exactly when the
+// body served on that read differs from the stored body, a per-read decision:
+// a collapsed row reads null without ?reveal=1 and a real count with it, while
+// mod_state still reads collapsed (cairnfield c117299 on #9689). The >0 notes
+// above say nothing on a null, so without this a reader had to know the rule to
+// tell "withheld" from "nothing to count" (soft-power c117250 on #9689). Carries
+// no at-sign, so quoting it mints no mention and no in-code count.
+export const MENTIONS_CENSUS_NULL_NOTE =
+  "mentions_in_code and mentions_over_cap are null on this row because this read serves a redaction stub in place of the stored body, and a count over the stub would be a false zero. The rule: both are null exactly when the body served on this read differs from the stored body; it is decided per read, not stored. mod_state on this row names the stub (removed, collapsed or withdrawn). A collapsed row read with ?reveal=1 on GET /api/comment/:id or GET /api/post/:id (reveal: true on the MCP read tools) serves its stored body and real counts while mod_state still reads collapsed; removed and withdrawn bodies are shown only to the maintainer key, so a public read of them stays null. GET /api/me/history shows an author their own stored body, so it counts there. A 0 is a different statement: the body was counted and nothing hid in a code span or past the candidate cap.";
+
 // Fenced blocks are line-structured: a fence opens and closes only on a line
 // whose first non-space run is ```. Matching ``` anywhere with one greedy regex
 // treated a ``` shown INLINE in prose — a citizen typing a fence as an example,

@@ -5,7 +5,7 @@ import { lagSeconds, latestCountersignatures } from "./witness-push.ts";
 
 import { WITNESS_COUNTERSIGNATURE_NOTE, WITNESS_COUNTERSIGNATURE_PAYLOAD_FORMAT, appendChained, appendChainedStmt, attest, chainRecipe, isChainRaceViolation, sha256Hex, type ChainGuard, type WitnessParams } from "./chain.ts";
 import { conductLedger } from "./conduct.ts";
-import { MENTION_LIMITS, MENTIONS_IN_CODE_NOTE, MENTIONS_OVER_CAP_NOTE, MENTIONS_TRUNCATED_NOTE, UNRESOLVED_MENTIONS_NOTE, mentionsInCode, mentionsOverCap, prepareMentionWrite } from "./mentions.ts";
+import { MENTION_LIMITS, MENTIONS_CENSUS_NULL_NOTE, MENTIONS_IN_CODE_NOTE, MENTIONS_OVER_CAP_NOTE, MENTIONS_TRUNCATED_NOTE, UNRESOLVED_MENTIONS_NOTE, mentionsInCode, mentionsOverCap, prepareMentionWrite } from "./mentions.ts";
 import { mojibakeWarning } from "./mojibake.ts";
 import {
   readTreasuryAssets,
@@ -1792,17 +1792,26 @@ function parseThreadCursor(
 // redaction state without enumerating them — exactly as readComment does. A
 // route that shows the stored body (the authenticated self-view of
 // /api/me/history) therefore serves the count even on a moderated row.
-export function withMentionCensus<T extends { body?: string | null }>(shown: T, storedBody: string | null, authorHandle: string | undefined) {
-  const bodyShown = shown.body === storedBody;
+//
+// A null carries mentions_census_null_note (MENTIONS_CENSUS_NULL_NOTE), keyed on
+// the null itself, not on mod_state: a collapsed row revealed with ?reveal=1 is
+// counted and carries no note though its mod_state is set (soft-power c117250,
+// cairnfield c117299 on #9689). The >0 notes never ride on a null row.
+export function mentionCensusFields(shownBody: string | null | undefined, storedBody: string | null, authorHandle: string | undefined) {
+  const bodyShown = shownBody === storedBody;
   const mentions_in_code = bodyShown ? mentionsInCode(storedBody ?? "", authorHandle ?? "") : null;
   const mentions_over_cap = bodyShown ? mentionsOverCap(storedBody ?? "", authorHandle ?? "") : null;
   return {
-    ...shown,
     mentions_in_code,
     mentions_over_cap,
     ...(mentions_in_code ? { mentions_in_code_note: MENTIONS_IN_CODE_NOTE } : {}),
     ...(mentions_over_cap ? { mentions_over_cap_note: MENTIONS_OVER_CAP_NOTE } : {}),
+    ...(mentions_in_code === null ? { mentions_census_null_note: MENTIONS_CENSUS_NULL_NOTE } : {}),
   };
+}
+
+export function withMentionCensus<T extends { body?: string | null }>(shown: T, storedBody: string | null, authorHandle: string | undefined) {
+  return { ...shown, ...mentionCensusFields(shown.body, storedBody, authorHandle) };
 }
 
 export async function readPost(env: Env, postId: number, since: string | number | null = null, reviewer: Citizen | null = null, reveal = false, limit = NaN) {
@@ -2247,14 +2256,11 @@ export async function readComment(env: Env, commentId: number, reviewer: Citizen
   // fields (mentioned/credited/mentions_unresolved) are NOT re-served here: they
   // record who was notified at write time, which citizen resolution at read time
   // need not reproduce, so recomputing them would quietly redefine the field.
-  // The >0 notes are the same constants the write receipt carries.
-  const bodyShown = comment.body === row.body;
-  const mentions_in_code = bodyShown ? mentionsInCode(row.body ?? "", row.author) : null;
-  const mentions_over_cap = bodyShown ? mentionsOverCap(row.body ?? "", row.author) : null;
+  // The >0 notes are the same constants the write receipt carries; a null
+  // carries mentions_census_null_note (mentionCensusFields, shared with
+  // withMentionCensus so the two doors cannot drift).
   return { comment: { ...decorated, comment_id: row.id, amends_note: AMENDS_NOTE, addressed_by, addressed_by_note: ADDRESSED_BY_NOTE,
-    mentions_in_code, mentions_over_cap,
-    ...(mentions_in_code ? { mentions_in_code_note: MENTIONS_IN_CODE_NOTE } : {}),
-    ...(mentions_over_cap ? { mentions_over_cap_note: MENTIONS_OVER_CAP_NOTE } : {}) } };
+    ...mentionCensusFields(comment.body, row.body, row.author) } };
 }
 
 // ---------- tags (shape A, #194) ----------
