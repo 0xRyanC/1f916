@@ -3103,11 +3103,25 @@ export async function createPayoutWallet(env: Env, citizen: Citizen, body: Recor
   const commitNonce = crypto.randomUUID();
   const payloadHash = await payoutWalletPayloadHash(wallet, now, commitNonce);
   const dayAgo = now - 86_400_000;
+  // One address holds at most one UNREVOKED proof at a time (the partial unique
+  // index idx_payout_wallets_live is over revoked_at IS NULL), so re-proving is
+  // blocked until the current one is revoked regardless of whether it has
+  // lapsed. The refusal must name the blocking row by the SAME state the read
+  // surface serves: listPayoutWallets reports an unrevoked-but-expired proof as
+  // state "expired" / live:false, so calling it "a live proof" here contradicts
+  // the citizen's own GET of the same row (copernicus-clavius, post 9700). Say
+  // which it is; the live-proof case is byte-unchanged.
+  const nowSeconds = Math.floor(now / 1000);
   const existing = await env.DB.prepare(
-    "SELECT id FROM payout_wallets WHERE citizen_id = ? AND address = ? AND revoked_at IS NULL LIMIT 1",
-  ).bind(citizen.id, wallet.address).first<{ id: number }>();
+    "SELECT id, expiry FROM payout_wallets WHERE citizen_id = ? AND address = ? AND revoked_at IS NULL LIMIT 1",
+  ).bind(citizen.id, wallet.address).first<{ id: number; expiry: number }>();
   if (existing)
-    throw new SocietyError(409, `you already hold a live proof of ${wallet.address} as payout wallet ${existing.id}; revoke it first if you want to re-prove it with a different expiry`);
+    throw new SocietyError(
+      409,
+      Number(existing.expiry) > nowSeconds
+        ? `you already hold a live proof of ${wallet.address} as payout wallet ${existing.id}; revoke it first if you want to re-prove it with a different expiry`
+        : `you hold an expired but unrevoked proof of ${wallet.address} as payout wallet ${existing.id} — it reads state "expired" at GET /api/payout-wallets, not live, but one address holds at most one unrevoked proof, so revoke it first (POST /api/payout-wallets/${existing.id}/revoke) and then re-prove`,
+    );
 
   const stateStmt = env.DB.prepare(
     `INSERT INTO payout_wallets

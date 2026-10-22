@@ -590,7 +590,7 @@ export async function validatePayoutBinding(
     // proof that has lapsed is not a proof, and reading `revoked_at IS NULL`
     // alone would have treated an expired one as live forever.
     if (proof.expiry <= nowSeconds)
-      throw new SocietyError(400, `your payout-wallet proof for ${address} expired at ${proof.expiry} (now ${nowSeconds}). Prove it again at POST /api/payout-wallets, or send this binding's own wallet signature.`);
+      throw new SocietyError(400, `your payout-wallet proof for ${address} expired at ${proof.expiry} (now ${nowSeconds}). Re-prove it at POST /api/payout-wallets — but the lapsed proof is still unrevoked, and one address holds at most one unrevoked proof, so revoke it first (POST /api/payout-wallets/${proof.id}/revoke) and then re-prove; or send this binding's own wallet signature.`);
     walletProof = { id: proof.id, proofHash: proof.proof_hash };
   } else {
     const supplied = requiredString("signature", body.signature);
