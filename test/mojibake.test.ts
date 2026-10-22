@@ -242,3 +242,25 @@ test("cp1252 findings still name cp1252, so the second codepage did not blur the
   assert.equal(found[0].codepage, "cp1252");
   assert.equal(found[0].repair, "—");
 });
+
+// ---------- ISO-8859-1, which keeps 0x80-0x9F as C1 controls ----------
+
+// A latin-1 decode of UTF-8 bytes: each byte becomes the codepoint of the same value.
+const asLatin1 = (s: string) => Array.from(new TextEncoder().encode(s), (b) => String.fromCharCode(b)).join("");
+
+test("latin-1 damage is detected and repaired, not only cp1252's", () => {
+  // archimedes-clavius (c104743 on #541): "don’t" through ISO-8859-1 is
+  // "donâ" + U+0080 + U+0099 + "t", and the detector used to say nothing,
+  // because it refused every C1 control cp1252 could not have produced.
+  for (const s of ["don’t", "“quoted”", "naïve café — ok"]) {
+    const broken = asLatin1(s);
+    assert.ok(detectMojibake(broken).length > 0, `no finding for ${JSON.stringify(broken)}`);
+    assert.equal(repairMojibake(broken), s);
+  }
+});
+
+test("a lone C1 control is not a finding", () => {
+  // Reading 0x80-0x9F back as bytes must not make every stray control a
+  // finding: none of them can begin a UTF-8 sequence.
+  assert.deepEqual(detectMojibake("a\u0085b \u0099 c\u0080"), []);
+});

@@ -33,11 +33,15 @@ const FROM_CP1252: ReadonlyMap<number, number> = new Map([
   [0x017e, 0x9e], [0x0178, 0x9f],
 ]);
 
-// The five bytes cp1252 leaves undefined; a decoder passes them through as the
-// C1 control of the same value, so those codepoints CAN be the result of a
-// cp1252 decode. Every other codepoint in 0x80-0x9F cannot be, because cp1252
-// would have produced the punctuation above instead.
-const UNDEFINED_IN_CP1252 = new Set([0x81, 0x8d, 0x8f, 0x90, 0x9d]);
+// A C1 control (U+0080-U+009F) is read back as the byte of the same value, all
+// 32 of them. This used to accept only the five bytes cp1252 leaves undefined,
+// on the argument that cp1252 would have printed punctuation for the other 27.
+// True of cp1252 and false of ISO-8859-1, which keeps all 32 as controls, so
+// "don’t" decoded as latin-1 ("donâ" + U+0080 U+0099 + "t") got no warning at
+// all. That is not a rare decode: Python requests falls back to ISO-8859-1 for
+// any text/* response without a charset. archimedes-clavius measured it over
+// the UDHR in 325 languages (c104743 on #541): 59.3% of characters caught
+// before, 100% after, and no new false positive on the 325 clean texts.
 
 // A SECOND CODEPAGE, added 2026-08-17 because the detector was blind to it.
 // framework-relay's c10523 stored "\u0393\u00c7\u00f6" where an em dash belonged.
@@ -94,7 +98,6 @@ function toByte(cp: number, page: Codepage): number | null {
   const mapped = FROM_CP1252.get(cp);
   if (mapped !== undefined) return mapped;
   if (cp > 0xff) return null;
-  if (cp >= 0x80 && cp <= 0x9f && !UNDEFINED_IN_CP1252.has(cp)) return null;
   return cp;
 }
 
