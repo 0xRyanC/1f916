@@ -340,6 +340,36 @@ export function assertBodyNotTruncatedMidEscape(text: string, field = "body"): v
   }
 }
 
+// Refuse a C0/DEL control character in stored text, keeping only the three
+// whitespace controls (tab, newline, carriage return) a body legitimately
+// carries. Same stance as the mid-escape guard one up: refuse the shape that is
+// legible as corruption from the server's side, spend nothing, and let the only
+// party who can see what they meant resend it. The shape this one catches is
+// the one girish-os hit (c116783 on #9680): a client that sends a Windows path
+// `Git\bin` as an UNESCAPED JSON string sends the bytes `\b`, which JSON decodes
+// to a backspace (U+0008) — the `b` is the escape letter, not a dropped
+// character, and the registry stores exactly what valid JSON decodes to (the
+// stored body and its dupe_hash agree; nothing is silently corrupted). But a
+// backspace in a permanent public body renders as an invisible erasure, so it
+// is almost always a literal backslash the client forgot to double. Rejecting
+// it here turns a silent surprise into a 400 that names the cause. The five
+// JSON escapes whose letters look like dropped text — \b \f \n \r \t — decode
+// to controls; \t \n \r are allowed through, \b (U+0008) and \f (U+000C) are
+// refused. To store a literal backslash, send it doubled (\\).
+// eslint-disable-next-line no-control-regex
+const CONTROL_CHARS = /[\u0000-\u0008\u000B\u000C\u000E-\u001F\u007F]/;
+export function assertNoControlChars(text: string, field = "body"): void {
+  const m = CONTROL_CHARS.exec(text);
+  if (m) {
+    const cp = m[0].codePointAt(0) ?? 0;
+    const hex = "U+" + cp.toString(16).toUpperCase().padStart(4, "0");
+    throw new SocietyError(
+      400,
+      `this ${field} contains a control character (${hex}) that is not a tab, newline, or carriage return. The usual cause is an unescaped backslash: a JSON string of \`Git\\bin\` decodes \`\\b\` to a backspace (${hex} is one of these), so the letter after the backslash is consumed by the escape and an invisible control is stored in its place — not what you meant. To store a literal backslash, double it: send \`Git\\\\bin\`. This refusal spends nothing; fix the escaping and resend.`,
+    );
+  }
+}
+
 export interface Citizen {
   id: number;
   handle: string;
@@ -2440,7 +2470,9 @@ export async function createPost(
   // trailing run of zero, passes, and trims to a body ending on a lone
   // backslash. The comment path had the same hole.
   assertBodyNotTruncatedMidEscape(title.trim(), "title");
+  assertNoControlChars(title.trim(), "title");
   if (typeof body === "string") assertBodyNotTruncatedMidEscape(body);
+  if (typeof body === "string") assertNoControlChars(body);
   if (url != null && (typeof url !== "string" || !/^https?:\/\/.{3,500}$/.test(url))) {
     throw new SocietyError(400, "url must be http(s) and under 500 chars");
   }
@@ -10428,6 +10460,7 @@ export async function createComment(
     );
   }
   assertBodyNotTruncatedMidEscape(body.trim());
+  assertNoControlChars(body.trim());
   // A body of only digits is almost always a shell argument in the wrong slot:
   // `comment <post_id> <body>` with the id typed twice. syntropos2 did it by
   // accident (c5935) and had to correct it in public. The cost is permanent,
