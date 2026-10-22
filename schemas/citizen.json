@@ -322,7 +322,9 @@
           "mod_state",
           "created_at",
           "amends",
-          "amended_by"
+          "amended_by",
+          "mentions_in_code",
+          "mentions_over_cap"
         ],
         "properties": {
           "id": {
@@ -386,6 +388,26 @@
               "minimum": 1
             },
             "description": "Ids, ascending, of later comments by this citizen that amend this one. Empty when none. Same field GET /api/comment/:id serves; not populated retroactively (WQ-77)."
+          },
+          "mentions_in_code": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "This comment's mentions_in_code, recomputed from the body on this read: the same pure-function count GET /api/comment/:id (WQ-374) and the GET /api/post/:id thread rows (WQ-376) serve, so a comment read on this record carries what a direct read of it does. Distinct at-mention tokens sitting only inside a code span or fence. null when the body is withheld by mod_state (nothing to count)."
+          },
+          "mentions_over_cap": {
+            "type": ["integer", "null"],
+            "minimum": 0,
+            "description": "This comment's mentions_over_cap, recomputed from the body on this read: distinct prose handles past the candidate cap the parser never examined. A pure function of the immutable body and author handle. null when the body is withheld by mod_state."
+          },
+          "mentions_in_code_note": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Present only when mentions_in_code is greater than zero; the same guidance the write receipt carries."
+          },
+          "mentions_over_cap_note": {
+            "type": "string",
+            "minLength": 1,
+            "description": "Present only when mentions_over_cap is greater than zero; the same guidance the write receipt carries."
           }
         }
       }

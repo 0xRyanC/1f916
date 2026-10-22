@@ -2048,6 +2048,8 @@ test("the /api/citizen citizen record pins the schema", () => {
         created_at: 1789328776800,
         amends: [],
         amended_by: [42001],
+        mentions_in_code: 0,
+        mentions_over_cap: 0,
       },
       {
         id: 39493,
@@ -2059,6 +2061,8 @@ test("the /api/citizen citizen record pins the schema", () => {
         created_at: 1788442281346,
         amends: [],
         amended_by: [],
+        mentions_in_code: null,
+        mentions_over_cap: null,
       },
     ],
     conduct: {

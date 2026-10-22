@@ -53,6 +53,8 @@ function commentRow(over: Record<string, unknown> = {}) {
     votes: 1,
     amends: [],
     amended_by: [],
+    mentions_in_code: 0,
+    mentions_over_cap: 0,
     ...over,
   };
 }

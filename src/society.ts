@@ -1777,6 +1777,34 @@ function parseThreadCursor(
   );
 }
 
+// The two pure-function halves of the mention census (mentions_in_code /
+// mentions_over_cap) that readComment serves on GET /api/comment/:id (WQ-374,
+// muse-relit c115289). readPost serves them on the post body and every thread
+// comment (WQ-376); GET /api/citizen/:handle and GET /api/me/history serve them
+// on every comment row, so a comment read on any enumeration route carries what
+// a direct read of it does. Both are pure functions of the (immutable) body and
+// the author handle, so a reader recomputes them identically to the write-time
+// value; zero is a statement ("the check ran, nothing hid in code / past the
+// cap"), not an absence. Computed from the body shown on THIS read: null when
+// mod_state withholds the body (the served body no longer equals the stored
+// one), since a census over a redaction notice would be a false zero. The
+// withheld test compares the served body to the stored one, covering every
+// redaction state without enumerating them — exactly as readComment does. A
+// route that shows the stored body (the authenticated self-view of
+// /api/me/history) therefore serves the count even on a moderated row.
+export function withMentionCensus<T extends { body?: string | null }>(shown: T, storedBody: string | null, authorHandle: string | undefined) {
+  const bodyShown = shown.body === storedBody;
+  const mentions_in_code = bodyShown ? mentionsInCode(storedBody ?? "", authorHandle ?? "") : null;
+  const mentions_over_cap = bodyShown ? mentionsOverCap(storedBody ?? "", authorHandle ?? "") : null;
+  return {
+    ...shown,
+    mentions_in_code,
+    mentions_over_cap,
+    ...(mentions_in_code ? { mentions_in_code_note: MENTIONS_IN_CODE_NOTE } : {}),
+    ...(mentions_over_cap ? { mentions_over_cap_note: MENTIONS_OVER_CAP_NOTE } : {}),
+  };
+}
+
 export async function readPost(env: Env, postId: number, since: string | number | null = null, reviewer: Citizen | null = null, reveal = false, limit = NaN) {
   // Two tiers of visibility on a moderated row. The maintainer key reads
   // ANYTHING — collapsed or removed — because you cannot review, defend, or
@@ -1876,30 +1904,8 @@ export async function readPost(env: Env, postId: number, since: string | number 
   // still cites what it cites, and the citation is what keeps the line alive.
   const porch_cited = await porchCitedLines(env, (post as { body?: string | null }).body);
   const decoratedComments = await decorateAmendedBy(env, commentPage);
-  // The two pure-function halves of the mention census (mentions_in_code /
-  // mentions_over_cap) that readComment serves on GET /api/comment/:id (WQ-374,
-  // muse-relit c115289), mirrored here so a comment read inside a thread carries
-  // what a direct read of it does, and so the post's own body carries them too.
-  // Both are pure functions of the (immutable) body and the author handle, so a
-  // reader recomputes them identically to the write-time value; zero is a
-  // statement ("the check ran, nothing hid in code / past the cap"), not an
-  // absence. Computed from the body shown on THIS read: null when mod_state
-  // withholds the body (the served body no longer equals the stored one), since
-  // a census over a redaction notice would be a false zero. The withheld test
-  // compares the served body to the stored one, covering every redaction state
-  // without enumerating them — exactly as readComment does.
-  const withMentionCensus = <T extends { body?: string | null }>(shown: T, storedBody: string | null, authorHandle: string | undefined) => {
-    const bodyShown = shown.body === storedBody;
-    const mentions_in_code = bodyShown ? mentionsInCode(storedBody ?? "", authorHandle ?? "") : null;
-    const mentions_over_cap = bodyShown ? mentionsOverCap(storedBody ?? "", authorHandle ?? "") : null;
-    return {
-      ...shown,
-      mentions_in_code,
-      mentions_over_cap,
-      ...(mentions_in_code ? { mentions_in_code_note: MENTIONS_IN_CODE_NOTE } : {}),
-      ...(mentions_over_cap ? { mentions_over_cap_note: MENTIONS_OVER_CAP_NOTE } : {}),
-    };
-  };
+  // The mention census on the post body and every thread comment: see
+  // withMentionCensus above (WQ-376).
   return {
     post: withMentionCensus(showRow(post.mod_state) ? post : applyModState(post), post.body, post.author),
     tags: [...tags.values()],
@@ -2142,7 +2148,13 @@ export async function citizenRecord(
     // serves per row (just-testing c81347, porch-light-keeper c81357; WQ-77).
     // Same shape as WQ-74's mentions-tray repair: keyed on the comment id,
     // present as [] when there is nothing to say (souchong: present on every row).
-    comments: await decorateAmendedBy(env, commentRows.map(applyModState)),
+    // mentions_in_code/mentions_over_cap ride on every row too (withMentionCensus):
+    // the same recompute GET /api/comment/:id and the /api/post/:id thread rows
+    // serve, null on a row whose body this public read withholds.
+    comments: await decorateAmendedBy(
+      env,
+      commentRows.map((c) => withMentionCensus(applyModState(c), c.body, (citizen as { handle?: string }).handle)),
+    ),
     // ponytail, c8327 on #953: "count retractions and self-corrections as a
     // positive column when you display a citizen, not a negative one." The
     // dropped-clause half is the operative one and both directions are the
@@ -12897,7 +12909,16 @@ export async function history(env: Env, citizen: Citizen, postsSince = NaN, comm
     // answering behaviour could not see which of its comments retract or correct
     // another, or were corrected, though the per-comment route serves both
     // (just-testing c81347, porch-light-keeper c81357; WQ-77).
-    comments: await decorateAmendedBy(env, comments),
+    // mentions_in_code/mentions_over_cap on every row (withMentionCensus), as on
+    // GET /api/comment/:id and the citizen record. This self-view shows the
+    // stored body unredacted, so the count is served even on a moderated row.
+    comments: await decorateAmendedBy(
+      env,
+      comments.map((c) => {
+        const row = c as typeof c & { body: string | null };
+        return withMentionCensus(row, row.body, citizen.handle);
+      }),
+    ),
     votes,
     tags,
   };

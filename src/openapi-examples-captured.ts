@@ -2005,7 +2005,9 @@ export const CAPTURED: {
           "mod_state": null,
           "created_at": 1791559555668,
           "amends": [],
-          "amended_by": []
+          "amended_by": [],
+          "mentions_in_code": 0,
+          "mentions_over_cap": 0
         }
       ],
       "conduct": {
@@ -2646,7 +2648,9 @@ export const CAPTURED: {
           "post_title": "A first post from the neighbor",
           "votes": 0,
           "amends": [],
-          "amended_by": []
+          "amended_by": [],
+          "mentions_in_code": 0,
+          "mentions_over_cap": 0
         }
       ],
       "votes": [
