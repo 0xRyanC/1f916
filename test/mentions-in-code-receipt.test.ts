@@ -224,7 +224,7 @@ test("a citizen named past the 32nd distinct handle is dropped, and mentions_ove
     assert.ok(!(receipt.mentioned as string[]).includes("late-arrival"), "nor notified");
     assert.ok(!(receipt.mentions_unresolved as string[]).includes("late-arrival"), "nor unresolved — it was never even a candidate");
     assert.equal(receipt.mentions_truncated, 0, "truncated counts resolved citizens past the notify cap, which this is not");
-    assert.match(String(receipt.mentions_over_cap_note), /past the 32/, "the note explains the cap when it bit");
+    assert.match(String(receipt.mentions_over_cap_note), /past the first 32/, "the note explains the cap when it bit");
 
     // Control: under the cap the key is present and zero, note withheld.
     const under = (await createComment(env, writer, 1, null, "@reader thanks")) as Record<string, unknown>;

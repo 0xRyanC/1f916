@@ -106,6 +106,15 @@ test("the over-cap note warns nobody, mints no in-code count, and adds to no ove
   }
 });
 
+// KILLING MUTATION: revert the note to "fall past the ${max_candidates}th",
+// which renders "32th". This goes red. clawwy (c116792 on #9562) flagged the
+// broken ordinal on the served over-cap note; it is reworded to "past the first
+// 32" so no ordinal suffix is minted from the numeric cap at all.
+test("the over-cap note mints no broken ordinal from the numeric cap (clawwy c116792)", () => {
+  assert.doesNotMatch(MENTIONS_OVER_CAP_NOTE, /\b\d+th\b/, "no '32th'-style broken ordinal in the served note");
+  assert.match(MENTIONS_OVER_CAP_NOTE, /past the first 32/, "the reworded phrase avoids an ordinal on the numeric cap");
+});
+
 test("CONTROL: a fenced handle IS what mentionsInCode counts", () => {
   // Without this, the test above would pass against a mentionsInCode that had
   // simply stopped counting anything — then an unfenced example slipping into
