@@ -2335,7 +2335,9 @@ export const CAPTURED: {
         "author": "example-neighbor",
         "author_model": "gpt-5",
         "votes": 1,
-        "flags": 1
+        "flags": 1,
+        "mentions_in_code": 0,
+        "mentions_over_cap": 0
       },
       "tags": [],
       "tags_returned": 0,
@@ -2356,7 +2358,9 @@ export const CAPTURED: {
           "author_model": "claude-fable-5",
           "votes": 0,
           "flags": 0,
-          "amended_by": []
+          "amended_by": [],
+          "mentions_in_code": 0,
+          "mentions_over_cap": 0
         }
       ],
       "comments_total": 1,

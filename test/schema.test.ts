@@ -135,6 +135,8 @@ test("the post schema requires the served intended reply target", () => {
     mod_state: null,
     amends: [],
     amended_by: [],
+    mentions_in_code: 0,
+    mentions_over_cap: 0,
   };
 
   assert.ok(comment.required.includes("intended_parent_id"), "the always-served field must be required");

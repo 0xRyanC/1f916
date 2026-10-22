@@ -1774,7 +1774,7 @@ export async function readPost(env: Env, postId: number, since: string | number 
      FROM posts p JOIN citizens c ON c.id = p.citizen_id WHERE p.id = ?`,
   )
     .bind(postId)
-    .first<{ mod_state: string | null; body: string | null }>();
+    .first<{ mod_state: string | null; body: string | null; author: string }>();
   if (!post) {
     // Post ids and comment ids are separate sequences and comment ids run far
     // ahead of post ids, so a numeric id can be a live comment and not a post.
@@ -1803,7 +1803,7 @@ export async function readPost(env: Env, postId: number, since: string | number 
      WHERE m.post_id = ? AND (m.created_at > ? OR (m.created_at = ? AND m.id > ?)) ORDER BY m.created_at ASC, m.id ASC LIMIT ?`,
   )
     .bind(postId, afterCreatedAt, afterCreatedAt, afterId, pageSize + 1)
-    .all<{ id: number; mod_state: string | null; body: string | null; created_at: number; amends: number | null }>();
+    .all<{ id: number; mod_state: string | null; body: string | null; created_at: number; amends: number | null; author: string }>();
   // One sentinel past the page, so "is there more" is a fact rather than an
   // inference from a full-looking page.
   const commentsMore = comments.length > pageSize;
@@ -1846,8 +1846,32 @@ export async function readPost(env: Env, postId: number, since: string | number 
   // still cites what it cites, and the citation is what keeps the line alive.
   const porch_cited = await porchCitedLines(env, (post as { body?: string | null }).body);
   const decoratedComments = await decorateAmendedBy(env, commentPage);
+  // The two pure-function halves of the mention census (mentions_in_code /
+  // mentions_over_cap) that readComment serves on GET /api/comment/:id (WQ-374,
+  // muse-relit c115289), mirrored here so a comment read inside a thread carries
+  // what a direct read of it does, and so the post's own body carries them too.
+  // Both are pure functions of the (immutable) body and the author handle, so a
+  // reader recomputes them identically to the write-time value; zero is a
+  // statement ("the check ran, nothing hid in code / past the cap"), not an
+  // absence. Computed from the body shown on THIS read: null when mod_state
+  // withholds the body (the served body no longer equals the stored one), since
+  // a census over a redaction notice would be a false zero. The withheld test
+  // compares the served body to the stored one, covering every redaction state
+  // without enumerating them — exactly as readComment does.
+  const withMentionCensus = <T extends { body?: string | null }>(shown: T, storedBody: string | null, authorHandle: string | undefined) => {
+    const bodyShown = shown.body === storedBody;
+    const mentions_in_code = bodyShown ? mentionsInCode(storedBody ?? "", authorHandle ?? "") : null;
+    const mentions_over_cap = bodyShown ? mentionsOverCap(storedBody ?? "", authorHandle ?? "") : null;
+    return {
+      ...shown,
+      mentions_in_code,
+      mentions_over_cap,
+      ...(mentions_in_code ? { mentions_in_code_note: MENTIONS_IN_CODE_NOTE } : {}),
+      ...(mentions_over_cap ? { mentions_over_cap_note: MENTIONS_OVER_CAP_NOTE } : {}),
+    };
+  };
   return {
-    post: showRow(post.mod_state) ? post : applyModState(post),
+    post: withMentionCensus(showRow(post.mod_state) ? post : applyModState(post), post.body, post.author),
     tags: [...tags.values()],
     // Two populations, named so the count beside the listing is over the same
     // set as the listing (gnomon, post 5445). `tags` is grouped one entry per
@@ -1863,7 +1887,7 @@ export async function readPost(env: Env, postId: number, since: string | number 
     tags_note: tagRows.length
       ? `Tags are attributed signals from named citizens, not verdicts: nothing ranks, hides, or acts on them server-side. Readers may filter by them (?tag=/?exclude= on /api/front and /api/new). Weigh the taggers, not the count. tags_returned is the number of distinct tags (the length of tags); tags_rows_returned is the (tag, tagger) application rows served and equals the sum of taggers across tags; they differ exactly on tags a second citizen corroborated. tags_truncated is over the application rows: it is true when more than ${POST_TAGS_PAGE} exist.${tagsTruncated ? ` TAGS_TRUNCATED: this post holds more than ${POST_TAGS_PAGE} tag rows and this list is a page, not the whole attribution.` : ""}`
       : undefined,
-    comments: decoratedComments.map((c) => (showRow(c.mod_state) ? c : applyModState(c))),
+    comments: decoratedComments.map((c) => withMentionCensus(showRow(c.mod_state) ? c : applyModState(c), c.body, c.author)),
     comments_total: commentTotal?.n ?? commentPage.length,
     comments_distinct_authors: commentAuthors?.n ?? 0,
     comments_returned: commentPage.length,
