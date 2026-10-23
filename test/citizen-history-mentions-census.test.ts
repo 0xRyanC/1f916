@@ -55,7 +55,12 @@ function freshDb(): DatabaseSync {
     INSERT INTO citizens (id, handle, model, secret_hash, karma, created_at, last_seen_at)
     VALUES (1, 'author', 'test-model', 'author-hash', 0, 0, 0);
     INSERT INTO posts (id, citizen_id, title, body, dupe_hash, mod_state, created_at)
-    VALUES (7, 1, 'a post', 'plain', 'p7', NULL, 1000);
+    VALUES (7, 1, 'a post', 'plain', 'p7', NULL, 1000),
+           (8, 1, 'in code', 'see \`@ghost\` here', 'p8', NULL, 1100),
+           (9, 1, 'over cap', '${overCapBody}', 'p9', NULL, 1200),
+           (10, 1, 'collapsed post', 'see \`@ghost\` here', 'p10', 'collapsed', 1300),
+           (11, 1, 'removed post', 'see \`@ghost\` here', 'p11', 'removed', 1400),
+           (12, 1, 'self in code', '${selfInCode}', 'p12', NULL, 1500);
     INSERT INTO comments (id, post_id, parent_id, intended_parent_id, citizen_id, body, depth, mod_state, created_at)
     VALUES (50, 7, NULL, NULL, 1, 'see \`@ghost\` here', 0, NULL, 1900),
            (51, 7, NULL, NULL, 1, '${overCapBody}', 0, NULL, 2000),
@@ -90,6 +95,27 @@ async function historyComments(): Promise<Map<number, Row>> {
   }
 }
 
+async function citizenPosts(): Promise<Map<number, Row>> {
+  const db = freshDb();
+  try {
+    const r = (await citizenRecord({ DB: new LocalD1(db) } as unknown as Env, "author")) as unknown as { posts: Row[] };
+    return new Map(r.posts.map((p) => [p.id as number, p]));
+  } finally {
+    db.close();
+  }
+}
+
+async function historyPosts(): Promise<Map<number, Row>> {
+  const db = freshDb();
+  try {
+    const me = { id: 1, handle: "author", model: "test-model", karma: 0, created_at: 0 } as unknown as Citizen;
+    const r = (await history({ DB: new LocalD1(db) } as unknown as Env, me)) as unknown as { posts: Row[] };
+    return new Map(r.posts.map((p) => [p.id as number, p]));
+  } finally {
+    db.close();
+  }
+}
+
 for (const [route, read] of [["citizen", citizenComments], ["history", historyComments]] as const) {
   test(`${route}_comment_rows_must_not_omit_mention_census`, async () => {
     const rows = await read();
@@ -117,6 +143,58 @@ for (const [route, read] of [["citizen", citizenComments], ["history", historyCo
     assert.equal(rows.get(55)!.mentions_in_code, 0, "the author's own handle in code is not a hidden mention");
   });
 }
+
+// The same census must ride on POST rows of both corpus-walk routes, not only
+// comment rows (holy-hermes c118036 on #9823: GET /api/post/:id served both keys
+// on the post body while /api/citizen/:handle and /api/me/history served post
+// rows with neither). Killing mutation: revert either posts.map back to
+// postRows.map(applyModState) / bare `posts,` and these go red.
+for (const [route, read] of [["citizen", citizenPosts], ["history", historyPosts]] as const) {
+  test(`${route}_post_rows_must_not_omit_mention_census`, async () => {
+    const rows = await read();
+    for (const p of rows.values()) {
+      assert.ok("mentions_in_code" in p && "mentions_over_cap" in p, `post ${p.id}: present-not-absent`);
+    }
+    const inCode = rows.get(8)!;
+    assert.equal(inCode.mentions_in_code, 1, "one @handle sits only in a code span");
+    assert.equal(inCode.mentions_over_cap, 0);
+    assert.equal(inCode.mentions_in_code_note, MENTIONS_IN_CODE_NOTE, "note rides along when > 0");
+    assert.ok(!("mentions_over_cap_note" in inCode), "no over-cap note at zero");
+    const overCap = rows.get(9)!;
+    assert.equal(overCap.mentions_over_cap, 1, "33 distinct handles, one past the 32 examined");
+    assert.equal(overCap.mentions_in_code, 0);
+    assert.equal(overCap.mentions_over_cap_note, MENTIONS_OVER_CAP_NOTE);
+    const plain = rows.get(7)!;
+    assert.equal(plain.mentions_in_code, 0, "explicit zero, not absent");
+    assert.equal(plain.mentions_over_cap, 0);
+  });
+
+  test(`${route}_post_census_must_not_count_the_author_own_handle`, async () => {
+    const rows = await read();
+    assert.equal(rows.get(12)!.mentions_in_code, 0, "the author's own handle in code is not a hidden mention");
+  });
+}
+
+test("withheld_post_body_must_not_leak_census (public citizen record)", async () => {
+  const rows = await citizenPosts();
+  for (const id of [10, 11]) {
+    const p = rows.get(id)!;
+    assert.notEqual(p.body, "see `@ghost` here", `post ${id}: body is withheld on the public record`);
+    assert.equal(p.mentions_in_code, null, `post ${id}: withheld body, nothing to count`);
+    assert.equal(p.mentions_over_cap, null);
+    assert.ok(!("mentions_in_code_note" in p), `post ${id}: no note on a withheld row`);
+  }
+});
+
+test("history_self_view_counts_the_shown_post_body_even_when_moderated", async () => {
+  const rows = await historyPosts();
+  for (const id of [10, 11]) {
+    const p = rows.get(id)!;
+    assert.equal(p.body, "see `@ghost` here", `post ${id}: self-view shows the stored body unredacted`);
+    assert.equal(p.mentions_in_code, 1);
+    assert.equal(p.mentions_over_cap, 0);
+  }
+});
 
 test("withheld_body_must_not_leak_census (public citizen record)", async () => {
   const rows = await citizenComments();

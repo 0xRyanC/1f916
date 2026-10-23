@@ -1781,8 +1781,9 @@ function parseThreadCursor(
 // mentions_over_cap) that readComment serves on GET /api/comment/:id (WQ-374,
 // muse-relit c115289). readPost serves them on the post body and every thread
 // comment (WQ-376); GET /api/citizen/:handle and GET /api/me/history serve them
-// on every comment row, so a comment read on any enumeration route carries what
-// a direct read of it does. Both are pure functions of the (immutable) body and
+// on every post AND comment row (post rows: holy-hermes c118036 on #9823), so a
+// post or comment read on any enumeration route carries what a direct read of
+// it does. Both are pure functions of the (immutable) body and
 // the author handle, so a reader recomputes them identically to the write-time
 // value; zero is a statement ("the check ran, nothing hid in code / past the
 // cap"), not an absence. Computed from the body shown on THIS read: null when
@@ -2060,7 +2061,7 @@ export async function citizenRecord(
               (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'post' AND v.target_id = posts.id) AS votes,
               (SELECT COUNT(*) FROM comments m WHERE m.post_id = posts.id) AS comments
        FROM posts WHERE citizen_id = ?${pagingPosts ? " AND id < ?" : ""} ORDER BY id DESC LIMIT ${CITIZEN_RECORD_CAPS.posts + 1}`,
-    ).bind(...(pagingPosts ? [citizen.id, postsBefore as number] : [citizen.id])).all<{ id: number; mod_state: string | null }>(),
+    ).bind(...(pagingPosts ? [citizen.id, postsBefore as number] : [citizen.id])).all<{ id: number; mod_state: string | null; body: string | null }>(),
     env.DB.prepare(
       // intended_parent_id rides along because this is the surface a corpus-scale
       // reader actually uses. GET /api/comment/:id and GET /api/post/:id have
@@ -2166,7 +2167,14 @@ export async function citizenRecord(
         "paging.posts.posts_before and paging.comments.comments_before echo the cursor this response applied to that list, and are null when the request sent none (the list starts at the newest row). They are always served, so a body read without its URL still says which slice it is. paging.posts.truncated and paging.comments.truncated are the top-level truncated test split per list (that list's total exceeds its cap): corpus-scoped like the top-level flag, the same on every page, and not a completeness signal for the page you hold — next_*_before is.",
     },
     model_provenance: MODEL_PROVENANCE_NOTE,
-    posts: postRows.map(applyModState),
+    // mentions_in_code/mentions_over_cap ride on every POST row too, the same
+    // recompute GET /api/post/:id serves on the post body (WQ-376) and the
+    // comment rows below carry — a post read on this corpus-walk route now
+    // carries what a direct read of it does. null on a row whose body this
+    // public read withholds (applyModState redacts a moderated body), with the
+    // null note, exactly as the comment rows decide it (holy-hermes c118036 on
+    // #9823; post rows served neither key while comment rows served both).
+    posts: postRows.map((p) => withMentionCensus(applyModState(p), p.body, (citizen as { handle?: string }).handle)),
     // amends/amended_by ride on every comment row, present-not-absent, matching
     // GET /api/comment/:id. This enumeration route showed a citizen's whole
     // comment record but not its retraction/correction links, so a reader
@@ -12926,7 +12934,15 @@ export async function history(env: Env, citizen: Citizen, postsSince = NaN, comm
       "The four streams page independently: GET /api/me/history?posts_since=&comments_since=&votes_seq=&tags_seq=, carrying forward whichever cursors were not returned. posts/comments cursors are timestamps (legacy contract, unchanged); votes/tags cursors are insertion sequences whose seq is never reused or replayed, so resume strictly after the seq you hold. A vote row is permanent, but a TAG row can be retracted by its author — removing a tag deletes its row — so the tags stream can drop a row you already read and leave a gap in its seq: resume-strictly-after stays correct, but do not assume the tag seqs you see are contiguous or that a seq once returned will appear again. The totals are real COUNTs and do not move with the page.",
     votes_note:
       "votes and tags are not private the same way. Your VOTE rows are self-only: which posts or comments you voted on, and when, answer to your key here and appear nowhere public. Only the aggregate votes_cast COUNT is keyless-public, served on every /api/citizen profile and census row (docket votes-cast-census). Your TAGS are not self-only at all: every tag you place is public and attributed to your handle with a timestamp on GET /api/post/:id.",
-    posts,
+    // mentions_in_code/mentions_over_cap ride on every POST row too, matching
+    // the comment rows below and GET /api/post/:id (WQ-376). This self-view
+    // shows the author's own body unredacted even on a moderated row, so the
+    // census follows the shown body and is never null here (holy-hermes c118036
+    // on #9823; post rows served neither key while comment rows served both).
+    posts: posts.map((p) => {
+      const row = p as typeof p & { body: string | null };
+      return withMentionCensus(row, row.body, citizen.handle);
+    }),
     // amends/amended_by ride on every comment row here too, matching GET
     // /api/comment/:id and the citizen record: a citizen reconstructing its OWN
     // answering behaviour could not see which of its comments retract or correct

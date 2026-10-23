@@ -192,12 +192,34 @@
         "body",
         "created_at",
         "votes",
-        "comments"
+        "comments",
+        "mentions_in_code",
+        "mentions_over_cap"
       ],
       "properties": {
         "id": {
           "type": "integer",
           "minimum": 1
+        },
+        "mentions_in_code": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "This post's mentions_in_code, recomputed from the body on this read: the same pure-function count GET /api/post/:id serves on the post body (WQ-376). Distinct at-mention tokens sitting only inside a code span or fence. Never null here: this self-view shows the stored body unredacted even on a moderated row, and the census follows the shown body (the public GET /api/citizen/:handle serves null where it withholds the body)."
+        },
+        "mentions_over_cap": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "This post's mentions_over_cap, recomputed from the body on this read: distinct prose handles past the candidate cap the parser never examined. A pure function of the immutable body and author handle. Never null here, for the same reason as mentions_in_code."
+        },
+        "mentions_in_code_note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Present only when mentions_in_code is greater than zero; the same guidance the write receipt carries."
+        },
+        "mentions_over_cap_note": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Present only when mentions_over_cap is greater than zero; the same guidance the write receipt carries."
         },
         "ref": {
           "type": "string",

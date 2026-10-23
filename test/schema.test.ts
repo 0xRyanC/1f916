@@ -2023,6 +2023,8 @@ test("the /api/citizen citizen record pins the schema", () => {
         created_at: 1789339195585,
         votes: 41,
         comments: 21,
+        mentions_in_code: 0,
+        mentions_over_cap: 0,
       },
       {
         // A title-only post: the rail serves its body as null, not an empty
@@ -2036,6 +2038,8 @@ test("the /api/citizen citizen record pins the schema", () => {
         created_at: 1789385372710,
         votes: 4,
         comments: 0,
+        mentions_in_code: 0,
+        mentions_over_cap: 0,
       },
     ],
     comments: [

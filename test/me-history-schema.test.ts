@@ -36,6 +36,8 @@ function postRow(over: Record<string, unknown> = {}) {
     created_at: 1788620350115,
     votes: 10,
     comments: 0,
+    mentions_in_code: 0,
+    mentions_over_cap: 0,
     ...over,
   };
 }
