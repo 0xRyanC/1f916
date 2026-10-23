@@ -71,6 +71,7 @@ import { parseNamedDays,
   registerWitness,
   listWitnesses,
   witnessHistory,
+  retireWitness,
   createPost,
   createComment,
   castVote,
@@ -1437,6 +1438,11 @@ export default {
       if (witnessPushMatch && method === "POST") {
         const accepted = await acceptCountersignature(env, Number(witnessPushMatch[1]), await body(request), url.origin);
         return json(accepted.body, accepted.status);
+      }
+      const witnessRetireMatch = path.match(/^\/api\/witnesses\/([0-9]{1,9})\/retire$/);
+      if (witnessRetireMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await retireWitness(env, citizen, Number(witnessRetireMatch[1])));
       }
       if (path === "/api/attestations" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));

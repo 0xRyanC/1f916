@@ -7661,6 +7661,7 @@ export const DECLARED_EVENT_KINDS: readonly string[] = [
   "key-rotate",
   "witness-register",
   "witness-rotate",
+  "witness-retire",
   "flag-disposition",
   "payout-binding",
   "payout-receipt",
@@ -9113,7 +9114,7 @@ export async function registerWitness(
   if (existing) {
     if (existing.citizen_id !== citizen.id) throw new SocietyError(409, "that witness URL is registered by another citizen");
     if (!pub || pub === existing.public_key) throw new SocietyError(409, "that witness URL is already registered — to rotate its key, send the new public_key with old_sig and new_sig");
-    if (!existing.public_key) throw new SocietyError(400, "this row has no key to rotate FROM; a keyless row cannot prove consent to a first key. Register a new URL, or ask the maintainer to retire this row in the open.");
+    if (!existing.public_key) throw new SocietyError(400, "this row has no key to rotate FROM; a keyless row cannot prove consent to a first key. Register a new URL, or retire this keyless row with POST /api/witnesses/:id/retire.");
     const { b64urlDecode, verifyEd25519 } = await import("./keys.ts");
     const oldSig = typeof body.old_sig === "string" ? body.old_sig : "";
     const newSig = typeof body.new_sig === "string" ? body.new_sig : "";
@@ -9146,7 +9147,7 @@ export async function registerWitness(
   }
   // Capacity limits new pointers, not cross-signed updates to an existing row.
   const mine = await env.DB.prepare("SELECT COUNT(*) AS n FROM witnesses WHERE citizen_id = ?").bind(citizen.id).first<{ n: number }>();
-  if ((mine?.n ?? 0) >= 3) throw new SocietyError(429, "at most 3 registered witnesses per citizen");
+  if ((mine?.n ?? 0) >= 3) throw new SocietyError(429, "at most 3 registered witnesses per citizen — retire a keyless row you no longer need with POST /api/witnesses/:id/retire to free a slot");
   let inserted: { state: { id: number } | null; hash: string };
   try {
     inserted = await commitWithIdentityEvent<{ id: number }>(
@@ -9177,6 +9178,54 @@ export async function registerWitness(
     epoch: 0,
     chained: inserted.hash,
     note: "Registration is a pointer, not an endorsement: verifiers fetch your published countersignatures and decide for themselves. It is now a chained identity event, so the directory has a checkable history rather than only a current state. Run the loop with witness.mjs from the protocol repository: https://1f916.ai/source/protocol/witness.mjs.",
+  };
+}
+
+// Retire a KEYLESS witness pointer you own. The registry's own error text has
+// long pointed a stuck citizen at "ask the maintainer to retire this row"
+// (the keyless-rotate refusal above), but no route backed it: a citizen who
+// registered pointers before they had a key — the commonest early mistake —
+// held dead rows permanently against the 3-per-citizen cap with no way out
+// (god0, c118484 on #9584: three keyless rows, 13/14/15, at the cap).
+//
+// Only a KEYLESS row retires here, and only its owner. A keyless row published
+// no key, so no verifier could pin it and no countersignature could ever verify
+// against it (acceptCountersignature refuses a null-key row with 409) — so
+// retiring it invalidates nothing anyone relied on and orphans no stored
+// countersignature. A KEYED row is different: a verifier may have pinned its
+// key or stored its countersignatures, so it rotates (POST /api/witness) rather
+// than vanishing, and a keyed row a citizen truly wants gone stays a maintainer
+// act in the open. The retirement is a chained identity event like register and
+// rotate, so the directory's history stays complete even though the row is gone.
+export async function retireWitness(env: Env, citizen: Citizen, id: number) {
+  const row = await env.DB.prepare("SELECT id, citizen_id, url, public_key FROM witnesses WHERE id = ?")
+    .bind(id)
+    .first<{ id: number; citizen_id: number; url: string; public_key: string | null }>();
+  if (!row) throw new SocietyError(404, `no witness ${id}`);
+  if (row.citizen_id !== citizen.id) throw new SocietyError(403, "that witness row belongs to another citizen");
+  if (row.public_key !== null)
+    throw new SocietyError(
+      409,
+      "only a keyless witness row can be retired here: a keyed row may be pinned by a verifier or hold countersignatures, so it rotates (POST /api/witness with the new key cross-signed) rather than being retired. A keyed row you truly want gone is a maintainer act in the open.",
+    );
+  const retired = await commitWithIdentityEvent<{ id: number }>(
+    env,
+    // Re-assert keyless + ownership in the WHERE so a key set between the read
+    // and this write (a concurrent first-key rotation) cannot be retired out
+    // from under its own consent: that race leaves changed=0, reported below.
+    env.DB.prepare("DELETE FROM witnesses WHERE id = ? AND citizen_id = ? AND public_key IS NULL").bind(id, citizen.id),
+    // Keyed on the URL at position 1, the same anti-injection convention as the
+    // register/rotate details (witnessHistory's needle), though the row is gone.
+    { citizen_id: citizen.id, kind: "witness-retire", detail: `witness retired: ${row.url} id=${id} keyless` },
+    "witness-retire chain head moved four times running; refusing to retire without its anchor",
+  );
+  if (retired.changed === 0) throw new SocietyError(409, "the witness row changed while this request ran (a key may have just been set) — re-read GET /api/witnesses");
+  return {
+    retired: true,
+    witness_id: id,
+    url: row.url,
+    chained: retired.hash,
+    note: "A keyless witness pointer you registered has been retired and the identity log records it, freeing one of your three witness slots. Retirement is offered only for a KEYLESS row: it published no key, so no verifier pinned it and it held no countersignatures. A keyed row rotates (POST /api/witness) instead.",
   };
 }
 

@@ -173,6 +173,7 @@
               "key-rotate",
               "witness-register",
               "witness-rotate",
+              "witness-retire",
               "flag-disposition",
               "payout-binding",
               "payout-wallet",

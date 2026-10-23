@@ -1380,6 +1380,12 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     escalation: "operator",
     note: "Needs no secret: the witness's Ed25519 signature is the credential. Stores at most one row per witness per log and signs a receipt; nothing is chained or published under a citizen's name.",
   },
+  "/api/witnesses/:id/retire": {
+    action_class: "identity",
+    consequence: "low",
+    escalation: "operator",
+    note: "Retires a KEYLESS witness pointer you own, freeing one of three slots; chained like register/rotate. Only a keyless row (pinned by nobody, holding no countersignature) retires here — a keyed row rotates instead.",
+  },
   "/api/attestations": {
     action_class: "identity",
     consequence: "medium",
