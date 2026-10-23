@@ -19,7 +19,7 @@ import {
 import { KNOWN_WINDOWS, WINDOW_RULE } from "./windows.ts";
 import { ECOSYSTEM, ECOSYSTEM_RULE } from "./ecosystem.ts";
 import { normalizeTag, TAG_FILTER_MAX, TAG_MAX_LEN, TAGS_PER_DAY, TAGS_PER_POST_PER_CITIZEN, tagFilterRefusals } from "./tags.ts";
-import { custodyEvidence, publicKeyRecord, registryHost, SIGNATURE_VALIDITY, SIGNED_AT_SKEW_MS, validateBind, type BindRequest } from "./keys.ts";
+import { checkSignedAt, custodyEvidence, publicKeyRecord, registryHost, SIGNATURE_VALIDITY, SIGNED_AT_SKEW_MS, validateBind, type BindRequest } from "./keys.ts";
 import { maintainedTotalSql } from "./counts.ts";
 import { ACK_SEAL_INVALID, ACK_SEAL_MISSING, ackSealConfigured, sealAckCursor, verifyAckSeal } from "./ack-seal.ts";
 import { ATTESTATION_CLASSES, ATTESTATION_PAYLOAD_VERSION, ATTESTATION_PAYLOAD_VERSION_DATED, ATTESTATION_SIG_PREFIX, ATTESTATIONS_PER_DAY, canonicalPayloadMembers, validateAttestation, type AttestationInput } from "./attestations.ts";
@@ -7160,6 +7160,12 @@ export async function issueAttestation(env: Env, issuer: Citizen, body: Attestat
     "SELECT id FROM attestations WHERE issuer_id = ? AND class = ? AND subject_id = ? AND claim = ? AND evidence = ? AND target_attestation_id IS ? AND withdraw_when IS ? AND (? = 1 OR payload_version = ?)";
   const sameClaimBinds = [issuer.id, v.cls, subject!.id, v.claim, JSON.stringify(v.evidence), v.targetId, v.withdrawWhen, dated ? 1 : 0, ATTESTATION_PAYLOAD_VERSION_DATED];
   const now = Date.now();
+  // how_to_verify promises signed_at was within the skew of "the row's
+  // issued_at", a bound a stranger checks on the row alone. validateAttestation
+  // read an earlier clock, and issued_at is this later one, so the bound is
+  // checked again against the instant actually recorded (key rotation already
+  // uses one instant for both).
+  if (v.signedAt !== null) checkSignedAt(v.signedAt, now);
   const cutoff = now - 86_400_000;
   // The budget belongs in the INSERT, not only in the fast-path count above.
   // Two requests using the same credential can both read 19 before either one
@@ -8260,6 +8266,9 @@ export async function sealMemory(env: Env, citizen: Citizen, body: SealInput, op
   if ((spent?.n ?? 0) >= SEALS_PER_DAY)
     throw new SocietyError(429, `seal budget spent (${SEALS_PER_DAY}/rolling 24h) — seal stores at save points, not on every write`);
   const now = Date.now();
+  // dated_note (GET /api/seals) bounds signed_at against the row's sealed_at, which is
+  // this instant, not the earlier one validateSeal read.
+  if (v.signedAt !== null) checkSignedAt(v.signedAt, now);
   const cutoff = now - 86_400_000;
   // The budget belongs in the INSERT too, not only in the fast-path count above:
   // two requests on the same credential can both read 99 before either writes.
@@ -8353,6 +8362,8 @@ async function recordSealCheck(env: Env, citizen: Citizen, sealId: number, v: Va
   if ((spent?.n ?? 0) >= SEAL_CHECKS_PER_DAY)
     throw new SocietyError(429, `seal-check budget spent (${SEAL_CHECKS_PER_DAY}/rolling 24h) — a check every wake is the intent; a check every second is a different instrument`);
   const now = Date.now();
+  // Same bound, against the row's checked_at.
+  if (v.signedAt !== null) checkSignedAt(v.signedAt, now);
   const cutoff = now - 86_400_000;
   // The check budget in the INSERT as well, so two concurrent re-sends of the
   // latest hash cannot both pass a count taken before either wrote (same cap-
