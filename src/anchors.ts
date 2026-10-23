@@ -158,14 +158,22 @@ async function submitOts(f: typeof fetch, calendar: string, digest: Uint8Array):
   return bytes;
 }
 
-// An OpenTimestamps proof is upgraded by handing the calendar the calendar
-// timestamp it issued (the tail of the detached file, after magic + version +
-// hash op + digest) and receiving the same timestamp with the attestation ops
-// it has accumulated since — a BitcoinBlockHeaderAttestation once the batch
-// has been mined. The calendar's answer replaces the tail; a proof whose tail
-// carries no attestation yet is left alone and asked again on a later pass.
-// Issue #517: until this pass existed every OTS row stayed `pending` forever.
+// OpenTimestamps upgrade. The calendars index timestamps by the ATTESTEE
+// message — the result of the op chain they applied over the submitted digest —
+// not by the digest itself (probed live against alice.btc.calendar for PR
+// #648: a GET by root digest 404s even for long-confirmed files; the
+// addressable key is the chain result decoded from the stored proof). So
+// upgrading means walking the stored proof's op tree, computing the message
+// the calendar's PendingAttestation actually attests, and asking that calendar
+// what it currently holds for it.
+//
+// Op tags per python-opentimestamps core/op.py: f0 append, f1 prepend, 08
+// sha256 (the only ops a calendar chain for a direct digest submission
+// produces). Attestation tags: 83dfe30d2ef90c8e pending, 83dfd307 bitcoin.
+// Anything outside that shape returns null and the row is left pending: an
+// upgrade pass must never be cleverer than the proofs it is allowed to rewrite.
 export const BITCOIN_ATTESTATION_TAG = new Uint8Array([0x83, 0xdf, 0xd3, 0x07]);
+const OTS_PENDING_ATTESTATION_TAG = new Uint8Array([0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e]);
 
 export function hasBitcoinAttestation(proof: Uint8Array): boolean {
   outer: for (let i = 0; i + BITCOIN_ATTESTATION_TAG.length <= proof.length; i++) {
@@ -181,23 +189,86 @@ export function hasBitcoinAttestation(proof: Uint8Array): boolean {
 // (header), the major version varint, the hash op tag, and the 32-byte digest.
 const OTS_FILE_STAMP_OFFSET = OTS_MAGIC.length + 1 + 1 + 32;
 
-export function splitOtsProof(proof: Uint8Array): { prefix: Uint8Array; stamp: Uint8Array } {
+export function splitOtsProof(proof: Uint8Array): { prefix: Uint8Array; stamp: Uint8Array; digest: Uint8Array } {
   if (proof.length <= OTS_FILE_STAMP_OFFSET) throw new Error("ots proof too short to contain a calendar timestamp");
-  return { prefix: proof.slice(0, OTS_FILE_STAMP_OFFSET), stamp: proof.slice(OTS_FILE_STAMP_OFFSET) };
+  return {
+    prefix: proof.slice(0, OTS_FILE_STAMP_OFFSET),
+    stamp: proof.slice(OTS_FILE_STAMP_OFFSET),
+    digest: proof.slice(OTS_FILE_STAMP_OFFSET - 32, OTS_FILE_STAMP_OFFSET),
+  };
 }
 
-async function upgradeOts(f: typeof fetch, calendar: string, stamp: Uint8Array): Promise<Uint8Array> {
-  const res = await f(`${calendar}/timestamp`, {
-    method: "POST",
-    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/vnd.opentimestamps.v1", "user-agent": "1f916-anchor/1" },
-    body: stamp,
+function concatBytes(a: Uint8Array, b: Uint8Array): Uint8Array {
+  const out = new Uint8Array(a.length + b.length);
+  out.set(a, 0);
+  out.set(b, a.length);
+  return out;
+}
+
+interface DecodedTail {
+  // Offset of the terminal attestation node (the 00 byte) inside the stamp
+  attestationStart: number;
+  // The message the pending attestation attests: ops replayed from the digest
+  attesteeMsg: Uint8Array;
+}
+
+// Decode a calendar timestamp serialization for `msg`. Strictly linear: ops
+// mutating the message, then 00 + one pending attestation. No branches (ff),
+// no extra attestations, no unsupported ops, no multi-byte varuints — every
+// one of those is a bail-out, and a bail-out row simply stays pending.
+export async function decodeOtsTail(stamp: Uint8Array, msg: Uint8Array): Promise<DecodedTail | null> {
+  let pos = 0;
+  let m = msg.slice();
+  for (;;) {
+    if (pos >= stamp.length) return null;
+    const b = stamp[pos];
+    if (b === 0xff) return null; // op branch or sibling attestation
+    if (b === 0x00) {
+      // Terminal: no ops remain; one attestation follows.
+      const attestationStart = pos;
+      pos += 1;
+      if (!startsWithAt(stamp, pos, OTS_PENDING_ATTESTATION_TAG)) return null;
+      pos += OTS_PENDING_ATTESTATION_TAG.length;
+      const uriLen = stamp[pos];
+      if (uriLen === undefined || uriLen >= 0x80) return null; // multi-byte varuint: bail
+      pos += 1 + uriLen;
+      if (pos !== stamp.length) return null; // trailing bytes: not our shape
+      return { attestationStart, attesteeMsg: m };
+    }
+    if (b === 0xf0 || b === 0xf1) {
+      // append / prepend: single-byte varuint arg length, then the bytes.
+      const argLen = stamp[pos + 1];
+      if (argLen === undefined || argLen >= 0x80) return null;
+      const arg = stamp.slice(pos + 2, pos + 2 + argLen);
+      if (arg.length !== argLen) return null;
+      m = b === 0xf0 ? concatBytes(m, arg) : concatBytes(arg, m);
+      pos += 2 + argLen;
+    } else if (b === 0x08) {
+      // sha256: no args; the result message is the hash of the running one.
+      m = new Uint8Array(await crypto.subtle.digest("SHA-256", m));
+      pos += 1;
+    } else {
+      return null; // unsupported op
+    }
+  }
+}
+
+function startsWithAt(hay: Uint8Array, pos: number, needle: Uint8Array): boolean {
+  if (pos + needle.length > hay.length) return false;
+  for (let i = 0; i < needle.length; i++) if (hay[pos + i] !== needle[i]) return false;
+  return true;
+}
+
+async function upgradeOts(f: typeof fetch, calendar: string, attesteeMsg: Uint8Array): Promise<Uint8Array> {
+  const hex = Array.from(attesteeMsg, (b) => b.toString(16).padStart(2, "0")).join("");
+  const res = await f(`${calendar}/timestamp/${hex}`, {
+    headers: { accept: "application/vnd.opentimestamps.v1", "user-agent": "1f916-anchor/1" },
   });
   if (!res.ok) throw new Error(`calendar ${res.status}`);
   const bytes = new Uint8Array(await res.arrayBuffer());
   if (bytes.length === 0) throw new Error("calendar returned an empty timestamp");
   return bytes;
 }
-
 
 // Base: a zero-value transaction from the anchoring wallet to itself with the
 // payload as calldata. The wallet is a dedicated pocket-change key, never the
@@ -365,12 +436,12 @@ export async function anchorCheckpoints(env: Env, now = Date.now(), deps: Anchor
   for (const p of otsPend) {
     try {
       const proof = unb64(p.proof);
-      const { prefix, stamp } = splitOtsProof(proof);
-      const upgraded = await upgradeOts(deps.fetch, p.target, stamp);
+      const { prefix, stamp, digest } = splitOtsProof(proof);
+      const decoded = await decodeOtsTail(stamp, digest);
+      if (!decoded) continue; // not our shape: leave it for `ots upgrade`
+      const upgraded = await upgradeOts(deps.fetch, p.target, decoded.attesteeMsg);
       if (!hasBitcoinAttestation(upgraded)) continue;
-      const merged = new Uint8Array(prefix.length + upgraded.length);
-      merged.set(prefix, 0);
-      merged.set(upgraded, prefix.length);
+      const merged = concatBytes(prefix, concatBytes(stamp.slice(0, decoded.attestationStart), upgraded));
       await env.DB.prepare("UPDATE anchors SET proof = ?, status = 'confirmed', confirmed_at = ? WHERE id = ? AND status = 'pending'").bind(b64(merged), now, p.id).run();
       report.confirmed++;
       report.ots_upgraded++;
