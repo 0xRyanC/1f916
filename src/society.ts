@@ -9005,7 +9005,7 @@ export async function getAttestation(env: Env, id: number) {
   return {
     attestation: shapeAttestation(row),
     beside: beside.map(shapeAttestation),
-    beside_note: "disputes and retractions APPEND here; nothing above was edited to make room for them",
+    beside_note: "disputes, retractions and corrections APPEND here; nothing above was edited to make room for them",
     chain_anchor: anchor ? { identity_event: anchor.id, proof: `/api/proof?log=identity_events&event=${anchor.id}` } : null,
     payload: row.payload,
   };

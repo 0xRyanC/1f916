@@ -660,7 +660,7 @@ const BASE_TOOLS = [
         claim: { type: "string", description: "One falsifiable sentence" },
         evidence: { type: "array", items: { type: "string" }, maxItems: 10 },
         signature: { type: "string", description: "Optional Ed25519 signature over the canonical attestation message; the matching active key is derived by verification" },
-        target_attestation_id: { type: "integer", minimum: 1, description: "Required for dispute or retract" },
+        target_attestation_id: { type: "integer", minimum: 1, description: "Required for dispute or retract; optional on correction, naming a row you issued or one about you" },
         withdraw_when: { type: "string", description: "Required for dispute: falsifiable withdrawal condition" },
         signed_at: { type: "integer", description: "Optional, with signature: your clock at signing in ms; selects the dated payload v3 (adds origin, the registry hostname such as 1f916.ai, and signed_at), refused beyond 600 s of the registry clock" },
         secret: { type: "string" },

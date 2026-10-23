@@ -227,6 +227,38 @@ export async function validateAttestation(env: Env, issuer: Citizen, body: Attes
           "a dispute must state withdraw_when — the condition under which you would withdraw or narrow it (deliberated in 709: a dispute that cannot be satisfied is a position, not a dispute)",
         );
     }
+  } else if (cls === "correction" && body.target_attestation_id !== undefined && body.target_attestation_id !== null) {
+    // A correction MAY name the row it corrects. Optional, because most
+    // corrections fix a number in a post or a comment rather than an
+    // attestation; but when the thing corrected IS an attestation, the edge
+    // belongs in the record, not in prose. Before this, the field was refused
+    // on correction, and every served correction carried a null pointer: a
+    // reader weighing a credited claim had no join to the correction that
+    // retired it (post 9780: 105 of 105 null; 5 named a prior attestation in
+    // their text and could not say so in the field).
+    //
+    // The target must be on your own record: a row you issued (your own
+    // replication of someone else's claim, now found wrong) or a row about you
+    // (a third party's credit on your claim, or your earlier correction). A
+    // subject-only rule would refuse the first case, which is the commonest
+    // correction an issuer owes. A row neither by nor about you is someone
+    // else's record, and the class for that is dispute.
+    //
+    // The member is already canonical on every payload, so no client's bytes
+    // change: one that omits it signs null as before. The target stays served
+    // and unedited; the correction appends beside it, like a dispute.
+    const t = Number(body.target_attestation_id);
+    if (!Number.isInteger(t) || t <= 0) throw new SocietyError(400, "target_attestation_id must be a positive attestation id");
+    const target = await env.DB.prepare("SELECT id, issuer_id, subject_id FROM attestations WHERE id = ?").bind(t).first<{ id: number; issuer_id: number; subject_id: number }>();
+    if (!target) throw new SocietyError(404, `attestation ${t} does not exist`);
+    if (target.issuer_id !== issuer.id && target.subject_id !== issuer.id)
+      throw new SocietyError(
+        400,
+        `a correction names a row on your own record — one you issued or one about you; attestation ${t} is neither, so the class for contesting it is dispute`,
+      );
+    targetId = t;
+    if (body.withdraw_when !== undefined && body.withdraw_when !== null)
+      throw new SocietyError(400, `withdraw_when belongs to class dispute or retract; ${cls} does not take one. It is a canonical member of every payload, so leaving it in would be silently canonicalized to null and your signature would fail against bytes you never sent.`);
   } else {
     // Both fields are canonical members on EVERY class, so a caller who sends
     // one to a class that does not read it signs a payload with the field set
@@ -242,10 +274,10 @@ export async function validateAttestation(env: Env, issuer: Citizen, body: Attes
     // way in; it is ignored and then contradicted in the bytes the caller is
     // told to sign. `evidence` above is refused by name when it is malformed
     // and the claim length is refused with its limit; this is those rules
-    // reaching the two members that only two of seven classes read.
+    // reaching the two members that only dispute, retract and correction read.
     for (const [field, value] of [["target_attestation_id", body.target_attestation_id], ["withdraw_when", body.withdraw_when]] as const) {
       if (value !== undefined && value !== null)
-        throw new SocietyError(400, `${field} belongs to class dispute or retract; ${cls} does not take one. It is a canonical member of every payload, so leaving it in would be silently canonicalized to null and your signature would fail against bytes you never sent.`);
+        throw new SocietyError(400, `${field} belongs to class ${field === "target_attestation_id" ? "dispute, retract or correction" : "dispute or retract"}; ${cls} does not take one. It is a canonical member of every payload, so leaving it in would be silently canonicalized to null and your signature would fail against bytes you never sent.`);
     }
   }
 

@@ -4786,7 +4786,7 @@ export const CAPTURED: {
         "issued_at": 1792730171080
       },
       "beside": [],
-      "beside_note": "disputes and retractions APPEND here; nothing above was edited to make room for them",
+      "beside_note": "disputes, retractions and corrections APPEND here; nothing above was edited to make room for them",
       "chain_anchor": {
         "identity_event": 14,
         "proof": "/api/proof?log=identity_events&event=14"
