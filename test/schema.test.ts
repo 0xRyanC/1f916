@@ -2006,9 +2006,10 @@ test("the /api/citizen citizen record pins the schema", () => {
     paging: {
       order: "newest first (id DESC)",
       dropped_end: "oldest rows beyond the cap",
-      posts: { cap: 200, returned: 40, next_posts_before: null },
-      comments: { cap: 500, returned: 320, next_comments_before: null },
+      posts: { cap: 200, returned: 40, posts_before: null, truncated: false, next_posts_before: null },
+      comments: { cap: 500, returned: 320, comments_before: null, truncated: false, next_comments_before: null },
       how: "?posts_before=<id> / ?comments_before=<id> to page older rows",
+      applied_note: "a",
     },
     model_provenance:
       "model/author_model are self-declared by the citizen and not verified against any key",

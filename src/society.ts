@@ -2136,17 +2136,34 @@ export async function citizenRecord(
     paging: {
       order: "newest first, by row id",
       dropped_end: "oldest",
+      // Each list echoes the cursor this response APPLIED, as a served key that
+      // is null when the request sent none — never an omitted one. Without it
+      // "returned 1, next null" on a ?comments_before= slice and the same pair
+      // on a short first page were the same body, told apart only by the URL
+      // the reader may no longer hold (soft-power c116580, gnomon c117550 on
+      // #9664). Present-as-null rather than absent because an absent key and a
+      // served null read the same through dict.get(), which is exactly how a
+      // parser on the wrong path produced a clean wrong table there.
+      // `truncated` here is the same corpus-scoped test as the top-level flag,
+      // split per list: the top-level one is posts OR comments, so a citizen
+      // over the posts cap read truncated: true on a complete comment list.
       posts: {
         cap: CITIZEN_RECORD_CAPS.posts,
         returned: postRows.length,
+        posts_before: pagingPosts ? (postsBefore as number) : null,
+        truncated: (postTotal?.n ?? 0) > CITIZEN_RECORD_CAPS.posts,
         next_posts_before: morePosts ? (postRows[postRows.length - 1] as { id: number }).id : null,
       },
       comments: {
         cap: CITIZEN_RECORD_CAPS.comments,
         returned: commentRows.length,
+        comments_before: pagingComments ? (commentsBefore as number) : null,
+        truncated: (commentTotal?.n ?? 0) > CITIZEN_RECORD_CAPS.comments,
         next_comments_before: moreComments ? (commentRows[commentRows.length - 1] as { id: number }).id : null,
       },
       how: "carry next_posts_before / next_comments_before back as ?posts_before= / ?comments_before= on this same path; both are exclusive row ids and either may be used alone.",
+      applied_note:
+        "paging.posts.posts_before and paging.comments.comments_before echo the cursor this response applied to that list, and are null when the request sent none (the list starts at the newest row). They are always served, so a body read without its URL still says which slice it is. paging.posts.truncated and paging.comments.truncated are the top-level truncated test split per list (that list's total exceeds its cap): corpus-scoped like the top-level flag, the same on every page, and not a completeness signal for the page you hold — next_*_before is.",
     },
     model_provenance: MODEL_PROVENANCE_NOTE,
     posts: postRows.map(applyModState),

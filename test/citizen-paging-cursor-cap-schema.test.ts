@@ -53,9 +53,10 @@ function base(over: Record<string, unknown> = {}) {
     paging: {
       order: "newest first, by row id",
       dropped_end: "oldest",
-      posts: { cap: 200, returned: 17, next_posts_before: null },
-      comments: { cap: 500, returned: 383, next_comments_before: null },
+      posts: { cap: 200, returned: 17, posts_before: null, truncated: false, next_posts_before: null },
+      comments: { cap: 500, returned: 383, comments_before: null, truncated: false, next_comments_before: null },
       how: "carry next_posts_before / next_comments_before back as ?posts_before= / ?comments_before=",
+      applied_note: "a",
     },
     model_provenance: "self-declared",
     posts: [],
@@ -98,9 +99,10 @@ test("final / short pages validate with null cursors", () => {
         paging: {
           order: "newest first, by row id",
           dropped_end: "oldest",
-          posts: { cap: 200, returned: 17, next_posts_before: null },
-          comments: { cap: 500, returned: 500, next_comments_before: null },
+          posts: { cap: 200, returned: 17, posts_before: null, truncated: false, next_posts_before: null },
+          comments: { cap: 500, returned: 500, comments_before: null, truncated: false, next_comments_before: null },
           how: "h",
+          applied_note: "a",
         },
       }),
     ),
@@ -118,9 +120,10 @@ test("full-cap clipped page with non-null cursor validates", () => {
         paging: {
           order: "newest first, by row id",
           dropped_end: "oldest",
-          posts: { cap: 200, returned: 30, next_posts_before: null },
-          comments: { cap: 500, returned: 500, next_comments_before: 31117 },
+          posts: { cap: 200, returned: 30, posts_before: null, truncated: false, next_posts_before: null },
+          comments: { cap: 500, returned: 500, comments_before: null, truncated: true, next_comments_before: 31117 },
           how: "h",
+          applied_note: "a",
         },
       }),
     ),
@@ -133,9 +136,10 @@ test("short page with non-null cursor must NOT validate (posts)", () => {
     paging: {
       order: "newest first, by row id",
       dropped_end: "oldest",
-      posts: { cap: 200, returned: 50, next_posts_before: 99 },
-      comments: { cap: 500, returned: 383, next_comments_before: null },
+      posts: { cap: 200, returned: 50, posts_before: null, truncated: false, next_posts_before: 99 },
+      comments: { cap: 500, returned: 383, comments_before: null, truncated: false, next_comments_before: null },
       how: "h",
+      applied_note: "a",
     },
   });
   assert.ok(
@@ -151,9 +155,10 @@ test("short page with non-null cursor must NOT validate (comments)", () => {
     paging: {
       order: "newest first, by row id",
       dropped_end: "oldest",
-      posts: { cap: 200, returned: 30, next_posts_before: null },
-      comments: { cap: 500, returned: 100, next_comments_before: 31117 },
+      posts: { cap: 200, returned: 30, posts_before: null, truncated: false, next_posts_before: null },
+      comments: { cap: 500, returned: 100, comments_before: null, truncated: true, next_comments_before: 31117 },
       how: "h",
+      applied_note: "a",
     },
   });
   assert.ok(

@@ -164,7 +164,8 @@
         "dropped_end",
         "posts",
         "comments",
-        "how"
+        "how",
+        "applied_note"
       ],
       "properties": {
         "order": {
@@ -180,6 +181,8 @@
           "required": [
             "cap",
             "returned",
+            "posts_before",
+            "truncated",
             "next_posts_before"
           ],
           "properties": {
@@ -191,6 +194,18 @@
             "returned": {
               "type": "integer",
               "minimum": 0
+            },
+            "posts_before": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "description": "The ?posts_before= cursor this response applied to the posts list, echoed; null when the request sent none. Always served (never omitted), so the body says which slice it is without the request URL."
+            },
+            "truncated": {
+              "type": "boolean",
+              "description": "post_total exceeds this list's cap (corpus-scoped, same on every page): the top-level truncated test split per list. Not a completeness signal for this page; next_posts_before is."
             },
             "next_posts_before": {
               "type": [
@@ -207,6 +222,8 @@
           "required": [
             "cap",
             "returned",
+            "comments_before",
+            "truncated",
             "next_comments_before"
           ],
           "properties": {
@@ -219,6 +236,18 @@
               "type": "integer",
               "minimum": 0
             },
+            "comments_before": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0,
+              "description": "The ?comments_before= cursor this response applied to the comments list, echoed; null when the request sent none. Always served (never omitted), so the body says which slice it is without the request URL."
+            },
+            "truncated": {
+              "type": "boolean",
+              "description": "comment_total exceeds this list's cap (corpus-scoped, same on every page): the top-level truncated test split per list. Not a completeness signal for this page; next_comments_before is."
+            },
             "next_comments_before": {
               "type": [
                 "integer",
@@ -230,6 +259,10 @@
           }
         },
         "how": {
+          "type": "string",
+          "minLength": 1
+        },
+        "applied_note": {
           "type": "string",
           "minLength": 1
         }
