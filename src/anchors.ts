@@ -185,17 +185,39 @@ export async function baseWalletAddress(env: Env): Promise<string | null> {
   }
 }
 
-async function confirmBase(env: Env, txHash: string): Promise<"pending" | "confirmed" | "failed"> {
-  const { createPublicClient, http } = await import("viem");
+// "unknown" is the node answering that it has neither a receipt nor the
+// transaction itself: not in a block and not in its mempool. Any other error
+// (timeout, rate limit, a bad RPC) is "pending", because it says nothing about
+// the transaction.
+async function confirmBase(env: Env, txHash: string): Promise<BaseReceiptStatus> {
+  const { createPublicClient, http, TransactionNotFoundError, TransactionReceiptNotFoundError } = await import("viem");
   const { base } = await import("viem/chains");
   const client = createPublicClient({ chain: base, transport: http(env.BASE_RPC_PRIVATE_URL || env.BASE_RPC_URL || "https://mainnet.base.org") });
+  const hash = txHash as `0x${string}`;
   try {
-    const r = await client.getTransactionReceipt({ hash: txHash as `0x${string}` });
+    const r = await client.getTransactionReceipt({ hash });
     return r.status === "success" ? "confirmed" : "failed";
-  } catch {
+  } catch (e) {
+    if (!(e instanceof TransactionReceiptNotFoundError)) return "pending";
+  }
+  try {
+    await client.getTransaction({ hash });
     return "pending";
+  } catch (e) {
+    return e instanceof TransactionNotFoundError ? "unknown" : "pending";
   }
 }
+
+export type BaseReceiptStatus = "pending" | "confirmed" | "failed" | "unknown";
+
+// Base includes a transaction within seconds. One the node still has no record
+// of, mined or queued, this long after it was sent was dropped before
+// inclusion (live rows 11615, 12297 and 14583 were unknown to Base days later).
+// The row is recorded failed with that reason and keeps its 0x target, which
+// still blocks a re-send for its checkpoint. Left pending, a dropped row held
+// one of the two confirmation slots each pass, oldest first, forever, and two
+// of them stopped every later Base row from confirming.
+export const BASE_DROPPED_MS = 60 * 60 * 1000;
 
 // A pending authenticated capture is a job the archive is still running. One
 // per pass, the oldest first: success rewrites the row to the capture URL,
@@ -245,7 +267,7 @@ export interface AnchorReport {
 export interface AnchorDeps {
   fetch: typeof fetch;
   submitBase: (env: Env, payload: string) => Promise<string>;
-  confirmBase: (env: Env, txHash: string) => Promise<"pending" | "confirmed" | "failed">;
+  confirmBase: (env: Env, txHash: string) => Promise<BaseReceiptStatus>;
 }
 export const REAL_DEPS: AnchorDeps = { fetch: (...a) => fetch(...a), submitBase, confirmBase };
 
@@ -300,11 +322,19 @@ export async function anchorCheckpoints(env: Env, now = Date.now(), deps: Anchor
   // Confirmations: pending Base rows older than a minute, two per cycle.
   if (env.ANCHOR_BASE_KEY) {
     const pend = (
-      await env.DB.prepare("SELECT id, target FROM anchors WHERE kind = 'base' AND status = 'pending' AND created_at < ? ORDER BY id ASC LIMIT 2").bind(now - 60_000).all<{ id: number; target: string }>()
+      await env.DB.prepare("SELECT id, target, created_at FROM anchors WHERE kind = 'base' AND status = 'pending' AND created_at < ? ORDER BY id ASC LIMIT 2").bind(now - 60_000).all<{ id: number; target: string; created_at: number }>()
     ).results;
     for (const p of pend) {
       const s = await deps.confirmBase(env, p.target);
       if (s === "pending") continue;
+      if (s === "unknown") {
+        if (now - p.created_at < BASE_DROPPED_MS) continue;
+        await env.DB.prepare("UPDATE anchors SET status = 'failed', error = ? WHERE id = ? AND status = 'pending'")
+          .bind(`dropped: Base had no receipt and no transaction for this hash ${Math.floor((now - p.created_at) / 60_000)} min after it was sent`, p.id)
+          .run();
+        report.failed++;
+        continue;
+      }
       await env.DB.prepare("UPDATE anchors SET status = ?, confirmed_at = ? WHERE id = ?").bind(s, s === "confirmed" ? now : null, p.id).run();
       if (s === "confirmed") report.confirmed++; else report.failed++;
     }
