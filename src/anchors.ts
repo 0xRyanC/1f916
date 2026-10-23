@@ -218,7 +218,7 @@ interface DecodedTail {
 // one of those is a bail-out, and a bail-out row simply stays pending.
 export async function decodeOtsTail(stamp: Uint8Array, msg: Uint8Array): Promise<DecodedTail | null> {
   let pos = 0;
-  let m = msg.slice();
+  let m: Uint8Array = msg.slice();
   for (;;) {
     if (pos >= stamp.length) return null;
     const b = stamp[pos];
