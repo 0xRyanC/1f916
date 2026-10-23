@@ -158,6 +158,47 @@ async function submitOts(f: typeof fetch, calendar: string, digest: Uint8Array):
   return bytes;
 }
 
+// An OpenTimestamps proof is upgraded by handing the calendar the calendar
+// timestamp it issued (the tail of the detached file, after magic + version +
+// hash op + digest) and receiving the same timestamp with the attestation ops
+// it has accumulated since — a BitcoinBlockHeaderAttestation once the batch
+// has been mined. The calendar's answer replaces the tail; a proof whose tail
+// carries no attestation yet is left alone and asked again on a later pass.
+// Issue #517: until this pass existed every OTS row stayed `pending` forever.
+export const BITCOIN_ATTESTATION_TAG = new Uint8Array([0x83, 0xdf, 0xd3, 0x07]);
+
+export function hasBitcoinAttestation(proof: Uint8Array): boolean {
+  outer: for (let i = 0; i + BITCOIN_ATTESTATION_TAG.length <= proof.length; i++) {
+    for (let j = 0; j < BITCOIN_ATTESTATION_TAG.length; j++) {
+      if (proof[i + j] !== BITCOIN_ATTESTATION_TAG[j]) continue outer;
+    }
+    return true;
+  }
+  return false;
+}
+
+// The prefix of a stored proof that is NOT the calendar timestamp: OTS_MAGIC
+// (header), the major version varint, the hash op tag, and the 32-byte digest.
+const OTS_FILE_STAMP_OFFSET = OTS_MAGIC.length + 1 + 1 + 32;
+
+export function splitOtsProof(proof: Uint8Array): { prefix: Uint8Array; stamp: Uint8Array } {
+  if (proof.length <= OTS_FILE_STAMP_OFFSET) throw new Error("ots proof too short to contain a calendar timestamp");
+  return { prefix: proof.slice(0, OTS_FILE_STAMP_OFFSET), stamp: proof.slice(OTS_FILE_STAMP_OFFSET) };
+}
+
+async function upgradeOts(f: typeof fetch, calendar: string, stamp: Uint8Array): Promise<Uint8Array> {
+  const res = await f(`${calendar}/timestamp`, {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/vnd.opentimestamps.v1", "user-agent": "1f916-anchor/1" },
+    body: stamp,
+  });
+  if (!res.ok) throw new Error(`calendar ${res.status}`);
+  const bytes = new Uint8Array(await res.arrayBuffer());
+  if (bytes.length === 0) throw new Error("calendar returned an empty timestamp");
+  return bytes;
+}
+
+
 // Base: a zero-value transaction from the anchoring wallet to itself with the
 // payload as calldata. The wallet is a dedicated pocket-change key, never the
 // treasury. Unset secret means no Base anchoring and nothing is attempted.
@@ -235,6 +276,7 @@ export interface AnchorReport {
   recorded: number;
   failed: number;
   confirmed: number;
+  ots_upgraded: number;
   base_enabled: boolean;
   archive_keys: boolean;
 }
@@ -250,7 +292,7 @@ export interface AnchorDeps {
 export const REAL_DEPS: AnchorDeps = { fetch: (...a) => fetch(...a), submitBase, confirmBase };
 
 export async function anchorCheckpoints(env: Env, now = Date.now(), deps: AnchorDeps = REAL_DEPS): Promise<AnchorReport> {
-  const report: AnchorReport = { attempted: 0, recorded: 0, failed: 0, confirmed: 0, base_enabled: Boolean(env.ANCHOR_BASE_KEY), archive_keys: Boolean(env.ARCHIVE_ORG_ACCESS && env.ARCHIVE_ORG_SECRET) };
+  const report: AnchorReport = { attempted: 0, recorded: 0, failed: 0, confirmed: 0, ots_upgraded: 0, base_enabled: Boolean(env.ANCHOR_BASE_KEY), archive_keys: Boolean(env.ARCHIVE_ORG_ACCESS && env.ARCHIVE_ORG_SECRET) };
   const latest = await latestCheckpointRows(env);
   if (latest.length === 0) return report;
   const ids = latest.map((c) => c.id);
@@ -309,6 +351,37 @@ export async function anchorCheckpoints(env: Env, now = Date.now(), deps: Anchor
       if (s === "confirmed") report.confirmed++; else report.failed++;
     }
   }
+  // OTS upgrades: pending OpenTimestamps rows older than an hour, two per pass,
+  // oldest first. The calendars batch into Bitcoin about once an hour, so
+  // asking sooner is almost always a wasted round trip. A calendar error or a
+  // not-yet-upgraded answer leaves the row untouched — it stays pending and is
+  // asked again on a later pass, exactly like a Base transaction not yet seen.
+  // A row is only rewritten when its proof now carries a Bitcoin attestation,
+  // and the completed proof is stored so a reader no longer depends on the
+  // calendar still holding the commitment (issue #517).
+  const otsPend = (
+    await env.DB.prepare("SELECT id, target, proof FROM anchors WHERE kind = 'ots' AND status = 'pending' AND proof IS NOT NULL AND created_at < ? ORDER BY id ASC LIMIT 2").bind(now - 60 * 60 * 1000).all<{ id: number; target: string; proof: string }>()
+  ).results;
+  for (const p of otsPend) {
+    try {
+      const proof = unb64(p.proof);
+      const { prefix, stamp } = splitOtsProof(proof);
+      const upgraded = await upgradeOts(deps.fetch, p.target, stamp);
+      if (!hasBitcoinAttestation(upgraded)) continue;
+      const merged = new Uint8Array(prefix.length + upgraded.length);
+      merged.set(prefix, 0);
+      merged.set(upgraded, prefix.length);
+      await env.DB.prepare("UPDATE anchors SET proof = ?, status = 'confirmed', confirmed_at = ? WHERE id = ? AND status = 'pending'").bind(b64(merged), now, p.id).run();
+      report.confirmed++;
+      report.ots_upgraded++;
+    } catch {
+      // A dead calendar is not an anchor failure: the row keeps its pending
+      // status and its next turn comes on a later pass. Recording an `error`
+      // here would overwrite nothing useful — the row's error column documents
+      // the original attempt, not the upgrade polls.
+      continue;
+    }
+  }
   // Archive jobs: one pending authenticated capture per pass, oldest first.
   if (env.ARCHIVE_ORG_ACCESS && env.ARCHIVE_ORG_SECRET) {
     const job = await env.DB.prepare("SELECT id, target FROM anchors WHERE kind = 'archive' AND status = 'pending' ORDER BY id ASC LIMIT 1").first<{ id: number; target: string }>();
@@ -357,7 +430,7 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
     what_this_is:
       "The newest checkpoint of each log, offered every five minutes to the targets listed under `targets`: three OpenTimestamps calendars (the Bitcoin blockchain), the Base blockchain when an anchoring wallet is configured, and the Internet Archive at most once every 55 minutes: one capture of GET /api/checkpoint, the page that carries both heads, recorded as an anchor of the identity log's head only. Every attempt, made or refused, is a row here with its status and error. Checkpoints from before the first anchoring pass were never offered.",
     what_an_anchor_proves:
-      "A confirmed anchor proves that the exact checkpoint text existed by that time and has not changed since. An OpenTimestamps row stays `pending` here permanently: this server records the calendar's incomplete proof at submission and has no pass that upgrades it, so an OTS row's `status` never flips and its `confirmed_at` stays null even once the calendar's Bitcoin transaction has been mined. `pending` on an OTS row therefore means 'recorded here, complete it yourself', NOT 'not yet in a block' — run `ots upgrade` on the served /api/anchors/<id>.ots file to fetch the Bitcoin attestation from the calendar (see how_to_verify.ots). A pending Base row, by contrast, is a transaction not yet seen in a block and does flip to confirmed once seen; a failed row proves only that the attempt was made and refused. No anchor says anything about whether what the checkpoint covers is true.",
+      "A confirmed anchor proves that the exact checkpoint text existed by that time and has not changed since. An OpenTimestamps row starts `pending`: this server records the calendar's incomplete proof at submission, and a later pass asks the row's calendar for the upgrade — usually within a few hours of submission, once the calendar's Bitcoin transaction has been mined. When the completed proof carries a Bitcoin attestation, the row flips to `confirmed`, `confirmed_at` names the instant this server stored it, and the full proof is kept here, so a reader verifies it from the served file alone and never from the calendar's word. Until then `pending` means 'submitted, not yet in a block' and `ots upgrade` on the served /api/anchors/<id>.ots file fetches the attestation yourself (see how_to_verify.ots). A pending Base row, by contrast, is a transaction not yet seen in a block and does flip to confirmed once seen; a failed row proves only that the attempt was made and refused. No anchor says anything about whether what the checkpoint covers is true.",
     targets: {
       ots_calendars: OTS_CALENDARS,
       base: Boolean(env.ANCHOR_BASE_KEY),
@@ -366,7 +439,7 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
     },
     anchored_text: "the checkpoint's signed payload, byte for byte: 1f916.checkpoint.v1:<log>:<tree_size>:<root>:<created_at>. GET /api/anchors/<id>.txt serves it.",
     how_to_verify: {
-      ots: "GET /api/anchors/<id>.txt as payload.txt and /api/anchors/<id>.ots as payload.txt.ots, then `ots verify payload.txt.ots` with the standard OpenTimestamps client (opentimestamps.org). The registry serves the pending file it received and never upgrades it, so the row stays `status: pending` with a null `confirmed_at` here even after the calendar's Bitcoin transaction is mined; `ots upgrade payload.txt.ots` fetches the completed proof from the calendar and is how you confirm it yourself.",
+      ots: "GET /api/anchors/<id>.txt as payload.txt and /api/anchors/<id>.ots as payload.txt.ots, then `ots verify payload.txt.ots` with the standard OpenTimestamps client (opentimestamps.org). A row still `status: pending` here has its submitted proof served; this server asks the calendar for the upgrade on later passes, and once the row reads `confirmed` the served file carries the completed Bitcoin attestation — `ots upgrade payload.txt.ots` fetches it yourself if you would rather not wait for this server's pass.",
       base: "target is the Base transaction hash. Read the transaction's input data on any Base node or explorer and decode it as UTF-8: it is the payload text. The sender is the anchoring wallet, a dedicated pocket-change key that is not the treasury." +
         (baseAddress
           ? ` That wallet is ${baseAddress} (targets.base_address): list its outgoing transactions on any Base node or explorer and compare them with this table, so a checkpoint payload sent from it that is missing here, or two different payloads for one tree size, is visible without trusting this server.`
