@@ -16,6 +16,8 @@
 //   - serve the raw calendar response as the whole proof: the served file no
 //     longer parses as a detached file (it must be prefix + stamp-prefix +
 //     upgraded terminal node), red.
+//   - drop stamp.slice(0, decoded.attestationStart) in the splice (`concatBytes(prefix, upgraded)`):
+//     the digest-to-commitment op chain vanishes from the stored proof, red.
 //   - confirm on a response WITHOUT the attestation tag: a pending row flips
 //     on an unmined batch, red.
 //   - skip the UPDATE: rows stay pending and ots_upgraded stays 0, red.
@@ -67,18 +69,18 @@ function fixture(rows: { id: number; checkpoint: number; target: string; proof: 
   return { env, db };
 }
 
-// A stored proof whose tail decodes to the minimal shape: terminal `00` +
-// pending attestation, no ops — so the attestee message IS the file digest,
-// known to the test before the pass runs.
-async function seedProof(digestSeed: number): Promise<{ proof: string; digest: Uint8Array }> {
+// Non-empty digest-to-commitment op chain (append 0x41 -> sha256 -> prepend 0x4243 -> sha256)
+// before the terminal pending node, matching the shape real calendars return.
+const OP_CHAIN = new Uint8Array([0xf0, 0x01, 0x41, 0x08, 0xf1, 0x02, 0x42, 0x43, 0x08]);
+
+async function seedProof(digestSeed: number): Promise<{ proof: string; digest: Uint8Array; attestee: Uint8Array; prefix: Uint8Array }> {
   const digest = await sha256Bytes(`seed-${digestSeed}`);
-  const uri = new TextEncoder().encode(CAL);
-  const tail = new Uint8Array(1 + 8 + 1 + uri.length);
-  tail[0] = 0x00;
-  tail.set([0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e], 1);
-  tail[9] = uri.length;
-  tail.set(uri, 10);
-  return { proof: b64(otsFile(digest, tail)), digest };
+  const step1 = new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array([...digest, 0x41])));
+  const attestee = new Uint8Array(await crypto.subtle.digest("SHA-256", new Uint8Array([0x42, 0x43, ...step1])));
+  const tail = new Uint8Array([...OP_CHAIN, ...PENDING_NODE]);
+  const full = otsFile(digest, tail);
+  const prefix = full.slice(0, full.length - tail.length);
+  return { proof: b64(full), digest, attestee, prefix };
 }
 
 function depsWith(upgradeResponse: () => Response, calls: string[]): AnchorDeps {
@@ -130,7 +132,7 @@ test("decodeOtsTail refuses shapes the pass must not rewrite", async () => {
 });
 
 test("a pending OTS row older than an hour upgrades and confirms when the calendar returns a Bitcoin attestation", async () => {
-  const { proof, digest } = await seedProof(1);
+  const { proof, attestee, prefix } = await seedProof(1);
   const { env, db } = fixture([{ id: 1, checkpoint: 10, target: CAL, proof, age_ms: 2 * HOUR }]);
   const calls: string[] = [];
   const report = await anchorCheckpoints(env, T0, depsWith(() => new Response(UPGRADED_NODE, { status: 200 }), calls));
@@ -138,17 +140,15 @@ test("a pending OTS row older than an hour upgrades and confirms when the calend
   assert.equal(report.ots_upgraded, 1);
   assert.equal(report.confirmed, 1);
   const stampCalls = calls.filter((c) => c.includes("/timestamp/"));
-  assert.deepEqual(stampCalls, [`GET ${CAL}/timestamp/${Buffer.from(digest).toString("hex")}`]);
+  assert.deepEqual(stampCalls, [`GET ${CAL}/timestamp/${Buffer.from(attestee).toString("hex")}`]);
   const row = db.prepare("SELECT status, confirmed_at, proof FROM anchors WHERE id = 1").get() as { status: string; confirmed_at: number; proof: string };
   assert.equal(row.status, "confirmed");
   assert.equal(row.confirmed_at, T0);
-  // The stored proof is the original file prefix and stamp up to the terminal
-  // node, plus the upgraded terminal node: still a detached-timestamp file
-  // carrying the digest, now with the attestation.
+  // The stored proof must equal prefix + stamp[0:attestationStart] + upgraded
+  // byte for byte, preserving the non-empty digest-to-commitment op chain.
   const stored = Buffer.from(row.proof, "base64");
   assert.ok(hasBitcoinAttestation(new Uint8Array(stored)));
-  const original = Buffer.from(proof, "base64");
-  assert.deepEqual([...stored.slice(0, original.length - PENDING_NODE.length)], [...original.slice(0, original.length - PENDING_NODE.length)]);
+  assert.deepEqual([...stored], [...prefix, ...OP_CHAIN, ...UPGRADED_NODE]);
 });
 
 test("a calendar answer without a Bitcoin attestation leaves the row pending and untouched", async () => {
