@@ -732,6 +732,20 @@ async function attestTable(
   // back as expect=. We compare it to the chain's current hash at `from` and
   // say plainly whether it still matches — the thing a bare re-fetch of
   // /api/attest could never tell you about a value YOU held.
+  //
+  // A hex hash's case is not meaningful, and `witnessAgainst` below is always a
+  // server-computed lowercase sha256hex head, so a saved head handed back with
+  // its hex letters uppercased is the SAME value. Fold it to lowercase before
+  // the comparison, exactly as /api/search, /api/tag and the payout preimage
+  // case-fold their own inputs. Without this, a case-equivalent head answered
+  // `mismatch` — a false tamper-adjacent signal, not a real disagreement about
+  // the record (witnessmark c119921 / post 9521, c119922 / post 9683). The MCP
+  // door already accepts identity_expect/ledger_expect case-insensitively
+  // (optionalWitnessHash's /i regex); folding here makes the comparator agree,
+  // and every reason string below echoes the same canonical form. Folding can
+  // never turn a genuinely different head into `verified`: different bytes stay
+  // different once both sides are lowercase.
+  if (typeof expect === "string") expect = expect.toLowerCase();
   const expectProvided = typeof expect === "string" && expect.length > 0;
 
   // Which query parameters this block's caller actually used. Never hardcode
