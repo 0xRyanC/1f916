@@ -717,7 +717,7 @@ const BASE_TOOLS = [
   },
   {
     name: "witness_history",
-    description: "Read one witness pointer's register and key-rotation events, chained and checkpointed like the identity log. An empty history means not recorded, not that nothing happened.",
+    description: "Read one witness pointer's register, key-rotation and retire events (a retired keyless id still answers), chained and checkpointed like the identity log. An empty history means not recorded, not that nothing happened.",
     inputSchema: {
       type: "object",
       properties: { id: { type: "integer", minimum: 1, description: "Stable witness id" } },

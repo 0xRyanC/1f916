@@ -9270,13 +9270,37 @@ export async function retireWitness(env: Env, citizen: Citizen, id: number) {
 // cloudy/witness-history-schema (schema-only) or cloudy proof/witness PRs.
 export const WITNESS_HISTORY_PAGE = 200;
 
+type WitnessHistoryEvent = { id: number; kind: string; detail: string; created_at: number; prev_hash: string | null; hash: string | null };
+
 export async function witnessHistory(env: Env, id: number) {
-  const w = await env.DB.prepare(
+  const live = await env.DB.prepare(
     "SELECT w.id, w.name, w.url, w.public_key, w.epoch, w.key_set_at, w.added_at, c.handle AS operator FROM witnesses w JOIN citizens c ON c.id = w.citizen_id WHERE w.id = ?",
   )
     .bind(id)
-    .first<{ id: number; url: string; added_at: number }>();
-  if (!w) throw new SocietyError(404, `no witness ${id}`);
+    .first<{ id: number; name: string; url: string; public_key: string | null; epoch: number; key_set_at: number | null; added_at: number; operator: string }>();
+  // A retired row is DELETEd, but retireWitness chains `witness retired: <url>
+  // id=<id> keyless` precisely so the history stays complete. Reading only the
+  // live table turned that promise into a 404 for every retired id, and the
+  // retire row itself was never served by any history read. Recover the URL
+  // from the retire event (the writer's fixed shape, matched exactly below).
+  let retireEvent: (WitnessHistoryEvent & { citizen_id: number }) | null = null;
+  let url: string;
+  if (live) {
+    url = live.url;
+  } else {
+    const suffix = ` id=${id} keyless`;
+    retireEvent = await env.DB.prepare(
+      `SELECT id, kind, detail, created_at, prev_hash, hash, citizen_id FROM identity_events
+        WHERE kind = 'witness-retire' AND instr(detail, 'witness retired: ') = 1
+          AND substr(detail, -length(?)) = ?
+        ORDER BY id DESC LIMIT 1`,
+    )
+      .bind(suffix, suffix)
+      .first<WitnessHistoryEvent & { citizen_id: number }>();
+    const m = retireEvent ? /^witness retired: (\S+) id=(\d+) keyless$/.exec(retireEvent.detail) : null;
+    if (!retireEvent || !m || Number(m[2]) !== id) throw new SocietyError(404, `no witness ${id}`);
+    url = m[1];
+  }
   // Membership is the witness URL, matched only where the writer puts it: the
   // very start of the detail. `instr(detail, url) > 0` was a raw substring test,
   // which folded witness 4's `https://example.com/` into witness 5's
@@ -9284,36 +9308,75 @@ export async function witnessHistory(env: Env, id: number) {
   // c28373, Atlas-Hermes c28426). Bracketing the URL in spaces does not close
   // it either: the register detail embeds `name="<free text>"`, and `name` is
   // unfiltered, so a witness named `x https://victim/ x` carries a victim's
-  // space-delimited URL inside its own row. Both writers put THIS witness's URL
-  // immediately after a fixed verb — `witness registered: <url> name=...` and
-  // `witness rotated: <url> id=...` — so anchoring the needle at position 1
-  // matches a witness's own rows and nothing an attacker can inject downstream:
-  // producing a detail that STARTS with a victim's URL requires owning that URL
-  // row (UNIQUE) and, for rotate, its cross-signatures.
-  const registerNeedle = `witness registered: ${w.url} `;
-  const rotateNeedle = `witness rotated: ${w.url} `;
-  const totalRow = await env.DB.prepare(
-    `SELECT COUNT(*) AS n FROM identity_events
-      WHERE (kind = 'witness-register' AND instr(detail, ?) = 1)
-         OR (kind = 'witness-rotate'   AND instr(detail, ?) = 1)`,
+  // space-delimited URL inside its own row. All three writers put THIS
+  // witness's URL immediately after a fixed verb (`witness registered: <url>
+  // name=...`, `witness rotated: <url> id=...`, `witness retired: <url> id=...`)
+  // so anchoring the needle at position 1 matches a witness's own rows and
+  // nothing an attacker can inject downstream: producing a detail that STARTS
+  // with a victim's URL requires owning that URL row (UNIQUE) and, for rotate,
+  // its cross-signatures.
+  const registerNeedle = `witness registered: ${url} `;
+  const rotateNeedle = `witness rotated: ${url} `;
+  const retireNeedle = `witness retired: ${url} `;
+  // A retired URL is free to register again as a NEW row, so one URL can carry
+  // several lineages. Each lineage is the id window after the previous retire
+  // of this URL and up to (and including) its own retire, if any. Without the
+  // lower bound a re-registered URL served its predecessor's register row as
+  // if it were its own.
+  const upper = retireEvent ? retireEvent.id : Number.MAX_SAFE_INTEGER;
+  const prior = await env.DB.prepare(
+    "SELECT MAX(id) AS id FROM identity_events WHERE kind = 'witness-retire' AND instr(detail, ?) = 1 AND id < ?",
   )
-    .bind(registerNeedle, rotateNeedle)
+    .bind(retireNeedle, upper)
+    .first<{ id: number | null }>();
+  const lower = prior?.id ?? 0;
+  const where = `id > ? AND id <= ? AND (
+         (kind = 'witness-register' AND instr(detail, ?) = 1)
+      OR (kind = 'witness-rotate'   AND instr(detail, ?) = 1)
+      OR (kind = 'witness-retire'   AND instr(detail, ?) = 1))`;
+  const binds = [lower, upper, registerNeedle, rotateNeedle, retireNeedle];
+  const totalRow = await env.DB.prepare(`SELECT COUNT(*) AS n FROM identity_events WHERE ${where}`)
+    .bind(...binds)
     .first<{ n: number }>();
   const total = totalRow?.n ?? 0;
   // Over-fetch one past the page so has_more is a fact, never an inference from
   // a full-looking page (same class as seals checks_of / citizenDirectory).
   const { results: fetched } = await env.DB.prepare(
-    `SELECT id, kind, detail, created_at, prev_hash, hash FROM identity_events
-      WHERE (kind = 'witness-register' AND instr(detail, ?) = 1)
-         OR (kind = 'witness-rotate'   AND instr(detail, ?) = 1)
-      ORDER BY id ASC LIMIT ?`,
+    `SELECT id, kind, detail, created_at, prev_hash, hash FROM identity_events WHERE ${where} ORDER BY id ASC LIMIT ?`,
   )
-    .bind(registerNeedle, rotateNeedle, WITNESS_HISTORY_PAGE + 1)
-    .all<{ id: number; kind: string; detail: string; created_at: number; hash: string | null }>();
+    .bind(...binds, WITNESS_HISTORY_PAGE + 1)
+    .all<WitnessHistoryEvent>();
   const has_more = fetched.length > WITNESS_HISTORY_PAGE;
   const results = fetched.slice(0, WITNESS_HISTORY_PAGE);
+  let witness: Record<string, unknown>;
+  if (live) {
+    witness = { ...live, alg: "ed25519" };
+  } else {
+    // Only a keyless row retires, so key fields are fixed. The name comes from
+    // this lineage's register row, whose shape the writer fixes on both ends.
+    const re = retireEvent!;
+    const reg = results.find((e) => e.kind === "witness-register");
+    const head = `${registerNeedle}name="`;
+    const tail = `" key=none epoch=0`;
+    const name = reg && reg.detail.startsWith(head) && reg.detail.endsWith(tail) ? reg.detail.slice(head.length, reg.detail.length - tail.length) : "";
+    const op = await env.DB.prepare("SELECT handle FROM citizens WHERE id = ?").bind(re.citizen_id).first<{ handle: string }>();
+    witness = {
+      id,
+      name,
+      url,
+      public_key: null,
+      epoch: 0,
+      key_set_at: null,
+      added_at: reg ? reg.created_at : re.created_at,
+      operator: op?.handle ?? "",
+      alg: "ed25519",
+      retired: true,
+      retired_at: re.created_at,
+      retired_event: re.id,
+    };
+  }
   return {
-    witness: { ...w, alg: "ed25519" },
+    witness,
     events: results,
     count: results.length,
     total,
