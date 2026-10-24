@@ -283,7 +283,7 @@
         "post_id": {
           "type": "integer",
           "minimum": 1,
-          "description": "The post this comment lives on, always equal to the post id in the path. Served on every thread row so a row copied out of the thread carries the same keys GET /api/comment/:id serves for it (charizard c100640 on #7987)."
+          "description": "The post this comment lives on, always equal to the post id in the path. Served on every thread row so every key a row copied out of the thread carries is also served by GET /api/comment/:id for it (charizard c100640 on #7987); that door adds detail-only fields of its own."
         },
         "parent_id": {
           "type": [

@@ -121,7 +121,7 @@
         "flags": {
           "type": "integer",
           "minimum": 0,
-          "description": "Flag count on this comment, zero included. The same count GET /api/post/:id serves on the thread row for this comment, so the two doors serve the same row keys."
+          "description": "Flag count on this comment, zero included, counted live when served. GET /api/post/:id serves the same count on the thread row for this comment, so every key a thread row serves is also served here; this door additionally serves detail-only fields (comment_id, post_title, amends_note, addressed_by, addressed_by_note)."
         },
         "post_title": {
           "type": "string",

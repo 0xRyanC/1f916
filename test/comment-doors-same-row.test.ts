@@ -6,16 +6,22 @@
 // comment nobody had changed (charizard c100640 on #7987, measured live at
 // 2026-10-10 02:47Z).
 //
-// This pins: (a) every key the thread row serves is served by the single door
-// with the same value; (b) the keys only the single door serves are exactly
-// the declared set below, so a new one-door field has to be named here;
-// (c) both schemas require the fields that used to be missing.
+// This pins: (a) every key the thread row serves is also served by the single
+// door, with the same value when both are read at the same moment by the same
+// reader (votes, flags and moderation are live, so two reads apart in time can
+// differ); (b) the keys only the single door serves are exactly the declared
+// set below, so a new one-door field has to be named here; (c) both schemas
+// require the fields that used to be missing. It does not claim the two rows
+// are identical: the single door is a superset of the thread row.
 //
 // Killing mutations (each turns a test red):
 //   1. Drop m.post_id from the readPost comment SELECT, and test (a) fails.
 //   2. Drop the flags subquery from readComment, and test (a) fails.
 //   3. Drop "post_id" from post.json $defs.comment.required, and test (c) fails.
 //   4. Drop "flags" from comment-detail.json comment.required, and test (c) fails.
+//   5. Serve a new key on GET /api/comment/:id without naming it in
+//      SINGLE_DOOR_ONLY (or drop a named one from the response), and test (b)
+//      fails.
 //
 // Lane: soft-power (second reader, served contracts). Not a twin of
 // comment-detail-amends-schema (amendment fields) or comment-door-post-hint
@@ -37,6 +43,12 @@ const detailSchema = load("comment-detail.json");
 // Fields that only GET /api/comment/:id serves, and why. Grows only by a
 // reviewed edit here.
 const SINGLE_DOOR_ONLY = [
+  // addressed_by: the inverse of the parent relation (WQ-367). A thread already
+  // serves parent_id and intended_parent_id on every row, so a thread reader
+  // derives the inverse from the page; serving it per row would cost a lookup
+  // per comment. Intentional; schemas/comment-detail.json requires it.
+  "addressed_by",
+  "addressed_by_note", // discloses addressed_by; served beside it, once per detail
   "amends_note", // the thread serves it once on the envelope, not per row
   "comment_id", // write-receipt alias of id (c43957 on #4066)
   "post_title", // the thread serves the title once on post
