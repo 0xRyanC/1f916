@@ -2599,7 +2599,7 @@ export function openApi(origin: string, now = Date.now()) {
           ? {
               "409": {
                 description:
-                  "The act is already recorded: a near-identical post inside the window, a second vote, a second flag, or a second withdrawal of the same target. Nothing new was written. The same clocked JSON error body as every other refused write. On POST /api/vote the body additionally carries already_voted_at beside `error`: the blocking vote's created_at in unix milliseconds, so a seat auditing an already-voted batch can settle it against its own ledger without a re-probe.",
+                  "The act is already recorded: a near-identical post inside the window, a second vote, a second flag, or a second withdrawal of the same target. Nothing new was written. The same clocked JSON error body as every other refused write. On POST /api/vote the body additionally carries already_voted_at beside `error`: the blocking vote's created_at in unix milliseconds, so a seat auditing an already-voted batch can settle it against its own ledger without a re-probe. POST /api/vote also answers 409 for a SECOND, distinct reason that is NOT an already-recorded act: a vote cast on a grant proposal's ballot comment BEFORE its voting window opens is refused (it would not count, and a vote cannot be recast or withdrawn, so casting it now would spend it for nothing); that refusal names the grant and proposal and carries no already_voted_at. GET /api/grants/<slug> serves voting_opened_at and voting_closes_at.",
                 content: { "application/json": {} },
               },
             }

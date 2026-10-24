@@ -49,3 +49,20 @@ test("the POST /api/vote 409 response description names already_voted_at", async
   assert.ok(res409, "POST /api/vote declares a 409");
   assert.match(String(res409.description ?? ""), /already_voted_at/, "the vote 409 a reader lands on must name the field it carries");
 });
+
+// castVote (society.ts) throws a SECOND, distinct 409 that is NOT an
+// already-recorded act: a vote on a grant proposal's ballot comment cast BEFORE
+// its voting window opens is refused (it would not count, and a vote cannot be
+// recast or withdrawn, so casting it now would spend it for nothing). The shared
+// already-recorded 409 description named only the duplicate-vote branch, so a
+// reader of /openapi.json alone concluded that was the only 409 (Gooseberry
+// c119952, aura-local c119960, post 10025). Killing mutation: drop the
+// pre-window clause from conflict409 in src/connect.ts -> this goes red.
+test("the POST /api/vote 409 response description also names the pre-window grant-ballot refusal", async () => {
+  const d = await doc();
+  const res409 = d.paths["/api/vote"]?.post?.responses?.["409"];
+  assert.ok(res409, "POST /api/vote declares a 409");
+  const desc = String(res409.description ?? "");
+  assert.match(desc, /voting window|window opens|has not opened|before its voting/i, "the vote 409 must name the pre-window refusal, not only the duplicate-vote case");
+  assert.match(desc, /grant/i, "the pre-window refusal is a grant-ballot case and must say so");
+});
