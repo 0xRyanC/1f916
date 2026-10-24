@@ -37,10 +37,15 @@ const T0 = 1_790_000_000_000;
 const HOUR = 60 * 60 * 1000;
 const CAL = "https://alice.btc.calendar.opentimestamps.org";
 
-// A plausible upgraded terminal node: the calendar's current serialization for
-// the attestee message once the batch is mined — no ops, a bitcoin attestation
-// (tag 83dfd307) carrying an 8-byte block height.
-const UPGRADED_NODE = new Uint8Array([0x00, 0x83, 0xdf, 0xd3, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x87, 0x6d, 0x2c]);
+// An upgraded terminal node in the format a calendar serves once the batch is
+// mined: no ops, then 00, the BitcoinBlockHeaderAttestation tag
+// 0588960d73d71901 (python-opentimestamps core/notary.py), and its payload as
+// varbytes: length 3, then the block height 900000 as a varuint (a0 f7 36).
+const BITCOIN_TAG = [0x05, 0x88, 0x96, 0x0d, 0x73, 0xd7, 0x19, 0x01];
+const UPGRADED_NODE = new Uint8Array([0x00, ...BITCOIN_TAG, 0x03, 0xa0, 0xf7, 0x36]);
+// The four bytes 83 df d3 07 are not an OpenTimestamps tag. An answer built
+// around them is not a Bitcoin attestation and must not confirm a row.
+const NOT_A_TAG_NODE = new Uint8Array([0x00, 0x83, 0xdf, 0xd3, 0x07, 0x00, 0x00, 0x00, 0x00, 0x00, 0x87, 0x6d, 0x2c]);
 // Same shape, no attestation: the calendar still holds only a pending one.
 const PENDING_NODE = (() => {
   const uri = new TextEncoder().encode(CAL);
@@ -124,7 +129,7 @@ test("decodeOtsTail refuses shapes the pass must not rewrite", async () => {
   // A branch separator: not produced by a direct digest submission.
   assert.equal(await decodeOtsTail(new Uint8Array([0xff, 0x08, 0x00, ...pendTag, uri.length, ...uri]), digest), null);
   // Already-terminal bitcoin attestation instead of a pending one.
-  assert.equal(await decodeOtsTail(new Uint8Array([0x00, 0x83, 0xdf, 0xd3, 0x07, 0, 0, 0, 0, 0, 1, 2, 3]), digest), null);
+  assert.equal(await decodeOtsTail(new Uint8Array([0x00, ...BITCOIN_TAG, 0x03, 0xa0, 0xf7, 0x36]), digest), null);
   // Unsupported op.
   assert.equal(await decodeOtsTail(new Uint8Array([0x67, 0x00, ...pendTag, uri.length, ...uri]), digest), null);
   // Trailing garbage after the terminal node.
@@ -163,6 +168,24 @@ test("a calendar answer without a Bitcoin attestation leaves the row pending and
   assert.equal(row.status, "pending");
   assert.equal(row.confirmed_at, null);
   assert.equal(row.proof, proof, "the stored proof must not change without an attestation");
+});
+
+test("hasBitcoinAttestation knows the real eight-byte tag and nothing else", () => {
+  assert.equal(hasBitcoinAttestation(UPGRADED_NODE), true);
+  assert.equal(hasBitcoinAttestation(PENDING_NODE), false);
+  assert.equal(hasBitcoinAttestation(NOT_A_TAG_NODE), false);
+});
+
+test("an answer carrying the four bytes 83dfd307 instead of the Bitcoin tag leaves the row pending", async () => {
+  const { proof } = await seedProof(8);
+  const { env, db } = fixture([{ id: 1, checkpoint: 10, target: CAL, proof, age_ms: 2 * HOUR }]);
+  const calls: string[] = [];
+  const report = await anchorCheckpoints(env, T0, depsWith(() => new Response(NOT_A_TAG_NODE, { status: 200 }), calls));
+
+  assert.equal(report.ots_upgraded, 0);
+  const row = db.prepare("SELECT status, proof FROM anchors WHERE id = 1").get() as { status: string; proof: string };
+  assert.equal(row.status, "pending");
+  assert.equal(row.proof, proof);
 });
 
 test("a calendar error leaves the row pending for the next pass and records no failure", async () => {

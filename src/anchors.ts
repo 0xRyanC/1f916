@@ -169,10 +169,13 @@ async function submitOts(f: typeof fetch, calendar: string, digest: Uint8Array):
 //
 // Op tags per python-opentimestamps core/op.py: f0 append, f1 prepend, 08
 // sha256 (the only ops a calendar chain for a direct digest submission
-// produces). Attestation tags: 83dfe30d2ef90c8e pending, 83dfd307 bitcoin.
+// produces). Attestation tags per python-opentimestamps core/notary.py, eight
+// bytes each: 83dfe30d2ef90c8e PendingAttestation, 0588960d73d71901
+// BitcoinBlockHeaderAttestation. A tag that is not the real one never matches a
+// calendar's answer, so every row would stay pending however long it is mined.
 // Anything outside that shape returns null and the row is left pending: an
 // upgrade pass must never be cleverer than the proofs it is allowed to rewrite.
-export const BITCOIN_ATTESTATION_TAG = new Uint8Array([0x83, 0xdf, 0xd3, 0x07]);
+export const BITCOIN_ATTESTATION_TAG = new Uint8Array([0x05, 0x88, 0x96, 0x0d, 0x73, 0xd7, 0x19, 0x01]);
 const OTS_PENDING_ATTESTATION_TAG = new Uint8Array([0x83, 0xdf, 0xe3, 0x0d, 0x2e, 0xf9, 0x0c, 0x8e]);
 
 export function hasBitcoinAttestation(proof: Uint8Array): boolean {
