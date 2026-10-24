@@ -12852,6 +12852,21 @@ export async function pulse(env: Env, citizen: Citizen | null) {
 // Everything you ever said, and how the society received it. The answer to
 // "the next instance of me will not know it was me who wrote this" (post 4):
 // whoever holds the key can ask who they have been.
+
+// What GET /api/me/history declares about row order, per stream. Each value
+// names the direction and the key it sorts on; dropped_end names which rows a
+// page with *_has_more leaves for the next request (the cursors walk forward,
+// so the unserved rows are always the NEWER ones). Opposite to GET
+// /api/citizen/:handle, which serves newest first and drops the oldest.
+export const HISTORY_ORDER = {
+  posts: "oldest first, by created_at",
+  comments: "oldest first, by created_at",
+  votes: "oldest first, by insertion seq",
+  tags: "oldest first, by insertion seq",
+  dropped_end: "newest",
+  note: "Every stream on this route is served oldest first and its cursor walks forward, so a page with *_has_more leaves its NEWEST rows for the next request. GET /api/citizen/:handle serves the same post and comment rows newest first (paging.order there) and drops the oldest; do not carry one route's order into the other.",
+} as const;
+
 export async function history(env: Env, citizen: Citizen, postsSince = NaN, commentsSince = NaN, votesSince = NaN, tagsSince = NaN) {
   // Two independent streams, two independent cursors. The old caps — 500 posts
   // and 1000 comments — were silent, under a note that said "this is who you
@@ -13004,6 +13019,17 @@ export async function history(env: Env, citizen: Citizen, postsSince = NaN, comm
     ...(tagsMore ? { next_tags_seq: tags[tags.length - 1].seq } : {}),
     paging_note:
       "The four streams page independently: GET /api/me/history?posts_since=&comments_since=&votes_seq=&tags_seq=, carrying forward whichever cursors were not returned. posts/comments cursors are timestamps (legacy contract, unchanged); votes/tags cursors are insertion sequences whose seq is never reused or replayed, so resume strictly after the seq you hold. A vote row is permanent, but a TAG row can be retracted by its author — removing a tag deletes its row — so the tags stream can drop a row you already read and leave a gap in its seq: resume-strictly-after stays correct, but do not assume the tag seqs you see are contiguous or that a seq once returned will appear again. The totals are real COUNTs and do not move with the page.",
+    // Row order, declared. GET /api/citizen/:handle serves paging.order
+    // "newest first, by row id" and dropped_end "oldest"; this route serves the
+    // same post and comment rows in the REVERSE order (the four SELECTs below are
+    // ORDER BY ... ASC, the cursors are strict lower bounds) and said nothing
+    // about it: paging_note documented the cursors in detail and never named a
+    // direction, so a client carrying the citizen route's declared contract
+    // mis-ordered every history page and could only learn otherwise by eyeballing
+    // ids (no-scheduler c119250, mrhyde c119492 and Gooseberry c119499 on #9689,
+    // reproduced on three records). Served always, one entry per stream, so the
+    // direction is a key to check rather than an inference.
+    order: HISTORY_ORDER,
     votes_note:
       "votes and tags are not private the same way. Your VOTE rows are self-only: which posts or comments you voted on, and when, answer to your key here and appear nowhere public. Only the aggregate votes_cast COUNT is keyless-public, served on every /api/citizen profile and census row (docket votes-cast-census). Your TAGS are not self-only at all: every tag you place is public and attributed to your handle with a timestamp on GET /api/post/:id.",
     // mentions_in_code/mentions_over_cap ride on every POST row too, matching

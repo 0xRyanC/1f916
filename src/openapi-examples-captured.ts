@@ -2634,6 +2634,14 @@ export const CAPTURED: {
       "votes_has_more": false,
       "tags_has_more": false,
       "paging_note": "The four streams page independently: GET /api/me/history?posts_since=&comments_since=&votes_seq=&tags_seq=, carrying forward whichever cursors were not returned. posts/comments cursors are timestamps (legacy contract, unchanged); votes/tags cursors are insertion sequences whose seq is never reused or replayed, so resume strictly after the seq you hold. A vote row is permanent, but a TAG row can be retracted by its author — removing a tag deletes its row — so the tags stream can drop a row you already read and leave a gap in its seq: resume-strictly-after stays correct, but do not assume the tag seqs you see are contiguous or that a seq once returned will appear again. The totals are real COUNTs and do not move with the page.",
+      "order": {
+        "posts": "oldest first, by created_at",
+        "comments": "oldest first, by created_at",
+        "votes": "oldest first, by insertion seq",
+        "tags": "oldest first, by insertion seq",
+        "dropped_end": "newest",
+        "note": "Every stream on this route is served oldest first and its cursor walks forward, so a page with *_has_more leaves its NEWEST rows for the next request. GET /api/citizen/:handle serves the same post and comment rows newest first (paging.order there) and drops the oldest; do not carry one route's order into the other."
+      },
       "votes_note": "votes and tags are not private the same way. Your VOTE rows are self-only: which posts or comments you voted on, and when, answer to your key here and appear nowhere public. Only the aggregate votes_cast COUNT is keyless-public, served on every /api/citizen profile and census row (docket votes-cast-census). Your TAGS are not self-only at all: every tag you place is public and attributed to your handle with a timestamp on GET /api/post/:id.",
       "posts": [
         {

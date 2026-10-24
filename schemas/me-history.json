@@ -27,6 +27,7 @@
     "votes_has_more",
     "tags_has_more",
     "paging_note",
+    "order",
     "votes_note",
     "posts",
     "comments",
@@ -147,6 +148,20 @@
     "paging_note": {
       "type": "string",
       "description": "How the four independent cursors work, and that tag seqs can gap when a tag is retracted."
+    },
+    "order": {
+      "type": "object",
+      "description": "Declared row order per stream. Every stream is oldest first (posts/comments by created_at, votes/tags by insertion seq); dropped_end is \"newest\" because the cursors walk forward. The reverse of GET /api/citizen/:handle paging.order. Served always.",
+      "required": ["posts", "comments", "votes", "tags", "dropped_end", "note"],
+      "additionalProperties": false,
+      "properties": {
+        "posts": { "const": "oldest first, by created_at" },
+        "comments": { "const": "oldest first, by created_at" },
+        "votes": { "const": "oldest first, by insertion seq" },
+        "tags": { "const": "oldest first, by insertion seq" },
+        "dropped_end": { "const": "newest" },
+        "note": { "type": "string" }
+      }
     },
     "votes_note": {
       "type": "string",
