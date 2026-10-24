@@ -621,9 +621,15 @@ CREATE TABLE IF NOT EXISTS seals (
   label TEXT NOT NULL DEFAULT '',
   signature TEXT,
   key_thumbprint TEXT,
-  sealed_at INTEGER NOT NULL
+  sealed_at INTEGER NOT NULL,
+  -- migrations/0076: the signer's clock and the hostname signed for, for a
+  -- dated (seal.v2) signature.
+  signed_at INTEGER,
+  signed_host TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_seals_citizen_label ON seals(citizen_id, label, id);
+-- migrations/0076: a dated signature is accepted once.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_seals_dated_signature ON seals(signature) WHERE signed_at IS NOT NULL;
 
 -- Migration 0059's seals total. See the 0059 block above identity_events.
 CREATE TABLE IF NOT EXISTS table_counts (
@@ -647,9 +653,15 @@ CREATE TABLE IF NOT EXISTS seal_checks (
   citizen_id INTEGER NOT NULL,
   signature TEXT,
   key_thumbprint TEXT,
-  checked_at INTEGER NOT NULL
+  checked_at INTEGER NOT NULL,
+  -- migrations/0076: the signer's clock and the hostname signed for, for a
+  -- dated (seal-check.v1) signature.
+  signed_at INTEGER,
+  signed_host TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_seal_checks_seal ON seal_checks(seal_id, id);
+-- migrations/0076: a dated signature is accepted once.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_seal_checks_dated_signature ON seal_checks(signature) WHERE signed_at IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_seal_checks_citizen ON seal_checks(citizen_id, checked_at);
 
 -- migrations/0022: dispositions for flagged content, so a flag that leads to
@@ -1252,7 +1264,10 @@ CREATE TABLE IF NOT EXISTS wake_cadence (
   citizen_id INTEGER PRIMARY KEY REFERENCES citizens(id),
   interval_s INTEGER,
   last_check_at INTEGER,
-  declared_at INTEGER NOT NULL
+  declared_at INTEGER NOT NULL,
+  -- Migration 0077: closed misses, counted at the write that overwrites the
+  -- previous last_check_at (the only instant that could show them).
+  missed_windows INTEGER NOT NULL DEFAULT 0
 );
 
 -- Announcement channels (migration 0048): the newest listing already announced
@@ -1500,7 +1515,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_offer_orders_listing ON offer_orders(listi
 -- button for. One row per (checkpoint, kind, target). `proof` holds the
 -- OpenTimestamps file for kind 'ots' (base64), nothing for the others; the
 -- Base row's target is the transaction hash, the archive row's target is the
--- Wayback capture URL. Rows are never updated except status/confirmed_at/error.
+-- Wayback capture URL. Rows are never updated except status/confirmed_at/error
+-- (and proof on an OTS upgrade, checked_at/block_number by the confirmation passes).
 CREATE TABLE IF NOT EXISTS anchors (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   checkpoint_id INTEGER NOT NULL REFERENCES checkpoints(id),
@@ -1511,10 +1527,17 @@ CREATE TABLE IF NOT EXISTS anchors (
   error TEXT,
   created_at INTEGER NOT NULL,
   confirmed_at INTEGER,
+  -- 0079: when a confirmation pass last asked about this row (NULL = never);
+  -- the passes pick ORDER BY checked_at, id so a row that never settles cannot
+  -- hold a slot forever. block_number: the Base block the transaction was
+  -- mined in, from the receipt (confirmed_at is when this server read it).
+  checked_at INTEGER,
+  block_number INTEGER,
   UNIQUE (checkpoint_id, kind, target)
 );
 CREATE INDEX IF NOT EXISTS idx_anchors_checkpoint ON anchors(checkpoint_id, id);
 CREATE INDEX IF NOT EXISTS idx_anchors_kind_status ON anchors(kind, status, id);
+CREATE INDEX IF NOT EXISTS idx_anchors_queue ON anchors(kind, status, checked_at, id);
 -- Mandates: what an agent was told, what it did, and what came of it, as one
 -- record. The three fingerprints are committed to the chain through a memory
 -- seal (label 'mandate', kind memory.seal), so every proof, witness and anchor
@@ -1622,3 +1645,60 @@ CREATE TABLE IF NOT EXISTS journal_entries (
 CREATE INDEX IF NOT EXISTS idx_journal_citizen ON journal_entries(citizen_id, id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_citizen_prev ON journal_entries(citizen_id, prev_hash);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_journal_hash ON journal_entries(hash);
+
+-- migrations/0075: independent witnesses (C2SP tlog-witness), wired to the
+-- stamping job by src/witness-network.ts; both tables stay empty until
+-- TLOG_WITNESSES names a witness.
+-- One row per configured witness key per log: the size this log believes the
+-- witness last signed (the `old` of the next request) and how the last
+-- attempt went. Bounded by the configuration, not by time.
+CREATE TABLE IF NOT EXISTS tlog_witness_state (
+  witness TEXT NOT NULL,
+  key_id TEXT NOT NULL,
+  log TEXT NOT NULL CHECK (log IN ('identity_events','ledger')),
+  last_signed_size INTEGER NOT NULL DEFAULT 0,
+  last_cosigned_checkpoint_id INTEGER,
+  last_attempt_at INTEGER,
+  last_result TEXT,
+  last_detail TEXT,
+  last_ok_at INTEGER,
+  PRIMARY KEY (witness, key_id, log)
+);
+
+-- A witness's cosignature/v1 line over one stamp's note, kept only after it
+-- verified against that witness's configured key. `line` is the signature
+-- line exactly as served after the log's own ("— <name> <base64>"). The
+-- newest few per witness per log are kept (src/witness-network.ts,
+-- COSIGNATURES_KEPT): a cosignature of a newer stamp plus a consistency proof
+-- covers every older one, so older lines are pruned rather than kept forever.
+CREATE TABLE IF NOT EXISTS checkpoint_cosignatures (
+  checkpoint_id INTEGER NOT NULL REFERENCES checkpoints(id),
+  log TEXT NOT NULL,
+  tree_size INTEGER NOT NULL,
+  root TEXT NOT NULL,
+  witness TEXT NOT NULL,
+  key_id TEXT NOT NULL,
+  timestamp INTEGER NOT NULL,
+  line TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (checkpoint_id, witness, key_id)
+);
+CREATE INDEX IF NOT EXISTS idx_checkpoint_cosignatures_witness ON checkpoint_cosignatures(log, witness, key_id, checkpoint_id);
+
+-- migrations/0078: witness push receipts (src/witness-push.ts). One row per
+-- (witness, log): the newest countersignature a witness pushed, replaced only by
+-- a larger tree_size. received_at is epoch milliseconds, as checkpoints.created_at;
+-- receipt_payload / receipt_sig are the registry's signed word on it.
+CREATE TABLE IF NOT EXISTS witness_countersignatures (
+  witness_id INTEGER NOT NULL REFERENCES witnesses(id),
+  log TEXT NOT NULL CHECK (log IN ('identity_events','ledger')),
+  tree_size INTEGER NOT NULL,
+  root TEXT NOT NULL,
+  witness_sig TEXT NOT NULL,
+  witness_epoch INTEGER NOT NULL,
+  checkpoint_id INTEGER NOT NULL REFERENCES checkpoints(id),
+  received_at INTEGER NOT NULL,
+  receipt_payload TEXT NOT NULL,
+  receipt_sig TEXT NOT NULL,
+  PRIMARY KEY (witness_id, log)
+);

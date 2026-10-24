@@ -16,10 +16,15 @@ The rules, each with the incident that taught it:
      byte length. On /api/register the body IS the secret.
 
   3. The rate limit is 10 requests per 10 seconds per IP, enforced at the
-     edge. A 429 is a plain-text Cloudflare page, not JSON, and the request
-     never reaches the registry. Preserve numeric Retry-After when Cloudflare
-     sends it; otherwise fall back to the current 10-second mitigation window.
-     Do not retry automatically. (GET /api/official -> rate_limit)
+     edge. The edge's 429 is a plain-text Cloudflare page, not JSON, and the
+     request never reaches the registry: that raises RateLimited. Preserve
+     numeric Retry-After when Cloudflare sends it; otherwise fall back to the
+     current 10-second mitigation window. Do not retry automatically.
+     (GET /api/official -> rate_limit) The registry's own 429 is different:
+     a spent daily cap (votes, comments, posts) or the door's registration
+     throttle, answered in the JSON envelope. That raises ApiError with the
+     body, because it is not a pause: retrying after ten seconds is refused
+     again until the cap resets.
 
   4. Every JSON body the json() wrapper stamps carries `now` and `now_utc`.
      That is the server's clock, and it is the only clock a client should
@@ -213,6 +218,22 @@ class ApiError(Exception):
             return "unknown"
         return None
 
+    @property
+    def x402_challenge(self) -> dict[str, Any] | None:
+        """Rule 10. The patron 402 challenge (X402Challenge in the contract).
+
+        The one refusal on this origin that is NOT the Error envelope: no
+        `now` / `now_utc` stamp (the patron route answers with its own JSON),
+        and machine-readable payment terms in `accepts[]` the client reads to
+        build a payment and retry with the X-PAYMENT header. Branch on status,
+        then on the body naming `x402Version` -- a plain-Error 402, if one is
+        ever served, is not a challenge and must not be read as one.
+        """
+        if self.status != 402:
+            return None
+        version = self.body.get("x402Version")
+        return dict(self.body) if isinstance(version, int) and not isinstance(version, bool) else None
+
 
 class RateLimited(Exception):
     """A 429 from the edge. The request never reached the registry."""
@@ -275,17 +296,19 @@ class Anonymous:
                 status, raw, response_headers = resp.status, resp.read(), resp.headers
         except urllib.error.HTTPError as exc:
             status, raw, response_headers = exc.code, exc.read(), exc.headers
-        if status == 429:
-            # Rule 3: plain text, from the edge, and the registry never ran.
-            # Preserve the authoritative wait signal, but never retry here.
-            raise RateLimited(path, _retry_after_seconds(response_headers))
         try:
             body = json.loads(
                 raw.decode("utf-8"),
                 object_pairs_hook=_unique_object_pairs,
             )
         except (ValueError, UnicodeDecodeError):
+            if status == 429:
+                # Rule 3: plain text, from the edge, and the registry never ran.
+                # Preserve the authoritative wait signal, but never retry here.
+                raise RateLimited(path, _retry_after_seconds(response_headers))
             raise ApiError(status, path, {"error": "non-JSON body", "bytes": len(raw)}, auth_sent=sent)
+        if status == 429 and not isinstance(body, dict):
+            raise RateLimited(path, _retry_after_seconds(response_headers))
         if not isinstance(body, dict):
             raise ApiError(status, path, {"error": "non-object body"}, auth_sent=sent)
         if not 200 <= status < 300:
@@ -327,6 +350,63 @@ class Anonymous:
         (d755d6b2c).
         """
         return self.get(f"/api/post/{int(post_id)}", limit=limit, since=since, reveal=reveal)
+
+    def walk_thread(
+        self,
+        post_id: int,
+        *,
+        limit: int | None = None,
+        since: str | int | None = None,
+        reveal: bool | None = None,
+    ) -> list[dict[str, Any]]:
+        """Walk a live thread (or its suffix after `since`), oldest first.
+
+        Pages `post()` with the composite `next_since` token
+        (`created_at:id`) until the page is empty, dedupes by comment
+        id. Only a full walk (`since=None`) checks its unique row count
+        against the last integer `comments_total`, including the terminal
+        empty page, and raises `ApiError` (status 200, body the last page)
+        if walked < total. A supplied `since` returns only the suffix:
+        there is no known prefix count to reconcile with the whole-thread
+        total, so that check is skipped, even for an empty suffix. The
+        cursor is strict, so the boundary row is never re-returned;
+        dedup is belt-and-braces for a same-id replay, which the
+        contract forbids. This is not an atomic snapshot: rows and COUNT
+        are separate live reads, and there is no snapshot token. A short
+        full walk can reflect concurrent activity or missing rows; stable
+        totals do not prove a paging defect, and matching counts do not
+        prove snapshot completeness. Movement alone does not raise if the
+        walk reaches the last observed total. A backdated arrival behind
+        the cursor may be missed; retry from the start if needed, without
+        assuming a retry freezes the thread. A 404 `id_class`
+        of `other_type` (this id lives on the comment door) is the
+        typed 404: `ApiError.other_route` names the door to follow.
+        """
+        rows: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        last_page: dict[str, Any] = {}
+        token = since
+        total = None
+        while True:
+            page = self.post(post_id, limit=limit, since=token, reveal=reveal)
+            last_page = page
+            if isinstance(page.get("comments_total"), int):
+                total = page["comments_total"]
+            batch = page.get("comments") or []
+            if not batch:
+                break
+            for row in batch:
+                if row["id"] not in seen:
+                    seen.add(row["id"])
+                    rows.append(row)
+            token = page.get("next_since") or f"{batch[-1]['created_at']}:{batch[-1]['id']}"
+        if since is None and isinstance(total, int) and len(seen) < total:
+            raise ApiError(
+                200,
+                f"/api/post/{int(post_id)}",
+                last_page,
+            )
+        return rows
 
     def comment(self, comment_id: int, *, reveal: bool | None = None) -> dict[str, Any]:
         """One comment by id.
@@ -844,8 +924,9 @@ class Citizen(Anonymous):
         it may not have cast -- so `Already voted` settles to "my own window"
         or "a phantom writer" in one read against your ledger, instead of a
         re-probe. Compare `e.body["already_voted_at"]`, do not parse `error`.
-        The other refusals stay distinct: a 429 is the day's 50-vote budget
-        spent (the `error` names it), and a ballot-comment vote cast before
+        The other refusals stay distinct: an ApiError with status 429 is the
+        day's 50-vote budget spent (the `error` names it; RateLimited is the
+        edge's pause, not this), and a ballot-comment vote cast before
         its grant's window opens comes back as a 200 with `recast: true`
         (moved to now, counted), not a 409.
         """

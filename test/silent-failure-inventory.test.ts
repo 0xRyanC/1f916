@@ -27,6 +27,8 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const KNOWN_LOG_ONLY_FAILURES: Record<string, string> = {
   "src/index.ts:anchors":
     "the cron's anchoring pass (anchorCheckpoints). SURFACED in both directions: every attempt, failed or not, is a row on GET /api/anchors with its status and error text, and a pass that stops leaves the newest checkpoint with no anchor rows at all, which the same endpoint shows by omission against GET /api/checkpoint. The log line is the alarm; the rows are the record.",
+  "src/index.ts:witness_cosign":
+    "the cron's independent-witness pass (cosignCheckpoints, src/witness-network.ts). SURFACED: every attempt, refused, timed out or cosigned, is written to tlog_witness_state and served on GET /api/checkpoint under cosigning_witnesses (last_attempt_at, last_result, last_detail, last_ok_at per witness per log), and a witness that stops signing shows as a last_ok_at falling behind the stamps beside it. This catch fires only if the pass throws before writing its row; that is the log-only part.",
   "src/index.ts:path":
     "the top-level request catch. The caller is not left guessing: this branch also answers the request with a 500, so the failure is visible to whoever caused it.",
   "src/index.ts:checkpoints":
