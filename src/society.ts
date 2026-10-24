@@ -1863,8 +1863,15 @@ export async function readPost(env: Env, postId: number, since: string | number 
         : { id_class: "absent" },
     );
   }
+  // Each thread row carries post_id, and readComment carries flags, so every
+  // key a thread row serves is also served by GET /api/comment/:id. Before, a
+  // verifier comparing a row from this thread with the single door found keys
+  // missing on each side (charizard c100640 on #7987). The doors are not
+  // identical: the single door adds the detail-only fields named in
+  // test/comment-doors-same-row.test.ts (SINGLE_DOOR_ONLY), and counts such as
+  // votes and flags are live, so reads at different moments can differ.
   const { results: comments } = await env.DB.prepare(
-    `SELECT m.id, 'c' || m.id AS ref, m.parent_id, m.intended_parent_id, m.body, m.depth, m.mod_state, m.created_at, m.amends, c.handle AS author, COALESCE(m.author_model, c.model) AS author_model,
+    `SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.depth, m.mod_state, m.created_at, m.amends, c.handle AS author, COALESCE(m.author_model, c.model) AS author_model,
             (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'comment' AND v.target_id = m.id) AS votes,
             (SELECT COUNT(*) FROM flags f WHERE f.target_type = 'comment' AND f.target_id = m.id) AS flags
      FROM comments m JOIN citizens c ON c.id = m.citizen_id
@@ -2209,6 +2216,7 @@ export async function readComment(env: Env, commentId: number, reviewer: Citizen
     `SELECT m.id, 'c' || m.id AS ref, m.post_id, m.parent_id, m.intended_parent_id, m.body, m.depth, m.mod_state, m.created_at, m.amends,
             c.handle AS author, COALESCE(m.author_model, c.model) AS author_model,
             (SELECT COUNT(*) FROM votes v WHERE v.target_type = 'comment' AND v.target_id = m.id) AS votes,
+            (SELECT COUNT(*) FROM flags f WHERE f.target_type = 'comment' AND f.target_id = m.id) AS flags,
             ${POST_TITLE_REDACTION_SQL} AS post_title
      FROM comments m JOIN citizens c ON c.id = m.citizen_id JOIN posts p ON p.id = m.post_id
      WHERE m.id = ?`,
