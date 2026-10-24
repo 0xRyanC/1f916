@@ -95,6 +95,9 @@ export interface AnchorRow {
   error: string | null;
   created_at: number;
   confirmed_at: number | null;
+  // The Base block the transaction was mined in, from its receipt. Null for
+  // every other kind and for a Base row not yet (or before 0079) confirmed.
+  block_number: number | null;
 }
 
 // Pure: which (checkpoint, kind, target) pairs still need an attempt. Every
@@ -304,14 +307,18 @@ export async function baseWalletAddress(env: Env): Promise<string | null> {
 // transaction itself: not in a block and not in its mempool. Any other error
 // (timeout, rate limit, a bad RPC) is "pending", because it says nothing about
 // the transaction.
-async function confirmBase(env: Env, txHash: string): Promise<BaseReceiptStatus> {
+//
+// A receipt carries the block the transaction was mined in; that is returned
+// with the status, because the instant this server reads the receipt can lag
+// the block by as long as the queue takes.
+async function confirmBase(env: Env, txHash: string): Promise<BaseReceiptStatus | BaseReceipt> {
   const { createPublicClient, http, TransactionNotFoundError, TransactionReceiptNotFoundError } = await import("viem");
   const { base } = await import("viem/chains");
   const client = createPublicClient({ chain: base, transport: http(env.BASE_RPC_PRIVATE_URL || env.BASE_RPC_URL || "https://mainnet.base.org") });
   const hash = txHash as `0x${string}`;
   try {
     const r = await client.getTransactionReceipt({ hash });
-    return r.status === "success" ? "confirmed" : "failed";
+    return { status: r.status === "success" ? "confirmed" : "failed", block_number: r.blockNumber === undefined || r.blockNumber === null ? null : Number(r.blockNumber) };
   } catch (e) {
     if (!(e instanceof TransactionReceiptNotFoundError)) return "pending";
   }
@@ -324,6 +331,30 @@ async function confirmBase(env: Env, txHash: string): Promise<BaseReceiptStatus>
 }
 
 export type BaseReceiptStatus = "pending" | "confirmed" | "failed" | "unknown";
+// A settled answer with the block it settled in. A bare status (what an
+// injected test dep may still return) reads as block_number null.
+export interface BaseReceipt {
+  status: BaseReceiptStatus;
+  block_number: number | null;
+}
+function asReceipt(r: BaseReceiptStatus | BaseReceipt): BaseReceipt {
+  return typeof r === "string" ? { status: r, block_number: null } : r;
+}
+
+// The confirmation passes below each ask about a few pending rows per pass and
+// stamp checked_at on every row they ask, whatever the answer. They pick rows
+// ORDER BY checked_at, id: SQLite sorts NULL first, so never-asked rows go
+// first (oldest id first among them), then the least recently asked. Picking
+// ORDER BY id alone let a row that never settles (a transaction the node knows
+// but never mines, an RPC or calendar that keeps erroring, a batch a calendar
+// never upgrades) hold its slot ahead of every later row on every pass,
+// forever; with two slots, two such rows stopped the whole queue (live: #650's
+// dropped Base rows). Rotation by last-asked time was suggested by tally-stick
+// (c119828) so one column serves every queue.
+async function stampAsked(env: Env, ids: number[], now: number): Promise<void> {
+  if (ids.length === 0) return;
+  await env.DB.prepare(`UPDATE anchors SET checked_at = ? WHERE id IN (${ids.map(() => "?").join(",")})`).bind(now, ...ids).run();
+}
 
 // Base includes a transaction within seconds. One the node still has no record
 // of, mined or queued, this long after it was sent was dropped before
@@ -383,7 +414,7 @@ export interface AnchorReport {
 export interface AnchorDeps {
   fetch: typeof fetch;
   submitBase: (env: Env, payload: string) => Promise<string>;
-  confirmBase: (env: Env, txHash: string) => Promise<BaseReceiptStatus>;
+  confirmBase: (env: Env, txHash: string) => Promise<BaseReceiptStatus | BaseReceipt>;
 }
 export const REAL_DEPS: AnchorDeps = { fetch: (...a) => fetch(...a), submitBase, confirmBase };
 
@@ -435,13 +466,15 @@ export async function anchorCheckpoints(env: Env, now = Date.now(), deps: Anchor
       await insertAnchor(env, d.checkpoint.id, d.kind, d.kind === "base" ? `failed:${now}` : d.target, null, "failed", String(e).slice(0, 200), now);
     }
   }
-  // Confirmations: pending Base rows older than a minute, two per cycle.
+  // Confirmations: pending Base rows older than a minute, two per cycle,
+  // never-asked first, then least recently asked (see stampAsked).
   if (env.ANCHOR_BASE_KEY) {
     const pend = (
-      await env.DB.prepare("SELECT id, target, created_at FROM anchors WHERE kind = 'base' AND status = 'pending' AND created_at < ? ORDER BY id ASC LIMIT 2").bind(now - 60_000).all<{ id: number; target: string; created_at: number }>()
+      await env.DB.prepare("SELECT id, target, created_at FROM anchors WHERE kind = 'base' AND status = 'pending' AND created_at < ? ORDER BY checked_at ASC, id ASC LIMIT 2").bind(now - 60_000).all<{ id: number; target: string; created_at: number }>()
     ).results;
+    await stampAsked(env, pend.map((p) => p.id), now);
     for (const p of pend) {
-      const s = await deps.confirmBase(env, p.target);
+      const { status: s, block_number } = asReceipt(await deps.confirmBase(env, p.target));
       if (s === "pending") continue;
       if (s === "unknown") {
         if (now - p.created_at < BASE_DROPPED_MS) continue;
@@ -451,21 +484,22 @@ export async function anchorCheckpoints(env: Env, now = Date.now(), deps: Anchor
         report.failed++;
         continue;
       }
-      await env.DB.prepare("UPDATE anchors SET status = ?, confirmed_at = ? WHERE id = ?").bind(s, s === "confirmed" ? now : null, p.id).run();
+      await env.DB.prepare("UPDATE anchors SET status = ?, confirmed_at = ?, block_number = ? WHERE id = ?").bind(s, s === "confirmed" ? now : null, block_number, p.id).run();
       if (s === "confirmed") report.confirmed++; else report.failed++;
     }
   }
   // OTS upgrades: pending OpenTimestamps rows older than an hour, two per pass,
-  // oldest first. The calendars batch into Bitcoin about once an hour, so
+  // never-asked first, then least recently asked (see stampAsked). The calendars batch into Bitcoin about once an hour, so
   // asking sooner is almost always a wasted round trip. A calendar error or a
   // not-yet-upgraded answer leaves the row untouched — it stays pending and is
-  // asked again on a later pass, exactly like a Base transaction not yet seen.
+  // asked again in its turn, exactly like a Base transaction not yet seen.
   // A row is only rewritten when its proof now carries a Bitcoin attestation,
   // and the completed proof is stored so a reader no longer depends on the
   // calendar still holding the commitment (issue #517).
   const otsPend = (
-    await env.DB.prepare("SELECT id, target, proof FROM anchors WHERE kind = 'ots' AND status = 'pending' AND proof IS NOT NULL AND created_at < ? ORDER BY id ASC LIMIT 2").bind(now - 60 * 60 * 1000).all<{ id: number; target: string; proof: string }>()
+    await env.DB.prepare("SELECT id, target, proof FROM anchors WHERE kind = 'ots' AND status = 'pending' AND proof IS NOT NULL AND created_at < ? ORDER BY checked_at ASC, id ASC LIMIT 2").bind(now - 60 * 60 * 1000).all<{ id: number; target: string; proof: string }>()
   ).results;
+  await stampAsked(env, otsPend.map((p) => p.id), now);
   for (const p of otsPend) {
     try {
       const proof = unb64(p.proof);
@@ -486,9 +520,11 @@ export async function anchorCheckpoints(env: Env, now = Date.now(), deps: Anchor
       continue;
     }
   }
-  // Archive jobs: one pending authenticated capture per pass, oldest first.
+  // Archive jobs: one pending authenticated capture per pass, never-asked
+  // first, then least recently asked (see stampAsked).
   if (env.ARCHIVE_ORG_ACCESS && env.ARCHIVE_ORG_SECRET) {
-    const job = await env.DB.prepare("SELECT id, target FROM anchors WHERE kind = 'archive' AND status = 'pending' ORDER BY id ASC LIMIT 1").first<{ id: number; target: string }>();
+    const job = await env.DB.prepare("SELECT id, target FROM anchors WHERE kind = 'archive' AND status = 'pending' ORDER BY checked_at ASC, id ASC LIMIT 1").first<{ id: number; target: string }>();
+    if (job) await stampAsked(env, [job.id], now);
     if (job && job.target.startsWith("https://web.archive.org/save/status/")) {
       const st = await pollArchiveJob(deps.fetch, env, job.target);
       if (st.status !== "pending") {
@@ -510,7 +546,7 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
   const since = typeof sinceId === "number" && Number.isFinite(sinceId) ? sinceId : 0;
   const rows = (
     await env.DB.prepare(
-      "SELECT a.id, a.checkpoint_id, a.kind, a.target, a.status, a.error, a.created_at, a.confirmed_at, c.log, c.tree_size, c.root, c.created_at AS checkpoint_created_at FROM anchors a JOIN checkpoints c ON c.id = a.checkpoint_id WHERE a.id > ? ORDER BY a.id ASC LIMIT ?",
+      "SELECT a.id, a.checkpoint_id, a.kind, a.target, a.status, a.error, a.created_at, a.confirmed_at, a.block_number, c.log, c.tree_size, c.root, c.created_at AS checkpoint_created_at FROM anchors a JOIN checkpoints c ON c.id = a.checkpoint_id WHERE a.id > ? ORDER BY a.id ASC LIMIT ?",
     )
       .bind(since, ANCHOR_PAGE + 1)
       .all<AnchorRow & { log: string; tree_size: number; root: string; checkpoint_created_at: number }>()
@@ -523,9 +559,9 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
   const latest = await latestCheckpointRows(env);
   const latestAnchors = latest.length
     ? (
-        await env.DB.prepare(`SELECT checkpoint_id, kind, target, status, error, created_at, confirmed_at FROM anchors WHERE checkpoint_id IN (${latest.map(() => "?").join(",")}) ORDER BY id ASC`)
+        await env.DB.prepare(`SELECT checkpoint_id, kind, target, status, error, created_at, confirmed_at, block_number FROM anchors WHERE checkpoint_id IN (${latest.map(() => "?").join(",")}) ORDER BY id ASC`)
           .bind(...latest.map((c) => c.id))
-          .all<Pick<AnchorRow, "checkpoint_id" | "kind" | "target" | "status" | "error" | "created_at" | "confirmed_at">>()
+          .all<Pick<AnchorRow, "checkpoint_id" | "kind" | "target" | "status" | "error" | "created_at" | "confirmed_at" | "block_number">>()
       ).results
     : [];
   const baseAddress = await baseWalletAddress(env);
@@ -534,7 +570,7 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
     what_this_is:
       "The newest checkpoint of each log, offered every five minutes to the targets listed under `targets`: three OpenTimestamps calendars (the Bitcoin blockchain), the Base blockchain when an anchoring wallet is configured, and the Internet Archive at most once every 55 minutes: one capture of GET /api/checkpoint, the page that carries both heads, recorded as an anchor of the identity log's head only. Every attempt, made or refused, is a row here with its status and error. Checkpoints from before the first anchoring pass were never offered.",
     what_an_anchor_proves:
-      "A confirmed anchor proves that the exact checkpoint text existed by that time and has not changed since. An OpenTimestamps row starts `pending`: this server records the calendar's incomplete proof at submission, and a later pass asks the row's calendar for the upgrade — usually within a few hours of submission, once the calendar's Bitcoin transaction has been mined. When the completed proof carries a Bitcoin attestation, the row flips to `confirmed`, `confirmed_at` names the instant this server stored it, and the full proof is kept here, so a reader verifies it from the served file alone and never from the calendar's word. Until then `pending` means 'submitted, not yet in a block' and `ots upgrade` on the served /api/anchors/<id>.ots file fetches the attestation yourself (see how_to_verify.ots). A pending Base row, by contrast, is a transaction not yet seen in a block and does flip to confirmed once seen; a failed row proves only that the attempt was made and refused. No anchor says anything about whether what the checkpoint covers is true.",
+      "A confirmed anchor proves that the exact checkpoint text existed by that time and has not changed since. An OpenTimestamps row starts `pending`: this server records the calendar's incomplete proof at submission, and a later pass asks the row's calendar for the upgrade — usually within a few hours of submission, once the calendar's Bitcoin transaction has been mined. When the completed proof carries a Bitcoin attestation, the row flips to `confirmed`, `confirmed_at` names the instant this server stored it, and the full proof is kept here, so a reader verifies it from the served file alone and never from the calendar's word. Until then `pending` means 'submitted, not yet in a block' and `ots upgrade` on the served /api/anchors/<id>.ots file fetches the attestation yourself (see how_to_verify.ots). A pending Base row, by contrast, is a transaction not yet seen in a block and does flip to confirmed once seen. On a Base row `confirmed_at` is the instant this server read the receipt, which can be hours or days after the block, and `block_number` is the block the transaction was mined in: that block's own timestamp, on any Base node or explorer, is when it was mined. `block_number` is null on every other kind and on Base rows confirmed before it was recorded. A failed row proves only that the attempt was made and refused. No anchor says anything about whether what the checkpoint covers is true.",
     targets: {
       ots_calendars: OTS_CALENDARS,
       base: Boolean(env.ANCHOR_BASE_KEY),
@@ -544,7 +580,7 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
     anchored_text: "the checkpoint's signed payload, byte for byte: 1f916.checkpoint.v1:<log>:<tree_size>:<root>:<created_at>. GET /api/anchors/<id>.txt serves it.",
     how_to_verify: {
       ots: "GET /api/anchors/<id>.txt as payload.txt and /api/anchors/<id>.ots as payload.txt.ots, then `ots verify payload.txt.ots` with the standard OpenTimestamps client (opentimestamps.org). A row still `status: pending` here has its submitted proof served; this server asks the calendar for the upgrade on later passes, and once the row reads `confirmed` the served file carries the completed Bitcoin attestation — `ots upgrade payload.txt.ots` fetches it yourself if you would rather not wait for this server's pass.",
-      base: "target is the Base transaction hash. Read the transaction's input data on any Base node or explorer and decode it as UTF-8: it is the payload text. The sender is the anchoring wallet, a dedicated pocket-change key that is not the treasury." +
+      base: "target is the Base transaction hash. Read the transaction's input data on any Base node or explorer and decode it as UTF-8: it is the payload text. block_number, once the row is confirmed, is the block it was mined in; that block's timestamp is the mining time, while confirmed_at is only when this server saw the receipt. The sender is the anchoring wallet, a dedicated pocket-change key that is not the treasury." +
         (baseAddress
           ? ` That wallet is ${baseAddress} (targets.base_address): list its outgoing transactions on any Base node or explorer and compare them with this table, so a checkpoint payload sent from it that is missing here, or two different payloads for one tree size, is visible without trusting this server.`
           : env.ANCHOR_BASE_KEY
@@ -570,6 +606,7 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
       error: r.error,
       created_at: r.created_at,
       confirmed_at: r.confirmed_at,
+      block_number: r.block_number,
       ...(r.kind === "ots" ? { ots_file: `/api/anchors/${r.id}.ots`, payload_file: `/api/anchors/${r.id}.txt` } : {}),
     })),
     has_more: hasMore,

@@ -185,7 +185,8 @@
         "status",
         "error",
         "created_at",
-        "confirmed_at"
+        "confirmed_at",
+        "block_number"
       ],
       "properties": {
         "kind": {
@@ -211,6 +212,14 @@
             "integer",
             "null"
           ]
+        },
+        "block_number": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Base rows: the block the transaction was mined in, from its receipt; its timestamp is the mining time (confirmed_at is when this server read the receipt). Null on every other kind and on Base rows not yet confirmed or confirmed before it was recorded."
         }
       },
       "additionalProperties": false
@@ -229,7 +238,8 @@
         "status",
         "error",
         "created_at",
-        "confirmed_at"
+        "confirmed_at",
+        "block_number"
       ],
       "properties": {
         "id": {
@@ -278,6 +288,14 @@
             "integer",
             "null"
           ]
+        },
+        "block_number": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Base rows: the block the transaction was mined in, from its receipt; its timestamp is the mining time (confirmed_at is when this server read the receipt). Null on every other kind and on Base rows not yet confirmed or confirmed before it was recorded."
         },
         "ots_file": {
           "type": "string"

@@ -1515,7 +1515,8 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_offer_orders_listing ON offer_orders(listi
 -- button for. One row per (checkpoint, kind, target). `proof` holds the
 -- OpenTimestamps file for kind 'ots' (base64), nothing for the others; the
 -- Base row's target is the transaction hash, the archive row's target is the
--- Wayback capture URL. Rows are never updated except status/confirmed_at/error.
+-- Wayback capture URL. Rows are never updated except status/confirmed_at/error
+-- (and proof on an OTS upgrade, checked_at/block_number by the confirmation passes).
 CREATE TABLE IF NOT EXISTS anchors (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   checkpoint_id INTEGER NOT NULL REFERENCES checkpoints(id),
@@ -1526,10 +1527,17 @@ CREATE TABLE IF NOT EXISTS anchors (
   error TEXT,
   created_at INTEGER NOT NULL,
   confirmed_at INTEGER,
+  -- 0079: when a confirmation pass last asked about this row (NULL = never);
+  -- the passes pick ORDER BY checked_at, id so a row that never settles cannot
+  -- hold a slot forever. block_number: the Base block the transaction was
+  -- mined in, from the receipt (confirmed_at is when this server read it).
+  checked_at INTEGER,
+  block_number INTEGER,
   UNIQUE (checkpoint_id, kind, target)
 );
 CREATE INDEX IF NOT EXISTS idx_anchors_checkpoint ON anchors(checkpoint_id, id);
 CREATE INDEX IF NOT EXISTS idx_anchors_kind_status ON anchors(kind, status, id);
+CREATE INDEX IF NOT EXISTS idx_anchors_queue ON anchors(kind, status, checked_at, id);
 -- Mandates: what an agent was told, what it did, and what came of it, as one
 -- record. The three fingerprints are committed to the chain through a memory
 -- seal (label 'mandate', kind memory.seal), so every proof, witness and anchor
