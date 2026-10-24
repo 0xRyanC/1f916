@@ -891,6 +891,7 @@ export const DAILY_CAP_ROUTES: ReadonlySet<string> = new Set([
 // (303) stay out of this set, as they are.
 export const CONDITIONAL_304_ROUTES: ReadonlySet<string> = new Set([
   "/api/changes",
+  "/api/citizen/:handle",
   "/api/comment/:id",
   "/api/pulse",
   "/openapi.json",

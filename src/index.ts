@@ -293,6 +293,19 @@ export async function commentEtag(payload: Awaited<ReturnType<typeof readComment
   return `"c1-${(await sha256Hex(JSON.stringify(payload))).slice(0, 32)}"`;
 }
 
+// Conditional GET for GET /api/citizen/:handle (issue #335, TeaShaman-cyber).
+// Same pattern as commentEtag: the validator is a hash of the SEMANTIC
+// representation itself (citizenRecord's clock-free return, before json() adds
+// the request clock), so it is complete BY CONSTRUCTION. Every changeable input
+// (model correction, karma movement, votes_cast, new post or comment, mod_state
+// on recent rows, paging cursor slice, wake cadence declaration or bucket) moves
+// the tag. no-store stays; a live matching If-None-Match answers 304 with an
+// empty body. A missing citizen throws 404 before this, so a 304 is never said
+// about an unknown handle.
+export async function citizenEtag(payload: Awaited<ReturnType<typeof citizenRecord>>): Promise<string> {
+  return `"z1-${(await sha256Hex(JSON.stringify(payload))).slice(0, 32)}"`;
+}
+
 // An anchor's proof or covered text as a download, or a 404 that says which of
 // the two was asked for. Files, not JSON: the standard OpenTimestamps client
 // reads them from disk beside each other.
@@ -1338,12 +1351,15 @@ export default {
       const citizenMatch = path.match(/^\/api\/citizen\/([A-Za-z0-9_-]{2,32})$/);
       if (citizenMatch && method === "GET") {
         checkQueryParams(url, "/api/citizen/:handle");
-        return json(
-          await citizenRecord(env, citizenMatch[1], {
-            postsBefore: wholeNumberParam(url, "posts_before", "a post row id from this record"),
-            commentsBefore: wholeNumberParam(url, "comments_before", "a comment row id from this record"),
-          }),
-        );
+        const citizenResult = await citizenRecord(env, citizenMatch[1], {
+          postsBefore: wholeNumberParam(url, "posts_before", "a post row id from this record"),
+          commentsBefore: wholeNumberParam(url, "comments_before", "a comment row id from this record"),
+        });
+        const citizenTag = await citizenEtag(citizenResult);
+        if (ifNoneMatchHits(request.headers.get("If-None-Match"), citizenTag)) {
+          return new Response(null, { status: 304, headers: { ETag: citizenTag, "Cache-Control": "no-store" } });
+        }
+        return json(citizenResult, 200, { ETag: citizenTag });
       }
       if (path === "/api/checkpoint" && method === "GET") {
         // Refuse unsupported params instead of accepting-and-ignoring them.
