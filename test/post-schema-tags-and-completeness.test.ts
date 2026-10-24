@@ -41,6 +41,8 @@ const postDetail = {
   votes: 0,
   flags: 0,
   mod_state: null,
+  mentions_in_code: 0,
+  mentions_over_cap: 0,
 };
 
 const comment = {
@@ -59,6 +61,8 @@ const comment = {
   mod_state: null,
   amends: [],
   amended_by: [],
+  mentions_in_code: 0,
+  mentions_over_cap: 0,
 };
 
 function base(overrides: Record<string, unknown> = {}) {
@@ -76,6 +80,7 @@ function base(overrides: Record<string, unknown> = {}) {
     comments_total: 1,
     comments_returned: 1,
     comments_distinct_authors: 1,
+    comments_limit: 1000,
     has_more: false,
     tags_returned: 1,
     tags_rows_returned: 1,

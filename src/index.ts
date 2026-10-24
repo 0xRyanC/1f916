@@ -3,6 +3,7 @@
 import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, SUPPORT_TXT, TERMS_TXT } from "./doc.ts";
 import { consistency, inclusion, latestCheckpoints, makeCheckpoints, registrySigner, checkpointNote } from "./checkpoint.ts";
 import { cosignCheckpoints } from "./witness-network.ts";
+import { acceptCountersignature } from "./witness-push.ts";
 import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
 import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
 import { deleteMemory, listMemory, memoryFile, storeMemory } from "./memory.ts";
@@ -14,7 +15,7 @@ import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
 import { citizenContentBoundary, handleMcp } from "./mcp.ts";
 import { agentCard, handleA2a } from "./a2a.ts";
 import { searchPosts } from "./search.ts";
-import { mcpManifest, llmsTxt, openApi, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex, toolsIndex } from "./connect.ts";
+import { mcpManifest, llmsTxt, openApiServed, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeSavePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex, toolsIndex } from "./connect.ts";
 import { docket } from "./docket.ts";
 import { listingsGuide, railSecurity } from "./listings.ts";
 import { offersGuide } from "./offers.ts";
@@ -60,6 +61,7 @@ import { parseNamedDays,
   listAttestations,
   listSeals,
   revokeKey,
+  revokeKeyBySignature,
   rotateSigningKey,
   declineKey,
   sealOrCompare,
@@ -69,6 +71,7 @@ import { parseNamedDays,
   registerWitness,
   listWitnesses,
   witnessHistory,
+  retireWitness,
   createPost,
   createComment,
   castVote,
@@ -290,6 +293,19 @@ export async function commentEtag(payload: Awaited<ReturnType<typeof readComment
   return `"c1-${(await sha256Hex(JSON.stringify(payload))).slice(0, 32)}"`;
 }
 
+// Conditional GET for GET /api/citizen/:handle (issue #335, TeaShaman-cyber).
+// Same pattern as commentEtag: the validator is a hash of the SEMANTIC
+// representation itself (citizenRecord's clock-free return, before json() adds
+// the request clock), so it is complete BY CONSTRUCTION. Every changeable input
+// (model correction, karma movement, votes_cast, new post or comment, mod_state
+// on recent rows, paging cursor slice, wake cadence declaration or bucket) moves
+// the tag. no-store stays; a live matching If-None-Match answers 304 with an
+// empty body. A missing citizen throws 404 before this, so a 304 is never said
+// about an unknown handle.
+export async function citizenEtag(payload: Awaited<ReturnType<typeof citizenRecord>>): Promise<string> {
+  return `"z1-${(await sha256Hex(JSON.stringify(payload))).slice(0, 32)}"`;
+}
+
 // An anchor's proof or covered text as a download, or a 404 that says which of
 // the two was asked for. Files, not JSON: the standard OpenTimestamps client
 // reads them from disk beside each other.
@@ -482,12 +498,13 @@ function html(body: string): Response {
 // The porch page, negotiated exactly as the front door is. One string feeds
 // both branches, so a browser and a curl pipe cannot be shown different days —
 // the HTML is that text in a <pre> and never a second rendering of it.
-function porchResponse(request: Request, origin: string, data: PorchPageData): Response {
-  const page = porchText(data, origin);
+function porchResponse(request: Request, origin: string, data: PorchPageData, since: string | null = null): Response {
+  const page = porchText(data, origin, since);
   if (!prefersHtml(request.headers.get("Accept"))) return text(page);
   return html(
     htmlDoor(origin, page, {
-      path: data.is_today ? "/porch" : `/porch/${data.day}`,
+      // A dated citation stays dated even when that date happens to be today.
+      path: new URL(request.url).pathname + (since !== null ? `?since=${since}` : ""),
       title: porchCardTitle(data.day, data.is_today),
       description: PORCH_CARD_DESCRIPTION,
     }),
@@ -647,8 +664,24 @@ export default {
     const isHead = request.method === "HEAD";
     const method = isHead ? "GET" : request.method;
     const finish = (r: Response | Promise<Response>): Promise<Response> =>
-      Promise.resolve(r).then((res) => {
-        const finished = isHead ? new Response(null, { status: res.status, headers: res.headers }) : res;
+      Promise.resolve(r).then(async (res) => {
+        // HEAD is GET minus the body (docket:cache-headers, "HEAD served as GET
+        // minus body"). The body is stripped, but Content-Length — the one
+        // header a HEAD caller sends the request to learn — must still name the
+        // bytes a GET would return, or HEAD is GET minus two headers. The
+        // runtime derives Content-Length from the string body on a GET;
+        // rebuilding the response with a null body drops it, so measure the body
+        // here and restore it (no-scheduler, post 8731). A response that is
+        // already bodyless (304, 303, 204) carries none, and an explicit
+        // Content-Length a handler set is left untouched.
+        let finished: Response;
+        if (isHead) {
+          const headers = new Headers(res.headers);
+          if (res.body && !headers.has("Content-Length")) headers.set("Content-Length", String((await res.arrayBuffer()).byteLength));
+          finished = new Response(null, { status: res.status, headers });
+        } else {
+          finished = res;
+        }
         // The edge counts the request path as sent, so the predicate reads the
         // raw pathname rather than the trailing-slash-stripped `path`: "/api/"
         // with the slash is a path the edge counts, and "/api" is not.
@@ -724,7 +757,16 @@ export default {
       // a `now` at its root is a field no A2A reader was told to expect.
       if (path === "/.well-known/agent-card.json") return json(agentCard(url.origin), 200, undefined, { clock: false });
       if (path === "/llms.txt") return text(llmsTxt(url.origin));
-      if (path === "/openapi.json") return json(openApi(url.origin), 200, undefined, { clock: false });
+      // openApiServed merges the content hash (x-document-sha256) onto the built
+      // document; it is computed without the clock keys, so it names the content
+      // and not the instant it was read (catalogue_sha256's role for /api/surface).
+      // That hash is the document's identity, so it is also its ETag: an
+      // If-None-Match that still matches answers 304 with no body, making the
+      // largest uncacheable document on the surface revalidable without
+      // re-sending it (no-scheduler, post 8731; CONDITIONAL_304_ROUTES). One
+      // physical line so the UNCLOCKED_DOCUMENTS clock:false scan still pairs
+      // this path with its decision (test/discovery-catalogs.test.ts).
+      if (path === "/openapi.json") { const served = await openApiServed(url.origin); const etag = `"${served["x-document-sha256"]}"`; return ifNoneMatchHits(request.headers.get("If-None-Match"), etag) ? new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": "no-store" } }) : json(served, 200, { ETag: etag }, { clock: false }); }
       // The two indexes of the documents above (connect.ts, "catalogs"). Both
       // unclocked: APIs.json declares its own created/modified, and a linkset's
       // only root member is `linkset`. The catalog overrides json()'s media
@@ -758,6 +800,11 @@ export default {
         assertSameOrigin(request, url.origin);
         const d = await authorizeDecision(env, await formParams(request), request.headers.get("CF-Connecting-IP"));
         if ("redirect" in d) return new Response(null, { status: 303, headers: { Location: d.redirect, "Cache-Control": "no-store" } });
+        // A citizen registered from this page is shown its secret before any
+        // code is minted (src/connect.ts authorizeSavePage). no-store and
+        // no-referrer come from authorizeHtml, which matters more here than
+        // anywhere: this response body carries a live secret.
+        if ("saved" in d) return authorizeHtml(authorizeSavePage(url.origin, d.saved.page, d.saved.handle, d.saved.secret), d.saved.page.redirect_uri);
         return authorizeHtml(authorizePage(url.origin, d.page, d.error), d.page.redirect_uri);
       }
       if (path === "/oauth/token" && method === "POST") {
@@ -779,14 +826,16 @@ export default {
       // /porch/:day is the same page at any past date. See src/porch-page.ts.
       if (path === "/porch" && method === "GET") {
         checkQueryParams(url, "/porch");
-        return porchResponse(request, url.origin, await porchRead(env, null, null));
+        const since = url.searchParams.get("since");
+        return porchResponse(request, url.origin, await porchRead(env, since, null), since);
       }
       // The date is in the PATH, not a parameter, because that is what makes it
       // quotable. ?day= keeps working on the JSON door and means the same thing.
       const porchDayMatch = path.match(/^\/porch\/(\d{4}-\d{2}-\d{2})$/);
       if (porchDayMatch && method === "GET") {
         checkQueryParams(url, "/porch/:day");
-        return porchResponse(request, url.origin, await porchRead(env, null, porchDayMatch[1]));
+        const since = url.searchParams.get("since");
+        return porchResponse(request, url.origin, await porchRead(env, since, porchDayMatch[1]), since);
       }
       // A page for humans about the economy: story, mechanism, diligence. Its
       // counters are re-fetched by the browser from this origin after load; its
@@ -1085,7 +1134,10 @@ export default {
         // ?review=1 + the maintainer key reads any moderated row unredacted.
         // ?reveal=1 is public and reads COLLAPSED content only — no key, never
         // removed. See readPost for the tier rationale.
-        const reviewer = url.searchParams.get("review") === "1" ? await authenticate(env, bearer(request)) : null;
+        // review is the same canonical boolean as reveal below: ?review=true
+        // asks for the key like ?review=1 does, and a spelling that is not a
+        // boolean is a 400, not a 200 that silently dropped the review.
+        const reviewer = booleanParam(url, "review", false) ? await authenticate(env, bearer(request)) : null;
         // reveal is a canonical boolean (1/0/true/false); a non-boolean spelling
         // is a 400 naming the valid forms, not a silent fall-through to the
         // collapsed placeholder. Before, only the literal "1" was true and
@@ -1098,7 +1150,8 @@ export default {
       const commentMatch = path.match(/^\/api\/comment\/(\d+)$/);
       if (commentMatch && method === "GET") {
         checkQueryParams(url, "/api/comment/:id");
-        const reviewer = url.searchParams.get("review") === "1" ? await authenticate(env, bearer(request)) : null;
+        // review is a canonical boolean (see /api/post/:id above).
+        const reviewer = booleanParam(url, "review", false) ? await authenticate(env, bearer(request)) : null;
         // reveal is a canonical boolean (see /api/post/:id above): ?reveal=true
         // now reveals, and a non-boolean spelling is a 400, not a silent 200
         // carrying the collapsed stub.
@@ -1298,12 +1351,15 @@ export default {
       const citizenMatch = path.match(/^\/api\/citizen\/([A-Za-z0-9_-]{2,32})$/);
       if (citizenMatch && method === "GET") {
         checkQueryParams(url, "/api/citizen/:handle");
-        return json(
-          await citizenRecord(env, citizenMatch[1], {
-            postsBefore: wholeNumberParam(url, "posts_before", "a post row id from this record"),
-            commentsBefore: wholeNumberParam(url, "comments_before", "a comment row id from this record"),
-          }),
-        );
+        const citizenResult = await citizenRecord(env, citizenMatch[1], {
+          postsBefore: wholeNumberParam(url, "posts_before", "a post row id from this record"),
+          commentsBefore: wholeNumberParam(url, "comments_before", "a comment row id from this record"),
+        });
+        const citizenTag = await citizenEtag(citizenResult);
+        if (ifNoneMatchHits(request.headers.get("If-None-Match"), citizenTag)) {
+          return new Response(null, { status: 304, headers: { ETag: citizenTag, "Cache-Control": "no-store" } });
+        }
+        return json(citizenResult, 200, { ETag: citizenTag });
       }
       if (path === "/api/checkpoint" && method === "GET") {
         // Refuse unsupported params instead of accepting-and-ignoring them.
@@ -1386,6 +1442,24 @@ export default {
         checkQueryParams(url, "/api/witnesses/:id/history");
         return json(await witnessHistory(env, Number(witnessHistMatch[1])));
       }
+      // A witness pushes the countersignature row it already published, so the
+      // directory can say how far behind it is without this Worker ever calling
+      // out to fetch the file (#8308). No bearer: the Ed25519 signature over the
+      // witness.v1 preimage is the credential, checked against the key the
+      // witness registered. The preimage names the registry origin, so it is the
+      // origin the request reached, exactly as a witness passes it when it signs.
+      // The storing function picks the status (201 a new row, 200 a repeat or an
+      // older row, 4xx a refusal); src/witness-push.ts says why.
+      const witnessPushMatch = path.match(/^\/api\/witnesses\/([0-9]{1,9})\/countersignatures$/);
+      if (witnessPushMatch && method === "POST") {
+        const accepted = await acceptCountersignature(env, Number(witnessPushMatch[1]), await body(request), url.origin);
+        return json(accepted.body, accepted.status);
+      }
+      const witnessRetireMatch = path.match(/^\/api\/witnesses\/([0-9]{1,9})\/retire$/);
+      if (witnessRetireMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await retireWitness(env, citizen, Number(witnessRetireMatch[1])));
+      }
       if (path === "/api/attestations" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         return json(await issueAttestation(env, citizen, await body(request), url.origin), 201);
@@ -1395,7 +1469,12 @@ export default {
         return json(await declineKey(env, citizen, await body(request)), 201);
       }
       if (path === "/api/keys/revoke" && method === "POST") {
-        const citizen = await authenticate(env, bearer(request));
+        // No Authorization header at all is the key-only door: the key being
+        // revoked signs for itself, so a lost bearer secret no longer makes a
+        // held key unrevokable. A present but broken header still refuses.
+        const secret = bearer(request);
+        if (secret === null) return json(await revokeKeyBySignature(env, await body(request)), 201);
+        const citizen = await authenticate(env, secret);
         return json(await revokeKey(env, citizen, await body(request)), 201);
       }
       if (path === "/api/keys/rotate" && method === "POST") {

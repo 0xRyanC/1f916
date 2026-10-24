@@ -429,9 +429,9 @@
         "identity_events: SCAN identity_events USING COVERING INDEX idx_identity_events_citizen_kind"
       ]
     },
-    "aae97c9e27ea07e6": {
+    "2405501e0ef644b7": {
       "status": "debt",
-      "sql": "SELECT l.day AS day, COUNT(*) AS n FROM porch_lines l WHERE l.day < ? AND NOT EXISTS (SELECT N FROM porch_citations pc WHERE pc.line_id = l.id) GROUP BY l.day ORDER BY l.day ASC LIMIT ?",
+      "sql": "SELECT l.day AS day, COUNT(*) AS n FROM porch_lines l WHERE l.day < ? AND NOT EXISTS (SELECT N FROM porch_citations pc WHERE pc.line_id = l.id AND ((pc.source_type = 'post' AND EXISTS (SELECT N FROM posts p WHERE p.id = pc.source_id AND p.mod_state IS NULL)) OR (pc.source_type = 'comment' AND EXISTS (SELECT N FROM comments c WHERE c.id = pc.source_id AND c.mod_state IS NULL)))) GROUP BY l.day ORDER BY l.day ASC LIMIT ?",
       "plan": [
         "porch_lines: SEARCH l USING COVERING INDEX idx_porch_lines_day_id (day<?)"
       ]
@@ -443,32 +443,25 @@
         "listings: SCAN l"
       ]
     },
-    "1f5d1f01a74829a6": {
+    "6094783c6b8caf7c": {
       "status": "debt",
-      "sql": "SELECT l.id, c.handle AS funder, l.title, l.amount_atomic, l.verifier_price_atomic, l.max_verifiers, l.chain_id, l.token, l.expiry, l.funder_address, l.funds_seen_atomic, l.withdrawn_at, l.post_id, l.payload_hash, l.created_at, (SELECT COUNT(*) FROM payout_bindings pb WHERE pb.docket_id IN ('listing",
+      "sql": "SELECT l.id, c.handle AS funder, l.title, l.amount_atomic, l.verifier_price_atomic, l.max_verifiers, l.chain_id, l.token, l.expiry, l.submission_deadline, l.funder_address, l.funds_seen_atomic, l.withdrawn_at, l.post_id, l.payload_hash, l.created_at, (SELECT COUNT(*) FROM payout_bindings pb WHERE pb",
       "plan": [
         "listings: SEARCH l USING INTEGER PRIMARY KEY (rowid>?)"
       ]
     },
-    "6c7c2b30c7d2888f": {
+    "66fb81da8d998e1c": {
       "status": "debt",
-      "sql": "SELECT l.id, c.handle AS funder, l.title, l.amount_atomic, l.verifier_price_atomic, l.max_verifiers, l.chain_id, l.token, l.expiry, l.funder_address, l.funds_seen_atomic, l.withdrawn_at, l.post_id, l.payload_hash, l.created_at, (SELECT COUNT(*) FROM payout_bindings pb WHERE pb.docket_id IN ('listing",
+      "sql": "SELECT l.id, c.handle AS funder, l.title, l.amount_atomic, l.verifier_price_atomic, l.max_verifiers, l.chain_id, l.token, l.expiry, l.submission_deadline, l.funder_address, l.funds_seen_atomic, l.withdrawn_at, l.post_id, l.payload_hash, l.created_at, (SELECT COUNT(*) FROM payout_bindings pb WHERE pb",
       "plan": [
         "listings: SEARCH l USING INTEGER PRIMARY KEY (rowid>?)"
       ]
     },
-    "1a9c2a8aa2b6db5a": {
+    "0669997bef099217": {
       "status": "debt",
-      "sql": "SELECT l.id, l.citizen_id, c.handle AS funder, l.title, l.amount_atomic, l.verifier_price_atomic, l.max_verifiers, l.expiry, l.funder_address, l.funds_seen_atomic, l.withdrawn_at, l.mod_state, l.created_at, l.post_id, l.max_awards, l.funding_mode, l.settlement_mode, l.award_ttl_seconds, l.settlement",
+      "sql": "SELECT l.id, l.citizen_id, c.handle AS funder, l.title, l.amount_atomic, l.verifier_price_atomic, l.max_verifiers, l.expiry, l.submission_deadline, l.funder_address, l.funds_seen_atomic, l.withdrawn_at, l.mod_state, l.created_at, l.post_id, l.max_awards, l.funding_mode, l.settlement_mode, l.award_tt",
       "plan": [
         "listings: SCAN l"
-      ]
-    },
-    "7f344d559e7899b1": {
-      "status": "debt",
-      "sql": "SELECT s.listing_id, COUNT(*) AS n, SUM(CASE WHEN c.created_at < l.created_at AND s.citizen_id <> l.citizen_id AND s.created_at < l.expiry * N - MIN(? * N, (l.expiry * N - l.created_at) / N.N) THEN N ELSE N END) AS n_scored, GROUP_CONCAT(CASE WHEN c.created_at < l.created_at AND s.citizen_id <> l.ci",
-      "plan": [
-        "listing_submissions: SCAN s USING INDEX idx_listing_submissions_listing"
       ]
     },
     "c2261508947a6e3c": {
@@ -687,6 +680,13 @@
       "sql": "SELECT s.id, s.target_type, s.target_id, s.book, s.rule, s.screen_version, s.rules_hash, s.status, s.created_at, c.handle AS author FROM screen_notices s JOIN citizens c ON c.id = s.citizen_id WHERE s.book = 'reader-safety' OR s.status != 'open' OR (s.target_type = 'post' AND EXISTS (SELECT N FROM p",
       "plan": [
         "screen_notices: SCAN s USING INDEX idx_screen_notices_created"
+      ]
+    },
+    "7f344d559e7899b1": {
+      "status": "debt",
+      "sql": "SELECT s.listing_id, COUNT(*) AS n, SUM(CASE WHEN c.created_at < l.created_at AND s.citizen_id <> l.citizen_id AND s.created_at < l.expiry * N - MIN(? * N, (l.expiry * N - l.created_at) / N.N) THEN N ELSE N END) AS n_scored, GROUP_CONCAT(CASE WHEN c.created_at < l.created_at AND s.citizen_id <> l.ci",
+      "plan": [
+        "listing_submissions: SCAN s USING INDEX idx_listing_submissions_listing"
       ]
     },
     "12f239d36b175ff3": {

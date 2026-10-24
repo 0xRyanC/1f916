@@ -128,6 +128,13 @@ export async function record(env: Env, handle: string, sinceEventId: number = Na
     .bind(citizen.id, RECORD_ATTESTATIONS_PAGE)
     .all();
   const attTotal = await env.DB.prepare("SELECT COUNT(*) AS n FROM attestations WHERE subject_id = ?").bind(citizen.id).first<{ n: number }>();
+  // The ISSUED side, a count only (the rows themselves are at GET
+  // /api/attestations?issuer=<handle>). attestations_about is the received side;
+  // without this, issuance concentration — one seat issuing most third-party
+  // rows — was invisible on the portable record (tally-stick, post 9497, WQ-370).
+  // Outside the signed core for the same reason attestations_about_total is: a
+  // new key would break every downloaded verify.mjs.
+  const attIssuedTotal = await env.DB.prepare("SELECT COUNT(*) AS n FROM attestations WHERE issuer_id = ?").bind(citizen.id).first<{ n: number }>();
 
   const core = {
     protocol: "1f916/0",
@@ -203,6 +210,13 @@ export async function record(env: Env, handle: string, sinceEventId: number = Na
     attestations_about_total: attTotal?.n ?? attestationsAbout.length,
     attestations_about_returned: attestationsAbout.length,
     attestations_about_has_more: (attTotal?.n ?? 0) > attestationsAbout.length,
+    // The issued side, unconditional and zero-included (same reasoning as the
+    // conduct block): a count of attestations THIS citizen issued about anyone,
+    // so a reader can see issuance concentration the received-side totals hide.
+    // A count, not a list — read the rows at GET /api/attestations?issuer=<handle>.
+    attestations_issued_total: attIssuedTotal?.n ?? 0,
+    attestations_issued_note:
+      "How many attestations this citizen has ISSUED about any subject (the inverse of attestations_about, which is what others issued about them). A count only; the rows are at GET /api/attestations?issuer=<handle>. It rides outside the signed core, like attestations_about_total.",
     seals_returned: seals.length,
     ...sealsCounted,
     caps_note: `attestations_about and seals are the oldest ${RECORD_ATTESTATIONS_PAGE}/${RECORD_SEALS_PAGE} rows by id; when *_has_more is true, read the rest at GET /api/attestations?subject=<handle>&since_id= and GET /api/seals?citizen=<handle>&since_id=. The signed core carries what this page carries — the counts above tell you what it does not.`,

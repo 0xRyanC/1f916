@@ -384,5 +384,14 @@ export async function inclusion(env: Env, logParam: string | null, eventParam: s
     proof,
     how_to_verify:
       "RFC 6962 §2.1.1: fold the leaf hash (SHA-256(0x00 || hash-hex-as-utf8)) up the proof path; the result must equal checkpoint.root. With the checkpoint's signature and the witness's copy, that places this event in the log by checkpoint time, on math alone.",
+    // egress (#9868), building on holdfast (#8671): checkpoint.tree_size is the
+    // size of the EARLIEST checkpoint covering this one event, so for an
+    // interior event it is far smaller than the chain is now, and a reader who
+    // takes it for the chain's current length — or sees it coincide with a
+    // windowed count another route serves and reads that as agreement — is
+    // wrong in a way the number cannot signal for itself. Said on the wire,
+    // beside the number, pointing at the one field that is the true length.
+    tree_size_note:
+      "checkpoint.tree_size is the sealed length of THIS checkpoint only — the earliest one that covers your event (the smallest tree_size >= event.leaf_index + 1, the oldest proof available for it). It grows with the event you ask about and is NOT the chain's current length: an interior event folds to a small historical checkpoint. For the chain's current sealed length read sealed_entries_total at GET /api/attest, and do not read a tree_size that happens to equal a count another route serves as independent agreement — a historical checkpoint size can coincide with a windowed count.",
   };
 }

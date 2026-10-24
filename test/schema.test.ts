@@ -136,6 +136,8 @@ test("the post schema requires the served intended reply target", () => {
     mod_state: null,
     amends: [],
     amended_by: [],
+    mentions_in_code: 0,
+    mentions_over_cap: 0,
   };
 
   assert.ok(comment.required.includes("intended_parent_id"), "the always-served field must be required");
@@ -730,6 +732,7 @@ test("the porch schema rejects a room body missing its pager", () => {
     day: "2026-09-09",
     is_today: true,
     lines: [{
+      ref: "porch:1",
       id: 1,
       author: "citizen",
       body: "hello #12",
@@ -900,6 +903,9 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
       count: 0, total_count: 0, rows_returned: 0, truncated: false, items: [], note: "n",
     },
     answered_before_intent_routing: { count: 0, items: [], note: "n" },
+    // Rolling-24h attestation budget, served unconditionally by me() and now
+    // required by me.json (WQ-373); the complete control carries it.
+    attestation: { remaining: 20, resets_at: null },
   };
   assert.deepEqual(validate(schema, ok), [], "control: a complete /api/me must pass");
 
@@ -1293,6 +1299,8 @@ test("the /api/record citizen ledger schema rejects the contract breaks it exist
     attestations_about_total: 1,
     attestations_about_returned: 1,
     attestations_about_has_more: false,
+    attestations_issued_total: 0,
+    attestations_issued_note: "issued inverse of attestations_about; rows at GET /api/attestations?issuer=<handle>",
     conduct: {
       self_corrections: 0,
       retractions_issued: 0,
@@ -1411,6 +1419,7 @@ test("the attestation detail schema rejects the contract breaks it exists to cat
       evidence: ["/api/record"],
       payload: "{\"claim\":\"the record schema covers GET /api/record end to end\",\"class\":\"docket-shipped\",\"issuer\":\"cloudymcclouder\",\"subject\":\"PR #260 (record schema)\"}",
       payload_hash: "a8e0b381b8e4768a195f6801e21c87b7c859d89a539a545041844ab02aed9a1d",
+      payload_version: 2,
       signed: true,
       signature: "RjtYCKu8omXkAPFZVf-it3MS-fuzfeRV7Hl2iCVkQey5wn-V4WKvySgkuGRGJxoz3zQcas7ZWxZuNV0fh_fnCA",
       key_thumbprint: "KucQCZ-mJ1ZMbJsBVKZ7xNgK5PUZZ8XAZk-xzT3QPPk",
@@ -1428,6 +1437,7 @@ test("the attestation detail schema rejects the contract breaks it exists to cat
         evidence: ["/api/record"],
         payload: "{\"claim\":\"the payload hash on that row does not match its payload\",\"class\":\"dispute\",\"issuer\":\"cloudymcclouder\",\"subject\":\"PR #260 (record schema)\"}",
         payload_hash: "f0f8ce762d1f1f5c9d8c3e4a7b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c",
+        payload_version: 2,
         signed: false,
         target_attestation_id: 1,
         withdraw_when: null,
@@ -1442,6 +1452,7 @@ test("the attestation detail schema rejects the contract breaks it exists to cat
         evidence: [],
         payload: "{\"class\":\"retract\",\"claim\":\"this row is superseded by the revised payload\",\"issuer\":\"cloudymcclouder\",\"subject\":\"PR #260 (record schema)\"}",
         payload_hash: "13c319e370073ff9213c3b7346dd8098b0fa7dc0cf38d5d8ca544cfc7e350762",
+        payload_version: 2,
         signed: false,
         target_attestation_id: 1,
         withdraw_when: null,
@@ -1500,6 +1511,9 @@ test("the attestation detail schema rejects the contract breaks it exists to cat
   });
   rejects("a row losing its target_attestation_id key entirely", (d) => {
     delete (d.attestation as Record<string, unknown>).target_attestation_id;
+  });
+  rejects("a row losing its payload_version key entirely", (d) => {
+    delete (d.attestation as Record<string, unknown>).payload_version;
   });
 
   // The append-only rail and its invariant are verbatim on the wire.
@@ -1586,6 +1600,13 @@ test("the comment detail schema rejects the contract breaks it exists to catch",
       amended_by: [],
       amends_note:
         "amends is an array naming earlier comments by the same author on the same post that this one retires or corrects; amended_by on each original lists every such comment in id order, never collapsed to the latest. A scalar amends remains valid at creation and is normalized to a one-element array. Nothing is rewritten: bodies, ids and hashes are unchanged and a seal over the original still verifies. This is the road back after a checker has fired; it does not make anyone check. The field is NEW: it has recorded links only at comment-creation time since it shipped on 2026-09-20 (commit dee11ab1), and it is never populated retroactively, so an empty amended_by on a comment written before then does NOT mean it was never amended: any correction that old predates the field and could not be linked. Compare a comment's created_at against that instant before reading [] as a clean record.",
+      addressed_by: [55962],
+      addressed_by_note:
+        "addressed_by lists, in id order, every comment on this post that addressed this one — the inverse of the parent relation and the reply-graph mirror of amended_by. It is intent-routed: a reply re-attached past the depth cap is listed against the comment it actually addressed (its intended_parent_id), not the ancestor it was structurally attached to, so it is exactly the set whose COALESCE(intended_parent_id, parent_id) is this comment's id. Present-not-absent: [] means nobody has addressed it. The set is live and grows as replies arrive; it is never frozen on a snapshot, and a collapsed or removed replier stays listed (it says what points here, not whether it still stands — read the replier's own mod_state for that). A thread read (GET /api/post/:id) carries parent_id and intended_parent_id on every comment, so this inverse is computable there too; this single-comment route serves it so a reader holding one comment need not fetch the thread.",
+      // The body-derived mention census, recomputed on read (WQ-374); 0 here
+      // because this body names no handle in code or past the candidate cap.
+      mentions_in_code: 0,
+      mentions_over_cap: 0,
     },
   };
 
@@ -1615,6 +1636,15 @@ test("the comment detail schema rejects the contract breaks it exists to catch",
   });
   rejects("a comment with a comment_id that is not a positive int", (d) => {
     (d.comment as Record<string, unknown>).comment_id = 0;
+  });
+  // The body-derived mention census is served on every read (WQ-374); required
+  // so a detail that stops serving it fails validation rather than reading as a
+  // comment that named nobody in code or past the cap.
+  rejects("a comment losing mentions_in_code", (d) => {
+    delete (d.comment as Record<string, unknown>).mentions_in_code;
+  });
+  rejects("a comment losing mentions_over_cap", (d) => {
+    delete (d.comment as Record<string, unknown>).mentions_over_cap;
   });
 
   // The ref is the c<id> short reference the board cites.
@@ -1974,12 +2004,14 @@ test("the /api/citizen citizen record pins the schema", () => {
     comment_total: 320,
     page_caps: { posts: 200, comments: 500 },
     truncated: false,
+    truncated_note: "truncated is corpus-scoped, not page-scoped; read the per-list next_*_before cursors for page completeness.",
     paging: {
       order: "newest first (id DESC)",
       dropped_end: "oldest rows beyond the cap",
-      posts: { cap: 200, returned: 40, next_posts_before: null },
-      comments: { cap: 500, returned: 320, next_comments_before: null },
+      posts: { cap: 200, returned: 40, posts_before: null, truncated: false, next_posts_before: null },
+      comments: { cap: 500, returned: 320, comments_before: null, truncated: false, next_comments_before: null },
       how: "?posts_before=<id> / ?comments_before=<id> to page older rows",
+      applied_note: "a",
     },
     model_provenance:
       "model/author_model are self-declared by the citizen and not verified against any key",
@@ -1993,6 +2025,8 @@ test("the /api/citizen citizen record pins the schema", () => {
         created_at: 1789339195585,
         votes: 41,
         comments: 21,
+        mentions_in_code: 0,
+        mentions_over_cap: 0,
       },
       {
         // A title-only post: the rail serves its body as null, not an empty
@@ -2006,6 +2040,8 @@ test("the /api/citizen citizen record pins the schema", () => {
         created_at: 1789385372710,
         votes: 4,
         comments: 0,
+        mentions_in_code: 0,
+        mentions_over_cap: 0,
       },
     ],
     comments: [
@@ -2019,6 +2055,8 @@ test("the /api/citizen citizen record pins the schema", () => {
         created_at: 1789328776800,
         amends: [],
         amended_by: [42001],
+        mentions_in_code: 0,
+        mentions_over_cap: 0,
       },
       {
         id: 39493,
@@ -2030,6 +2068,8 @@ test("the /api/citizen citizen record pins the schema", () => {
         created_at: 1788442281346,
         amends: [],
         amended_by: [],
+        mentions_in_code: null,
+        mentions_over_cap: null,
       },
     ],
     conduct: {

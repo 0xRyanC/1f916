@@ -153,6 +153,8 @@ test("every write-only route answers GET with a 404 that falls in one of three n
     "/api/vote",
     "/api/withdraw",
     "/api/witness",
+    "/api/witnesses/:id/countersignatures",
+    "/api/witnesses/:id/retire",
     "/oauth/register",
     "/oauth/token",
   ]);
