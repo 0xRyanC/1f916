@@ -1,7 +1,7 @@
 // The anchor confirmation queues rotate by when each row was last asked.
 //
-// The Base confirmation pass and the OTS upgrade pass each ask about two
-// pending rows per pass, and both used to pick them `ORDER BY id ASC LIMIT 2`.
+// The Base confirmation pass asks about two pending rows per pass and the OTS
+// upgrade pass OTS_UPGRADES_PER_PASS; both used to pick them `ORDER BY id ASC`.
 // A row that never settles (a Base transaction the node knows but never mines,
 // an RPC that keeps erroring, a calendar that never upgrades or keeps failing)
 // then held one of the two slots on every pass forever, and two such rows
@@ -36,7 +36,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
-import { anchorCheckpoints, listAnchors, otsFile, sha256Bytes, b64, OTS_CALENDARS, REAL_DEPS, type AnchorDeps } from "../src/anchors.ts";
+import { anchorCheckpoints, listAnchors, otsFile, sha256Bytes, b64, OTS_CALENDARS, OTS_UPGRADES_PER_PASS, REAL_DEPS, type AnchorDeps } from "../src/anchors.ts";
 import type { Env } from "../src/society.ts";
 
 const SCHEMA = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
@@ -113,27 +113,33 @@ test("an_unupgraded_ots_row_must_not_hold_an_upgrade_slot_forever", async () => 
   const { env, db } = sqliteTestEnv(SCHEMA);
   db.exec(`INSERT INTO checkpoints (id, log, tree_size, root, sig, created_at) VALUES (10, 'identity_events', 5, '${ROOT}', 's', ${T0 - DAY})`);
   db.exec(`INSERT INTO anchors (id, checkpoint_id, kind, target, proof, status, error, created_at, confirmed_at) VALUES (100, 10, 'archive', 'attempt:x', NULL, 'failed', 'gate', ${T0}, NULL)`);
-  // Row 201's calendar errors on every ask; row 202's calendar answers, but
-  // never with a Bitcoin attestation; row 203's batch is mined.
-  const seeds = await Promise.all([1, 2, 3].map(seedProof));
-  [201, 202, 203].forEach((id, i) =>
+  // One never-settling row per slot, so oldest-first fills every slot with
+  // them: even-numbered ones have a calendar that errors on every ask, odd
+  // ones a calendar that answers but never with a Bitcoin attestation. The
+  // last row's batch is mined.
+  const stuck = OTS_UPGRADES_PER_PASS;
+  const ids = Array.from({ length: stuck + 1 }, (_, i) => 201 + i);
+  const minedId = ids[stuck];
+  const seeds = await Promise.all(ids.map((_, i) => seedProof(i + 1)));
+  ids.forEach((id, i) =>
     db.exec(`INSERT INTO anchors (id, checkpoint_id, kind, target, proof, status, error, created_at, confirmed_at) VALUES (${id}, 10, 'ots', '${CAL}/${id}', '${seeds[i].proof}', 'pending', NULL, ${T0 - 3 * 60 * 60 * 1000}, NULL)`),
   );
   const deps: AnchorDeps = {
     fetch: (async (input: RequestInfo | URL) => {
       const url = String(input);
       if (url.endsWith("/digest")) return new Response(new Uint8Array([0xf0, 0x08, 0x01]), { status: 200 });
-      if (url.includes(seeds[0].attesteeHex)) return new Response("calendar down", { status: 503 });
-      if (url.includes(seeds[1].attesteeHex)) return new Response(PENDING_NODE, { status: 200 });
-      if (url.includes(seeds[2].attesteeHex)) return new Response(UPGRADED_NODE, { status: 200 });
+      const i = seeds.findIndex((s) => url.includes(s.attesteeHex));
+      if (i === stuck) return new Response(UPGRADED_NODE, { status: 200 });
+      if (i >= 0 && i % 2 === 0) return new Response("calendar down", { status: 503 });
+      if (i >= 0) return new Response(PENDING_NODE, { status: 200 });
       return new Response("", { status: 404 });
     }) as typeof fetch,
     submitBase: async () => { throw new Error("no Base in this fixture"); },
     confirmBase: async () => "pending",
   };
   for (let pass = 0; pass < 2; pass++) await anchorCheckpoints(env, T0 + pass * PASS, deps);
-  assert.equal(statusOf(db, 203), "confirmed", "the mined row behind an erroring calendar and a never-upgraded row upgrades within two passes");
-  assert.deepEqual([statusOf(db, 201), statusOf(db, 202)], ["pending", "pending"]);
+  assert.equal(statusOf(db, minedId), "confirmed", "the mined row behind a full pass of erroring and never-upgraded rows upgrades within two passes");
+  assert.deepEqual(ids.slice(0, stuck).map((id) => statusOf(db, id)), Array(stuck).fill("pending"));
 });
 
 test("a_pending_archive_job_must_not_hold_the_poll_slot_forever", async () => {

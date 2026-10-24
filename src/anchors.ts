@@ -351,6 +351,19 @@ function asReceipt(r: BaseReceiptStatus | BaseReceipt): BaseReceipt {
 // forever; with two slots, two such rows stopped the whole queue (live: #650's
 // dropped Base rows). Rotation by last-asked time was suggested by tally-stick
 // (c119828) so one column serves every queue.
+// How many pending OpenTimestamps rows one pass asks about. Each checkpoint
+// gets one OTS row per calendar (three), so rows arrive at about 1.5 per
+// five-minute pass (12,828 rows from 2026-09-25 to 2026-10-24, 436 a day).
+// At two per pass the ceiling was 576 a day and the live rate after the tag
+// fix 510 a day (154 confirmations, 13:40Z-20:56Z on 2026-10-24), so the
+// 12,700-row backlog shrank by about 74 a day: a row created today would not
+// be asked for months, while its commitment was in a Bitcoin block within
+// hours. Eight per pass is 2,304 a day: the backlog clears in about a week,
+// and after that a row is asked in its first pass past the hour gate. Each
+// slot is one calendar fetch from the cron's shared subrequest budget, so the
+// number stays small and fixed rather than "all pending rows".
+export const OTS_UPGRADES_PER_PASS = 8;
+
 async function stampAsked(env: Env, ids: number[], now: number): Promise<void> {
   if (ids.length === 0) return;
   await env.DB.prepare(`UPDATE anchors SET checked_at = ? WHERE id IN (${ids.map(() => "?").join(",")})`).bind(now, ...ids).run();
@@ -488,8 +501,9 @@ export async function anchorCheckpoints(env: Env, now = Date.now(), deps: Anchor
       if (s === "confirmed") report.confirmed++; else report.failed++;
     }
   }
-  // OTS upgrades: pending OpenTimestamps rows older than an hour, two per pass,
-  // never-asked first, then least recently asked (see stampAsked). The calendars batch into Bitcoin about once an hour, so
+  // OTS upgrades: pending OpenTimestamps rows older than an hour,
+  // OTS_UPGRADES_PER_PASS per pass, never-asked first, then least recently
+  // asked (see stampAsked). The calendars batch into Bitcoin about once an hour, so
   // asking sooner is almost always a wasted round trip. A calendar error or a
   // not-yet-upgraded answer leaves the row untouched — it stays pending and is
   // asked again in its turn, exactly like a Base transaction not yet seen.
@@ -497,7 +511,7 @@ export async function anchorCheckpoints(env: Env, now = Date.now(), deps: Anchor
   // and the completed proof is stored so a reader no longer depends on the
   // calendar still holding the commitment (issue #517).
   const otsPend = (
-    await env.DB.prepare("SELECT id, target, proof FROM anchors WHERE kind = 'ots' AND status = 'pending' AND proof IS NOT NULL AND created_at < ? ORDER BY checked_at ASC, id ASC LIMIT 2").bind(now - 60 * 60 * 1000).all<{ id: number; target: string; proof: string }>()
+    await env.DB.prepare("SELECT id, target, proof FROM anchors WHERE kind = 'ots' AND status = 'pending' AND proof IS NOT NULL AND created_at < ? ORDER BY checked_at ASC, id ASC LIMIT ?").bind(now - 60 * 60 * 1000, OTS_UPGRADES_PER_PASS).all<{ id: number; target: string; proof: string }>()
   ).results;
   await stampAsked(env, otsPend.map((p) => p.id), now);
   for (const p of otsPend) {
@@ -570,7 +584,7 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
     what_this_is:
       "The newest checkpoint of each log, offered every five minutes to the targets listed under `targets`: three OpenTimestamps calendars (the Bitcoin blockchain), the Base blockchain when an anchoring wallet is configured, and the Internet Archive at most once every 55 minutes: one capture of GET /api/checkpoint, the page that carries both heads, recorded as an anchor of the identity log's head only. Every attempt, made or refused, is a row here with its status and error. Checkpoints from before the first anchoring pass were never offered.",
     what_an_anchor_proves:
-      "A confirmed anchor proves that the exact checkpoint text existed by that time and has not changed since. An OpenTimestamps row starts `pending`: this server records the calendar's incomplete proof at submission, and a later pass asks the row's calendar for the upgrade — usually within a few hours of submission, once the calendar's Bitcoin transaction has been mined. When the completed proof carries a Bitcoin attestation, the row flips to `confirmed`, `confirmed_at` names the instant this server stored it, and the full proof is kept here, so a reader verifies it from the served file alone and never from the calendar's word. Until then `pending` means 'submitted, not yet in a block' and `ots upgrade` on the served /api/anchors/<id>.ots file fetches the attestation yourself (see how_to_verify.ots). A pending Base row, by contrast, is a transaction not yet seen in a block and does flip to confirmed once seen. On a Base row `confirmed_at` is the instant this server read the receipt, which can be hours or days after the block, and `block_number` is the block the transaction was mined in: that block's own timestamp, on any Base node or explorer, is when it was mined. `block_number` is null on every other kind and on Base rows confirmed before it was recorded. A failed row proves only that the attempt was made and refused. No anchor says anything about whether what the checkpoint covers is true.",
+      "A confirmed anchor proves that the exact checkpoint text existed by that time and has not changed since. An OpenTimestamps row starts `pending`: this server records the calendar's incomplete proof at submission, and a later pass asks the row's calendar for the upgrade, a few rows per pass, never-asked rows first and then the least recently asked. The calendar's Bitcoin transaction is usually mined within a few hours of submission; the row flips on the first pass that asks after that. When the completed proof carries a Bitcoin attestation, the row flips to `confirmed`, `confirmed_at` names the instant this server stored it, and the full proof is kept here, so a reader verifies it from the served file alone and never from the calendar's word. Until then `pending` means 'not yet confirmed by this server's pass', not 'not yet in a block': the commitment may already be in a Bitcoin block, and `ots upgrade` on the served /api/anchors/<id>.ots file fetches the attestation yourself (see how_to_verify.ots). A pending Base row, by contrast, is a transaction not yet seen in a block and does flip to confirmed once seen. On a Base row `confirmed_at` is the instant this server read the receipt, which can be hours or days after the block, and `block_number` is the block the transaction was mined in: that block's own timestamp, on any Base node or explorer, is when it was mined. `block_number` is null on every other kind and on Base rows confirmed before it was recorded. A failed row proves only that the attempt was made and refused. No anchor says anything about whether what the checkpoint covers is true.",
     targets: {
       ots_calendars: OTS_CALENDARS,
       base: Boolean(env.ANCHOR_BASE_KEY),

@@ -55,6 +55,15 @@ test("GET /api/anchors prose describes the OTS upgrade pass, not permanent pendi
     "the prose must not deny the upgrade pass that now exists",
   );
 
+  // `pending` is this server's label, not the chain's state: live row 1 was in
+  // Bitcoin block 968505 six minutes after it was created and read `pending`
+  // for 29 days. The prose must not equate the two, nor promise the flip comes
+  // within hours of submission; it comes on the first pass that asks after the
+  // calendar's transaction is mined.
+  assert.doesNotMatch(proves, /'submitted, not yet in a block'/, "pending must not be glossed as 'not yet in a block'");
+  assert.doesNotMatch(proves, /upgrade — usually within a few hours of submission/, "the flip is not promised within hours of submission");
+  assert.match(proves, /may already be in a Bitcoin block/, "the reader is told a pending row may already be anchored");
+
   // The new truth must be stated: a pass asks the calendar, a Bitcoin
   // attestation flips the row, and the completed proof is stored here.
   assert.match(proves, /asks the row's calendar for the upgrade/, "must describe the upgrade pass");

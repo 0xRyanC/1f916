@@ -1,5 +1,5 @@
 // The OTS upgrade pass (issue #517): pending OpenTimestamps rows older than an
-// hour, two per pass, oldest first, each asked of its own calendar at the
+// hour, OTS_UPGRADES_PER_PASS per pass, oldest first, each asked of its own calendar at the
 // address the decoded proof names — GET /timestamp/<attestee-message-hex>,
 // where the attestee message is the stored op chain replayed from the digest
 // (probed live: calendars 404 a root-digest lookup; PR #648 probe history).
@@ -12,7 +12,8 @@
 // Killing mutations, each checked against a scratch copy of src/anchors.ts:
 //   - drop the one-hour age gate: a fresh pending row is upgraded in the same
 //     pass that created it, red.
-//   - LIMIT 2 -> LIMIT 200: three pending rows upgrade in one pass, red.
+//   - LIMIT ? -> LIMIT 200: all limit+1 pending rows upgrade in one pass, red.
+//   - OTS_UPGRADES_PER_PASS back to 2: the backlog outruns the pass, red.
 //   - serve the raw calendar response as the whole proof: the served file no
 //     longer parses as a detached file (it must be prefix + stamp-prefix +
 //     upgraded terminal node), red.
@@ -27,7 +28,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { sqliteTestEnv } from "./helpers/sqlite-d1.ts";
-import { anchorCheckpoints, decodeOtsTail, hasBitcoinAttestation, otsFile, sha256Bytes, b64, type AnchorDeps } from "../src/anchors.ts";
+import { anchorCheckpoints, decodeOtsTail, hasBitcoinAttestation, otsFile, sha256Bytes, b64, OTS_UPGRADES_PER_PASS, type AnchorDeps } from "../src/anchors.ts";
 import type { Env } from "../src/society.ts";
 
 const SCHEMA = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
@@ -214,23 +215,37 @@ test("a row younger than the hour gate is not asked", async () => {
   assert.equal(row.status, "pending");
 });
 
-test("two rows per pass, oldest first", async () => {
-  const p1 = await seedProof(5);
-  const p2 = await seedProof(6);
-  const p3 = await seedProof(7);
-  const { env, db } = fixture([
-    { id: 1, checkpoint: 10, target: CAL, proof: p1.proof, age_ms: 3 * HOUR },
-    { id: 2, checkpoint: 10, target: "https://bob.btc.calendar.opentimestamps.org", proof: p2.proof, age_ms: 2 * HOUR },
-    { id: 3, checkpoint: 11, target: CAL, proof: p3.proof, age_ms: HOUR + 1 },
-  ]);
+test("OTS_UPGRADES_PER_PASS rows per pass, oldest first", async () => {
+  // One row more than the limit, oldest id first. A row is unique per
+  // (checkpoint, kind, target), so each gets its own calendar path.
+  const rows = [];
+  for (let i = 1; i <= OTS_UPGRADES_PER_PASS + 1; i++) {
+    const p = await seedProof(100 + i);
+    rows.push({ id: i, checkpoint: i % 2 ? 10 : 11, target: `${CAL}/${i}`, proof: p.proof, age_ms: HOUR + 1 + (OTS_UPGRADES_PER_PASS + 1 - i) * 60_000 });
+  }
+  const { env, db } = fixture(rows);
   const calls: string[] = [];
   const report = await anchorCheckpoints(env, T0, depsWith(() => new Response(UPGRADED_NODE, { status: 200 }), calls));
 
-  assert.equal(report.ots_upgraded, 2, "exactly the per-pass limit upgrades");
-  assert.equal(calls.filter((c) => c.includes("/timestamp/")).length, 2);
+  assert.equal(report.ots_upgraded, OTS_UPGRADES_PER_PASS, "exactly the per-pass limit upgrades");
+  assert.equal(calls.filter((c) => c.includes("/timestamp/")).length, OTS_UPGRADES_PER_PASS);
   const statuses = db.prepare("SELECT id, status FROM anchors WHERE kind = 'ots' ORDER BY id").all() as { id: number; status: string }[];
-  const byId = new Map(statuses.map((s) => [s.id, s.status]));
-  assert.equal(byId.get(1), "confirmed");
-  assert.equal(byId.get(2), "confirmed");
-  assert.equal(byId.get(3), "pending", "the newest of the three waits for the next pass");
+  for (const s of statuses) {
+    assert.equal(s.status, s.id <= OTS_UPGRADES_PER_PASS ? "confirmed" : "pending", `row ${s.id}`);
+  }
+});
+
+// The limit has to outrun intake, or a fresh row waits behind the whole
+// backlog while its commitment is already in a block. Rows arrive at about
+// 1.5 per five-minute pass (three calendars per checkpoint); two slots
+// drained a 12,700-row backlog by about 74 a day live. Four slots is the
+// least that clears it within a month; the bound above keeps a pass inside
+// the cron's shared subrequest budget.
+test("the OTS per-pass limit outruns intake and stays inside the subrequest budget", () => {
+  const passesPerDay = 24 * 12;
+  const intakePerDay = 436;
+  const backlog = 12_700;
+  const netPerDay = OTS_UPGRADES_PER_PASS * passesPerDay - intakePerDay;
+  assert.ok(netPerDay > 0 && backlog / netPerDay <= 30, `backlog would take ${(backlog / netPerDay).toFixed(0)} days to clear`);
+  assert.ok(OTS_UPGRADES_PER_PASS <= 16, "each slot is a calendar fetch from the cron's shared budget");
 });
