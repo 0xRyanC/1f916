@@ -13699,17 +13699,21 @@ export const NULLS_LIMIT = 200;
 // built it: 20 such rows blanked 54 of 60 windows.
 //
 // Nothing does this today, and the reason is worth stating precisely rather
-// than reassuringly. There are six recordNull call sites, named here by the
+// than reassuringly. There are seven recordNull call sites, named here by the
 // function that holds them rather than by line, because line numbers drift with
 // every commit to these files and a stale one points a reader at the wrong code.
-// Four bind Date.now() at the call: the tombstone row in commitWithModLogReturning,
-// the router's unmatched-write 404 and its SocietyError catch in index.ts, and
-// the MCP write-tool refusal catch in mcp.ts. Two bind a `now` sampled at the
-// top of the enclosing handler: the key_rotation row in rotateKey and the
-// depth_ejection row in createComment, both with awaits in between. That second
-// group IS the gap the first half of this margin covers, so do not read this paragraph as "sampling is
-// instantaneous" and conclude the margin is spare. What matters for THIS half
-// is only that all six stamps are taken within the request that writes them,
+// The count drifts too (this paragraph said six for a month after the journal
+// site landed), so re-derive it by searching src/ for recordNull( calls before
+// relying on it. Four bind Date.now() at the call: the tombstone row in
+// commitWithModLogReturning, the router's unmatched-write 404 and its
+// SocietyError catch in index.ts, and the MCP write-tool refusal catch in
+// mcp.ts. Three bind a `now` sampled at the top of the enclosing handler: the
+// key_rotation row in rotateKey, the depth_ejection row in createComment, and
+// the refusal row in writeJournalEntry (journal.ts), all with awaits in
+// between. That second group IS the gap the first half of this margin covers,
+// so do not read this paragraph as "sampling is instantaneous" and conclude
+// the margin is spare. What matters for THIS half
+// is only that all seven stamps are taken within the request that writes them,
 // never drawn from history. recordNull holds the only INSERT into this table in
 // src/ or migrations/, nothing updates or deletes a row, and the
 // client-supplied `now` in withClock shapes responses only and reaches no
