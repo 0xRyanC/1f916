@@ -560,10 +560,10 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
   const since = typeof sinceId === "number" && Number.isFinite(sinceId) ? sinceId : 0;
   const rows = (
     await env.DB.prepare(
-      "SELECT a.id, a.checkpoint_id, a.kind, a.target, a.status, a.error, a.created_at, a.confirmed_at, a.block_number, c.log, c.tree_size, c.root, c.created_at AS checkpoint_created_at FROM anchors a JOIN checkpoints c ON c.id = a.checkpoint_id WHERE a.id > ? ORDER BY a.id ASC LIMIT ?",
+      "SELECT a.id, a.checkpoint_id, a.kind, a.target, a.status, a.error, a.created_at, a.confirmed_at, a.block_number, a.checked_at, c.log, c.tree_size, c.root, c.created_at AS checkpoint_created_at FROM anchors a JOIN checkpoints c ON c.id = a.checkpoint_id WHERE a.id > ? ORDER BY a.id ASC LIMIT ?",
     )
       .bind(since, ANCHOR_PAGE + 1)
-      .all<AnchorRow & { log: string; tree_size: number; root: string; checkpoint_created_at: number }>()
+      .all<AnchorRow & { checked_at: number | null; log: string; tree_size: number; root: string; checkpoint_created_at: number }>()
   ).results;
   const hasMore = rows.length > ANCHOR_PAGE;
   const page = hasMore ? rows.slice(0, ANCHOR_PAGE) : rows;
@@ -584,7 +584,7 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
     what_this_is:
       "The newest checkpoint of each log, offered every five minutes to the targets listed under `targets`: three OpenTimestamps calendars (the Bitcoin blockchain), the Base blockchain when an anchoring wallet is configured, and the Internet Archive at most once every 55 minutes: one capture of GET /api/checkpoint, the page that carries both heads, recorded as an anchor of the identity log's head only. Every attempt, made or refused, is a row here with its status and error. Checkpoints from before the first anchoring pass were never offered.",
     what_an_anchor_proves:
-      "A confirmed anchor proves that the exact checkpoint text existed by that time and has not changed since. An OpenTimestamps row starts `pending`: this server records the calendar's incomplete proof at submission, and a later pass asks the row's calendar for the upgrade, a few rows per pass, never-asked rows first and then the least recently asked. The calendar's Bitcoin transaction is usually mined within a few hours of submission; the row flips on the first pass that asks after that. When the completed proof carries a Bitcoin attestation, the row flips to `confirmed`, `confirmed_at` names the instant this server stored it, and the full proof is kept here, so a reader verifies it from the served file alone and never from the calendar's word. Until then `pending` means 'not yet confirmed by this server's pass', not 'not yet in a block': the commitment may already be in a Bitcoin block, and `ots upgrade` on the served /api/anchors/<id>.ots file fetches the attestation yourself (see how_to_verify.ots). A pending Base row, by contrast, is a transaction not yet seen in a block and does flip to confirmed once seen. On a Base row `confirmed_at` is the instant this server read the receipt, which can be hours or days after the block, and `block_number` is the block the transaction was mined in: that block's own timestamp, on any Base node or explorer, is when it was mined. `block_number` is null on every other kind and on Base rows confirmed before it was recorded. A failed row proves only that the attempt was made and refused. No anchor says anything about whether what the checkpoint covers is true.",
+      "A confirmed anchor proves that the exact checkpoint text existed by that time and has not changed since. An OpenTimestamps row starts `pending`: this server records the calendar's incomplete proof at submission, and a later pass asks the row's calendar for the upgrade, a few rows per pass, never-asked rows first and then the least recently asked. The calendar's Bitcoin transaction is usually mined within a few hours of submission; the row flips on the first pass that asks after that. When the completed proof carries a Bitcoin attestation, the row flips to `confirmed`, `confirmed_at` names the instant this server stored it, and the full proof is kept here, so a reader verifies it from the served file alone and never from the calendar's word. Until then `pending` means 'not yet confirmed by this server's pass', not 'not yet in a block': the commitment may already be in a Bitcoin block, and `ots upgrade` on the served /api/anchors/<id>.ots file fetches the attestation yourself (see how_to_verify.ots). A pending Base row, by contrast, is a transaction not yet seen in a block and does flip to confirmed once seen. On a Base row `confirmed_at` is the instant this server read the receipt, which can be hours or days after the block, and `block_number` is the block the transaction was mined in: that block's own timestamp, on any Base node or explorer, is when it was mined. `block_number` is null on every other kind and on Base rows confirmed before it was recorded. `last_asked_at` on a row in `anchors` is the last instant a confirmation pass asked the row's calendar, node or archive about it, whatever the answer; null means never asked. The passes pick never-asked rows first and then the least recently asked, so a pending row's `last_asked_at` shows where it stands in that rotation. A failed row proves only that the attempt was made and refused. No anchor says anything about whether what the checkpoint covers is true.",
     targets: {
       ots_calendars: OTS_CALENDARS,
       base: Boolean(env.ANCHOR_BASE_KEY),
@@ -621,6 +621,10 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
       created_at: r.created_at,
       confirmed_at: r.confirmed_at,
       block_number: r.block_number,
+      // The confirmation passes pick rows by this stamp (never-asked first,
+      // then least recently asked), so serving it is what lets a reader see
+      // the queue rotate instead of inferring it from which ids confirmed.
+      last_asked_at: r.checked_at,
       ...(r.kind === "ots" ? { ots_file: `/api/anchors/${r.id}.ots`, payload_file: `/api/anchors/${r.id}.txt` } : {}),
     })),
     has_more: hasMore,
