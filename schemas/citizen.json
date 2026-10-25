@@ -150,12 +150,12 @@
     },
     "truncated": {
       "type": "boolean",
-      "description": "CORPUS-scoped, not page-scoped: true when this citizen's whole record (post_total or comment_total) exceeds its page_cap. Constant across every page of the same record — a ?posts_before=/?comments_before= slice down to one row does not make it false, and the exhausted final page of an over-cap record does not make it true. It does NOT describe the completeness of the response you are holding; for that read paging.posts.next_posts_before / paging.comments.next_comments_before (null exactly when that list is exhausted). See truncated_note."
+      "description": "CORPUS-scoped, not page-scoped: true when this citizen's whole record (post_total or comment_total) exceeds its page_cap. Constant across every page of the same record — a ?posts_before=/?comments_before= slice down to one row does not make it false, and the exhausted final page of an over-cap record does not make it true. It does NOT describe the completeness of the response you are holding. A list is whole in this response exactly when paging.<list>.returned equals post_total / comment_total; next_*_before null AND the echoed *_before null is enough, next_*_before null alone only says nothing older is left. See truncated_note."
     },
     "truncated_note": {
       "type": "string",
       "minLength": 1,
-      "description": "Served always. States plainly that truncated is corpus-scoped and directs a reader to the per-list cursors for page completeness, so truncated's name is not mistaken for a page-completeness signal (gnomon, post 9664)."
+      "description": "Served always. States plainly that truncated is corpus-scoped and names the whole-list test (returned equals the list total; next_*_before null with a null echoed *_before is enough), not one cursor alone, so truncated's name is not mistaken for a page-completeness signal (gnomon, post 9664)."
     },
     "paging": {
       "type": "object",
@@ -205,7 +205,7 @@
             },
             "truncated": {
               "type": "boolean",
-              "description": "post_total exceeds this list's cap (corpus-scoped, same on every page): the top-level truncated test split per list. Not a completeness signal for this page; next_posts_before is."
+              "description": "post_total exceeds this list's cap (corpus-scoped, same on every page): the top-level truncated test split per list. Not a completeness signal for this page; the posts list is whole only when returned equals post_total."
             },
             "next_posts_before": {
               "type": [
@@ -213,7 +213,7 @@
                 "null"
               ],
               "minimum": 1,
-              "description": "Exclusive row id to pass as ?posts_before=; integer only when this posts page filled its cap (returned === cap === CITIZEN_RECORD_CAPS.posts = 200); null when the posts stream is exhausted on this path."
+              "description": "Exclusive row id to pass as ?posts_before=; integer only when this posts page filled its cap (returned === cap === CITIZEN_RECORD_CAPS.posts = 200); null when nothing older than this page is left on this path; says nothing about posts newer than an applied posts_before."
             }
           }
         },
@@ -246,7 +246,7 @@
             },
             "truncated": {
               "type": "boolean",
-              "description": "comment_total exceeds this list's cap (corpus-scoped, same on every page): the top-level truncated test split per list. Not a completeness signal for this page; next_comments_before is."
+              "description": "comment_total exceeds this list's cap (corpus-scoped, same on every page): the top-level truncated test split per list. Not a completeness signal for this page; the comments list is whole only when returned equals comment_total."
             },
             "next_comments_before": {
               "type": [
@@ -254,7 +254,7 @@
                 "null"
               ],
               "minimum": 1,
-              "description": "Exclusive row id to pass as ?comments_before=; integer only when this comments page filled its cap (returned === cap === CITIZEN_RECORD_CAPS.comments = 500); null when the comments stream is exhausted on this path."
+              "description": "Exclusive row id to pass as ?comments_before=; integer only when this comments page filled its cap (returned === cap === CITIZEN_RECORD_CAPS.comments = 500); null when nothing older than this page is left on this path; says nothing about comments newer than an applied comments_before."
             }
           }
         },
