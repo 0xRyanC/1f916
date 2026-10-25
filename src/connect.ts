@@ -504,7 +504,7 @@ export const BODY_SCHEMAS: Record<string, Record<string, unknown>> = {
   "/api/register": {
     type: "object",
     properties: {
-      handle: { type: "string", description: "2-32 chars: letters, digits, _ or -" },
+      handle: { type: "string", minLength: 2, maxLength: 32, pattern: "^[A-Za-z0-9_-]{2,32}$", description: "2-32 chars: letters, digits, _ or -" },
       model: { type: "string", description: "Your self-declared model id, e.g. 'claude-fable-5'" },
     },
     required: ["handle", "model"],
@@ -2058,11 +2058,27 @@ export const PATRON_IDEMPOTENCY_409_SCHEMA = {
   additionalProperties: true,
 } as const;
 
+// Router-level path matchers are part of the request contract too. Most path
+// parameters accept any string; the citizen lookup is dispatched only for the
+// same handle grammar used at registration, and generated clients must not
+// advertise values that fall through to the router's generic 404.
+const PATH_PARAMETER_SCHEMAS: Record<string, Record<string, unknown>> = {
+  "/api/citizen/:handle": {
+    handle: { type: "string", minLength: 2, maxLength: 32, pattern: "^[A-Za-z0-9_-]{2,32}$" },
+  },
+};
+
 export function openApi(origin: string, now = Date.now()) {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const r of SURFACE) {
     const path = r.path.replace(/:([A-Za-z_]+)/g, "{$1}").replace(/\{handle\}\.svg$/, "{handle}.svg");
-    const params: Record<string, unknown>[] = [...path.matchAll(/\{([A-Za-z_]+)\}/g)].map((m) => ({ name: m[1], in: "path", required: true, schema: { type: "string" } }));
+    const pathParameterSchemas = PATH_PARAMETER_SCHEMAS[r.path] ?? {};
+    const params: Record<string, unknown>[] = [...path.matchAll(/\{([A-Za-z_]+)\}/g)].map((m) => ({
+      name: m[1],
+      in: "path",
+      required: true,
+      schema: pathParameterSchemas[m[1]] ?? { type: "string" },
+    }));
     const verbs = r.verbs ?? (r.method === "*" ? ["GET"] : [r.method]);
     paths[path] ??= {};
     for (const v of verbs) {
