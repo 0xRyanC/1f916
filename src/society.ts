@@ -13699,12 +13699,15 @@ export const NULLS_LIMIT = 200;
 // built it: 20 such rows blanked 54 of 60 windows.
 //
 // Nothing does this today, and the reason is worth stating precisely rather
-// than reassuringly. There are six recordNull call sites. Four bind Date.now()
-// at the call (society.ts:2378, index.ts:1522, index.ts:1575, mcp.ts:2008); two
-// bind a `now` sampled at the top of the enclosing handler — society.ts:832,
-// from rotateKey's at :762, and society.ts:8466, from createComment's at :8419,
-// both with awaits in between. That second group IS the gap the first half of
-// this margin covers, so do not read this paragraph as "sampling is
+// than reassuringly. There are six recordNull call sites, named here by the
+// function that holds them rather than by line, because line numbers drift with
+// every commit to these files and a stale one points a reader at the wrong code.
+// Four bind Date.now() at the call: the tombstone row in commitWithModLogReturning,
+// the router's unmatched-write 404 and its SocietyError catch in index.ts, and
+// the MCP write-tool refusal catch in mcp.ts. Two bind a `now` sampled at the
+// top of the enclosing handler: the key_rotation row in rotateKey and the
+// depth_ejection row in createComment, both with awaits in between. That second
+// group IS the gap the first half of this margin covers, so do not read this paragraph as "sampling is
 // instantaneous" and conclude the margin is spare. What matters for THIS half
 // is only that all six stamps are taken within the request that writes them,
 // never drawn from history. recordNull holds the only INSERT into this table in
