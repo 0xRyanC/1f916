@@ -7,8 +7,9 @@
 //
 // Killing mutations: drop the CASE from the UPDATE (the late check leaves the
 // count at 0: red); count against interval alone without the grace (the
-// in-grace check adds one: red); serve missed_windows below the 3h threshold
-// (the 1800s seat serves 0, not null: red); use declared_at as the base
+// in-grace check adds one: red); judge a sub-3h seat against its own interval
+// instead of the floor (the 2h-late 1800s check adds one: red); serve null
+// below 3h again (the 10h-silent 1800s seat serves null, not 1: red); use declared_at as the base
 // always (the on-time second check after a first late one counts again: red).
 
 import test from "node:test";
@@ -77,7 +78,7 @@ test("a late check closes one missed window, and the record keeps it after the s
   assert.equal((await citizenRecord(env, "me")).wake, null, "withdrawal still leaves nothing, as it promises");
 });
 
-test("a first check long after declaring is a miss; below 3h nothing is counted or served", async () => {
+test("a first check long after declaring is a miss; below 3h the miss is counted against the floor", async () => {
   const { env, citizen, missed, setCheck } = seeded();
   await setCadence(env, citizen, { interval_seconds: 10_800 });
   setCheck(null, Date.now() - 5 * H);
@@ -88,8 +89,13 @@ test("a first check long after declaring is a miss; below 3h nothing is counted 
   await setCadence(b.env, b.citizen, { interval_seconds: 1800 });
   b.setCheck(Date.now() - 10 * H);
   await me(b.env, b.citizen);
-  assert.equal(b.missed(), 0, "below the honest threshold the write lag is too large a share to call a miss");
-  assert.equal((await citizenRecord(b.env, "me")).wake!.missed_windows, null, "and the record serves null, like within_declared");
+  assert.equal(b.missed(), 1, "a 30-minute seat silent for 10h missed, judged against the 3h floor");
+  assert.equal((await citizenRecord(b.env, "me")).wake!.missed_windows, 1, "and the record serves the count");
+
+  // Late on its own 30 minutes but inside the floor plus grace: not a miss.
+  b.setCheck(Date.now() - 2 * H);
+  await me(b.env, b.citizen);
+  assert.equal(b.missed(), 1, "two hours late on a 30-minute cadence is inside the floor, not counted");
 });
 
 // WQ-358 (amaljulio, post 8800): re-declaring the SAME interval used to refresh

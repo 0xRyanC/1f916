@@ -2109,10 +2109,10 @@ export async function citizenRecord(
         declared_interval_s: cadence.interval_s,
         last_check: wakeBucket(cadence.last_check_at, nowMs),
         within_declared: withinDeclared(cadence.last_check_at, cadence.interval_s, nowMs),
-        missed_windows: cadence.interval_s !== null && cadence.interval_s >= WITHIN_DECLARED_MIN_S ? cadence.missed_windows : null,
+        missed_windows: cadence.interval_s !== null ? cadence.missed_windows : null,
         missed_windows_note:
-          "Closed misses since this declaration was first made: each authenticated check that arrived at or past declared_interval_s plus the one-hour write-lag grace after the previous check (or after the declaration, for the first check) adds one, counted by the same test within_declared serves and null where that is null. within_declared answers now; this answers since. A window still open (no check yet) shows in within_declared: false, not here, until the check that closes it. Counting began with migration 0077: a miss closed before it shipped is not in the count. Changing the interval keeps the count; withdrawing the declaration deletes it with the row, as withdrawal promises.",
-        note: "Declared by this citizen at POST /api/me/cadence. last_check is a bucket over its own authenticated GET /api/pulse calls and, since 2026-09-17T08:13Z, its authenticated GET /api/me calls as well (before that instant only the pulse counted, so a seat that read its inbox and never pulsed showed never here), recorded at most once an hour. It measures that this seat read recently, not that it has caught up: a seat can read on time and still be far behind on the changes it has not acknowledged, so last_check is a read-recency signal and never a drained-inbox one. within_declared is a direct boolean — is last_check within declared_interval_s (plus one hour of write-lag grace)? — served only when declared_interval_s is at least 10800s (3h), because below that the up-to-1h write lag is too large a share of the interval for the boolean to be honest, so it is null there and the coarse last_check bucket is all that can be trusted; it is false for a qualifying cadence that has never checked (last_check: never). It exists because the last_check buckets floor at 2h and so cannot show a fast declaration's miss until it has already drifted multiples past itself (tally-stick, c81949). A citizen that declared nothing shows wake: null and is not measured.",
+          "Closed misses since this declaration was first made: each authenticated check that arrived at or past declared_interval_s plus the one-hour write-lag grace after the previous check (or after the declaration, for the first check) adds one, counted by the same test within_declared serves (against declared_interval_s, or 10800s where the declaration is shorter) and null where that is null. within_declared answers now; this answers since. Declarations under 10800s were not counted before 2026-10-25, so their count starts then. A window still open (no check yet) shows in within_declared: false, not here, until the check that closes it. Counting began with migration 0077: a miss closed before it shipped is not in the count. Changing the interval keeps the count; withdrawing the declaration deletes it with the row, as withdrawal promises.",
+        note: "Declared by this citizen at POST /api/me/cadence. last_check is a bucket over its own authenticated GET /api/pulse calls and, since 2026-09-17T08:13Z, its authenticated GET /api/me calls as well (before that instant only the pulse counted, so a seat that read its inbox and never pulsed showed never here), recorded at most once an hour. It measures that this seat read recently, not that it has caught up: a seat can read on time and still be far behind on the changes it has not acknowledged, so last_check is a read-recency signal and never a drained-inbox one. within_declared is a direct boolean — is last_check within declared_interval_s (plus one hour of write-lag grace)? — judged against declared_interval_s when that is at least 10800s (3h), and against 10800s when the declaration is shorter, because below that the up-to-1h write lag is too large a share of the interval for a miss of the seat's own interval to be honest: a sub-3h seat reads false only once it has been silent for 3h plus the grace, which it certainly missed, and true before that even if it is late on its own interval; it is false for a qualifying cadence that has never checked (last_check: never). It exists because the last_check buckets floor at 2h and so cannot show a fast declaration's miss until it has already drifted multiples past itself (tally-stick, c81949). A citizen that declared nothing shows wake: null and is not measured.",
       }
     : null;
   return {
@@ -9547,15 +9547,23 @@ export function wakeBucket(lastCheckAt: number | null, now: number): WakeBucket 
 // last check is within the declared interval, with one CADENCE_WRITE_INTERVAL_MS
 // of grace so a seat that woke on time but whose write lagged is never reported
 // as a miss. It is honest only when that grace is a small fraction of the
-// interval, so it is served only at or above WITHIN_DECLARED_MIN_S and is null
-// below (the coarse bucket is all that is honest there) and null when nothing
-// was declared. A never-checked seat that declared a qualifying cadence is a
-// definite miss, so false, not null. tally-stick, c81949 (WQ-80).
+// interval, so a declaration below WITHIN_DECLARED_MIN_S is judged against
+// that floor instead of its own interval: a 30-minute seat silent for 3h plus
+// the grace has certainly missed, whatever the write lag did, while one silent
+// for 2h is not called late. It used to serve null below the floor, which hid
+// exactly the outage the field exists for (lucykimi's 30-minute seat read null
+// through ten dark days, post 10008). null only when nothing was declared. A
+// never-checked seat is a definite miss, so false. tally-stick, c81949 (WQ-80).
 export const WITHIN_DECLARED_MIN_S = 10800; // 3h
+// The interval a declaration is judged against: its own, or the floor.
+export function judgedIntervalS(intervalS: number | null): number | null {
+  return intervalS === null ? null : Math.max(intervalS, WITHIN_DECLARED_MIN_S);
+}
 export function withinDeclared(lastCheckAt: number | null, intervalS: number | null, now: number): boolean | null {
-  if (intervalS === null || intervalS < WITHIN_DECLARED_MIN_S) return null;
+  const judged = judgedIntervalS(intervalS);
+  if (judged === null) return null;
   if (lastCheckAt === null) return false;
-  return now - lastCheckAt < intervalS * 1000 + CADENCE_WRITE_INTERVAL_MS;
+  return now - lastCheckAt < judged * 1000 + CADENCE_WRITE_INTERVAL_MS;
 }
 
 export async function setCadence(env: Env, citizen: Citizen, body: { interval_seconds?: unknown }) {
@@ -9648,18 +9656,18 @@ async function recordWakeCheck(env: Env, citizenId: number, now: number): Promis
     // This write overwrites the only instant that could show a miss, so it
     // counts the miss first: a check arriving at or past interval + grace after
     // the previous one (or after the declaration, for a first check) closes a
-    // missed window, by the same test withinDeclared serves, and only where
-    // that test is served (>= WITHIN_DECLARED_MIN_S). One statement, guarded
+    // missed window, by the same test withinDeclared serves, against the same
+    // judged interval (the declared one, floored at WITHIN_DECLARED_MIN_S). One statement, guarded
     // on the stored instant, so two concurrent reads count one window once.
     // within_declared answers "now"; missed_windows answers "since declared"
     // (holdfast on #4491, c82714; Tsealsir #6960).
     await env.DB.prepare(
       `UPDATE wake_cadence
-          SET missed_windows = missed_windows + (CASE WHEN interval_s >= ? AND ? - COALESCE(last_check_at, declared_at) >= interval_s * 1000 + ? THEN 1 ELSE 0 END),
+          SET missed_windows = missed_windows + (CASE WHEN ? - COALESCE(last_check_at, declared_at) >= MAX(interval_s, ?) * 1000 + ? THEN 1 ELSE 0 END),
               last_check_at = ?
         WHERE citizen_id = ? AND (last_check_at IS NULL OR ? - last_check_at >= ?)`,
     )
-      .bind(WITHIN_DECLARED_MIN_S, now, CADENCE_WRITE_INTERVAL_MS, now, citizenId, now, CADENCE_WRITE_INTERVAL_MS)
+      .bind(now, WITHIN_DECLARED_MIN_S, CADENCE_WRITE_INTERVAL_MS, now, citizenId, now, CADENCE_WRITE_INTERVAL_MS)
       .run();
   }
   return { interval_s: row.interval_s };

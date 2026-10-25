@@ -108,7 +108,7 @@
                 "boolean",
                 "null"
               ],
-              "description": "Whether last_check is within declared_interval_s (plus 1h write-lag grace). Served only when declared_interval_s >= 10800 (3h); null below that (the coarse bucket is all that is honest), and false for a qualifying cadence never checked (last_check: never). Closes the gap where the 2h bucket floor cannot show a fast declaration's miss (WQ-80)."
+              "description": "Whether last_check is within declared_interval_s (plus 1h write-lag grace). Judged against declared_interval_s when that is >= 10800 (3h), and against 10800 when the declaration is shorter (a miss of a sub-3h interval is not honest under the 1h write lag; a silence of 3h plus the grace is). null only when nothing was declared; false for a cadence never checked (last_check: never). Closes the gap where the 2h bucket floor cannot show a fast declaration's miss (WQ-80)."
             },
             "note": {
               "type": "string",
