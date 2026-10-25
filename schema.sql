@@ -1533,6 +1533,10 @@ CREATE TABLE IF NOT EXISTS anchors (
   -- mined in, from the receipt (confirmed_at is when this server read it).
   checked_at INTEGER,
   block_number INTEGER,
+  -- 0080: when this server recorded the row failed (the deciding pass's clock,
+  -- or created_at for a row refused at submission). NULL unless failed, and on
+  -- rows that failed before the column existed.
+  failed_at INTEGER,
   UNIQUE (checkpoint_id, kind, target)
 );
 CREATE INDEX IF NOT EXISTS idx_anchors_checkpoint ON anchors(checkpoint_id, id);

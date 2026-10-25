@@ -98,6 +98,9 @@ export interface AnchorRow {
   // The Base block the transaction was mined in, from its receipt. Null for
   // every other kind and for a Base row not yet (or before 0079) confirmed.
   block_number: number | null;
+  // When this server recorded the row failed (0080). Null unless failed, and
+  // on rows that failed before the column existed.
+  failed_at: number | null;
 }
 
 // Pure: which (checkpoint, kind, target) pairs still need an attempt. Every
@@ -143,9 +146,9 @@ async function latestCheckpointRows(env: Env): Promise<CheckpointForAnchor[]> {
 
 async function insertAnchor(env: Env, checkpointId: number, kind: AnchorRow["kind"], target: string, proof: string | null, status: AnchorRow["status"], error: string | null, now: number): Promise<void> {
   await env.DB.prepare(
-    "INSERT OR IGNORE INTO anchors (checkpoint_id, kind, target, proof, status, error, created_at, confirmed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT OR IGNORE INTO anchors (checkpoint_id, kind, target, proof, status, error, created_at, confirmed_at, failed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
   )
-    .bind(checkpointId, kind, target, proof, status, error, now, status === "confirmed" ? now : null)
+    .bind(checkpointId, kind, target, proof, status, error, now, status === "confirmed" ? now : null, status === "failed" ? now : null)
     .run();
 }
 
@@ -491,13 +494,13 @@ export async function anchorCheckpoints(env: Env, now = Date.now(), deps: Anchor
       if (s === "pending") continue;
       if (s === "unknown") {
         if (now - p.created_at < BASE_DROPPED_MS) continue;
-        await env.DB.prepare("UPDATE anchors SET status = 'failed', error = ? WHERE id = ? AND status = 'pending'")
-          .bind(`dropped: Base had no receipt and no transaction for this hash ${Math.floor((now - p.created_at) / 60_000)} min after it was sent`, p.id)
+        await env.DB.prepare("UPDATE anchors SET status = 'failed', error = ?, failed_at = ? WHERE id = ? AND status = 'pending'")
+          .bind(`dropped: Base had no receipt and no transaction for this hash ${Math.floor((now - p.created_at) / 60_000)} min after it was sent`, now, p.id)
           .run();
         report.failed++;
         continue;
       }
-      await env.DB.prepare("UPDATE anchors SET status = ?, confirmed_at = ?, block_number = ? WHERE id = ?").bind(s, s === "confirmed" ? now : null, block_number, p.id).run();
+      await env.DB.prepare("UPDATE anchors SET status = ?, confirmed_at = ?, block_number = ?, failed_at = ? WHERE id = ?").bind(s, s === "confirmed" ? now : null, block_number, s === "failed" ? now : null, p.id).run();
       if (s === "confirmed") report.confirmed++; else report.failed++;
     }
   }
@@ -542,7 +545,7 @@ export async function anchorCheckpoints(env: Env, now = Date.now(), deps: Anchor
     if (job && job.target.startsWith("https://web.archive.org/save/status/")) {
       const st = await pollArchiveJob(deps.fetch, env, job.target);
       if (st.status !== "pending") {
-        await env.DB.prepare("UPDATE anchors SET status = ?, target = ?, error = ?, confirmed_at = ? WHERE id = ?").bind(st.status, st.target, st.error, st.status === "confirmed" ? now : null, job.id).run();
+        await env.DB.prepare("UPDATE anchors SET status = ?, target = ?, error = ?, confirmed_at = ?, failed_at = ? WHERE id = ?").bind(st.status, st.target, st.error, st.status === "confirmed" ? now : null, st.status === "failed" ? now : null, job.id).run();
         if (st.status === "confirmed") report.confirmed++; else report.failed++;
       }
     }
@@ -560,7 +563,7 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
   const since = typeof sinceId === "number" && Number.isFinite(sinceId) ? sinceId : 0;
   const rows = (
     await env.DB.prepare(
-      "SELECT a.id, a.checkpoint_id, a.kind, a.target, a.status, a.error, a.created_at, a.confirmed_at, a.block_number, a.checked_at, c.log, c.tree_size, c.root, c.created_at AS checkpoint_created_at FROM anchors a JOIN checkpoints c ON c.id = a.checkpoint_id WHERE a.id > ? ORDER BY a.id ASC LIMIT ?",
+      "SELECT a.id, a.checkpoint_id, a.kind, a.target, a.status, a.error, a.created_at, a.confirmed_at, a.block_number, a.checked_at, a.failed_at, c.log, c.tree_size, c.root, c.created_at AS checkpoint_created_at FROM anchors a JOIN checkpoints c ON c.id = a.checkpoint_id WHERE a.id > ? ORDER BY a.id ASC LIMIT ?",
     )
       .bind(since, ANCHOR_PAGE + 1)
       .all<AnchorRow & { checked_at: number | null; log: string; tree_size: number; root: string; checkpoint_created_at: number }>()
@@ -573,9 +576,9 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
   const latest = await latestCheckpointRows(env);
   const latestAnchors = latest.length
     ? (
-        await env.DB.prepare(`SELECT checkpoint_id, kind, target, status, error, created_at, confirmed_at, block_number FROM anchors WHERE checkpoint_id IN (${latest.map(() => "?").join(",")}) ORDER BY id ASC`)
+        await env.DB.prepare(`SELECT checkpoint_id, kind, target, status, error, created_at, confirmed_at, block_number, failed_at FROM anchors WHERE checkpoint_id IN (${latest.map(() => "?").join(",")}) ORDER BY id ASC`)
           .bind(...latest.map((c) => c.id))
-          .all<Pick<AnchorRow, "checkpoint_id" | "kind" | "target" | "status" | "error" | "created_at" | "confirmed_at" | "block_number">>()
+          .all<Pick<AnchorRow, "checkpoint_id" | "kind" | "target" | "status" | "error" | "created_at" | "confirmed_at" | "block_number" | "failed_at">>()
       ).results
     : [];
   const baseAddress = await baseWalletAddress(env);
@@ -584,7 +587,7 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
     what_this_is:
       "The newest checkpoint of each log, offered every five minutes to the targets listed under `targets`: three OpenTimestamps calendars (the Bitcoin blockchain), the Base blockchain when an anchoring wallet is configured, and the Internet Archive at most once every 55 minutes: one capture of GET /api/checkpoint, the page that carries both heads, recorded as an anchor of the identity log's head only. Every attempt, made or refused, is a row here with its status and error. Checkpoints from before the first anchoring pass were never offered.",
     what_an_anchor_proves:
-      "A confirmed anchor proves that the exact checkpoint text existed by that time and has not changed since. An OpenTimestamps row starts `pending`: this server records the calendar's incomplete proof at submission, and a later pass asks the row's calendar for the upgrade, a few rows per pass, never-asked rows first and then the least recently asked. The calendar's Bitcoin transaction is usually mined within a few hours of submission; the row flips on the first pass that asks after that. When the completed proof carries a Bitcoin attestation, the row flips to `confirmed`, `confirmed_at` names the instant this server stored it, and the full proof is kept here, so a reader verifies it from the served file alone and never from the calendar's word. Until then `pending` means 'not yet confirmed by this server's pass', not 'not yet in a block': the commitment may already be in a Bitcoin block, and `ots upgrade` on the served /api/anchors/<id>.ots file fetches the attestation yourself (see how_to_verify.ots). A pending Base row, by contrast, is a transaction not yet seen in a block and does flip to confirmed once seen. On a Base row `confirmed_at` is the instant this server read the receipt, which can be hours or days after the block, and `block_number` is the block the transaction was mined in: that block's own timestamp, on any Base node or explorer, is when it was mined. `block_number` is null on every other kind and on Base rows confirmed before it was recorded. `last_asked_at` on a row in `anchors` is the last instant a confirmation pass asked the row's calendar, node or archive about it, whatever the answer; null means never asked. The passes pick never-asked rows first and then the least recently asked, so a pending row's `last_asked_at` shows where it stands in that rotation. A failed row proves only that the attempt was made and refused. No anchor says anything about whether what the checkpoint covers is true.",
+      "A confirmed anchor proves that the exact checkpoint text existed by that time and has not changed since. An OpenTimestamps row starts `pending`: this server records the calendar's incomplete proof at submission, and a later pass asks the row's calendar for the upgrade, a few rows per pass, never-asked rows first and then the least recently asked. The calendar's Bitcoin transaction is usually mined within a few hours of submission; the row flips on the first pass that asks after that. When the completed proof carries a Bitcoin attestation, the row flips to `confirmed`, `confirmed_at` names the instant this server stored it, and the full proof is kept here, so a reader verifies it from the served file alone and never from the calendar's word. Until then `pending` means 'not yet confirmed by this server's pass', not 'not yet in a block': the commitment may already be in a Bitcoin block, and `ots upgrade` on the served /api/anchors/<id>.ots file fetches the attestation yourself (see how_to_verify.ots). A pending Base row, by contrast, is a transaction not yet seen in a block and does flip to confirmed once seen. On a Base row `confirmed_at` is the instant this server read the receipt, which can be hours or days after the block, and `block_number` is the block the transaction was mined in: that block's own timestamp, on any Base node or explorer, is when it was mined. `block_number` is null on every other kind and on Base rows confirmed before it was recorded. `last_asked_at` on a row in `anchors` is the last instant a confirmation pass asked the row's calendar, node or archive about it, whatever the answer; null means never asked. The passes pick never-asked rows first and then the least recently asked, so a pending row's `last_asked_at` shows where it stands in that rotation. `failed_at` is the instant this server recorded a row failed: the pass that settled a pending row failed (a Base transaction dropped or reverted, an archive job the archive refused), or `created_at` for a row refused at submission. It is null on every row that is not failed, and on rows that failed before it was recorded; such a row failed at an unrecorded instant after `created_at`. A failed row proves only that the attempt was made and refused. No anchor says anything about whether what the checkpoint covers is true.",
     targets: {
       ots_calendars: OTS_CALENDARS,
       base: Boolean(env.ANCHOR_BASE_KEY),
@@ -625,6 +628,11 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
       // then least recently asked), so serving it is what lets a reader see
       // the queue rotate instead of inferring it from which ids confirmed.
       last_asked_at: r.checked_at,
+      // The instant this server recorded the row failed: the deciding pass's
+      // clock on a pending row it settled failed, created_at on a row that
+      // was refused at submission. Null on every other status, and on rows
+      // that failed before the column existed (migration 0080).
+      failed_at: r.failed_at,
       ...(r.kind === "ots" ? { ots_file: `/api/anchors/${r.id}.ots`, payload_file: `/api/anchors/${r.id}.txt` } : {}),
     })),
     has_more: hasMore,
