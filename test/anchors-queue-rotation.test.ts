@@ -30,6 +30,11 @@
 //   - block-number-not-served: listAnchors drops block_number from the rows: test 4 red.
 //   - block-number-not-stored: the confirm UPDATE binds block_number null: test 4 red.
 //   - confirmBase-drops-block: confirmBase returns the status with a null block: test 5 red.
+//   - last-asked-not-served: listAnchors drops last_asked_at from the rows: test 2 red.
+//
+// `checked_at` is served on each paged row as `last_asked_at`, so "the queue
+// rotates" is a reading of the table rather than an inference from which ids
+// confirmed (golden-legend and gradient-dissent, c120517 and c120586 on #10017).
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -140,6 +145,17 @@ test("an_unupgraded_ots_row_must_not_hold_an_upgrade_slot_forever", async () => 
   for (let pass = 0; pass < 2; pass++) await anchorCheckpoints(env, T0 + pass * PASS, deps);
   assert.equal(statusOf(db, minedId), "confirmed", "the mined row behind a full pass of erroring and never-upgraded rows upgrades within two passes");
   assert.deepEqual(ids.slice(0, stuck).map((id) => statusOf(db, id)), Array(stuck).fill("pending"));
+  // The rotation is readable from the served rows. Pass 1 asked the eight
+  // never-asked stuck rows; pass 2 asked the never-asked mined row first, then
+  // seven of the eight in id order, so the last stuck row still carries pass 1's
+  // instant. The failed archive row was never asked and serves null.
+  const body = await listAnchors(env, undefined);
+  const served = new Map(body.anchors.map((a) => [a.id, (a as Record<string, unknown>).last_asked_at]));
+  assert.equal(served.get(minedId), T0 + PASS, "the mined row serves the pass that asked it");
+  assert.equal(served.get(ids[stuck - 1]), T0, "the row the second pass skipped still serves the first pass's instant");
+  assert.equal(served.get(ids[0]), T0 + PASS, "a row asked on both passes serves the later one");
+  assert.equal(served.get(100), null, "a never-asked row serves null, not an absent key");
+  assert.match(body.what_an_anchor_proves, /last_asked_at/, "the prose says what last_asked_at is");
 });
 
 test("a_pending_archive_job_must_not_hold_the_poll_slot_forever", async () => {

@@ -75,6 +75,7 @@ function base(overrides: Record<string, unknown> = {}) {
         created_at: 1,
         confirmed_at: 2,
         block_number: 52638732,
+        last_asked_at: 2,
       },
     ],
     has_more: false,
@@ -133,6 +134,7 @@ test("ots row may carry ots_file and payload_file", () => {
             created_at: 1,
             confirmed_at: null,
             block_number: null,
+            last_asked_at: null,
             ots_file: "/api/anchors/2.ots",
             payload_file: "/api/anchors/2.txt",
           },
@@ -141,6 +143,12 @@ test("ots row may carry ots_file and payload_file", () => {
     ),
     [],
   );
+});
+
+test("an anchor row without last_asked_at must NOT validate", () => {
+  const page = base();
+  delete (page.anchors[0] as { last_asked_at?: number }).last_asked_at;
+  assert.ok(validate(schema, page).some((e) => /last_asked_at/.test(e)));
 });
 
 test("description names always-served next_since_id and has_more", () => {
