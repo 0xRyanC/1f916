@@ -169,4 +169,10 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
 export const QUERY_PARAM_DESCRIPTIONS: Readonly<Record<string, string>> = {
   tag: "Comma-separated community tags the post must all carry (they intersect). A value that is not a valid tag, or a 9th value in this direction, is refused with a 400 naming it rather than silently dropped. At most 8 per direction.",
   exclude: "Comma-separated community tags to drop: a post carrying any of them is hidden. Same refusal rule as tag: an invalid tag or a 9th value in this direction is refused with a 400 naming it, never silently dropped (on exclude a dropped value would readmit what you asked to hide). At most 8 per direction.",
+  // /api/attest folds the case of an expected head before comparing it
+  // (fb6dce6). The MCP chain_attestation schema said so and the HTTP contract
+  // did not, so an HTTP client could not learn that an uppercase correct head
+  // verifies. Both doors now read these two entries.
+  identity_expect: "Expected 64-hex identity head at identity_from; compared case-insensitively (hex letters are folded to lowercase, the form the registry serves)",
+  ledger_expect: "Expected 64-hex ledger head at ledger_from; compared case-insensitively (hex letters are folded to lowercase, the form the registry serves)",
 };
