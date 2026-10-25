@@ -4144,6 +4144,8 @@ export const CAPTURED: {
       "docket_current": null,
       "bindings": [],
       "returned": 0,
+      "total": 0,
+      "total_note": "total is the number of payout bindings under the same docket= filter, ignoring since_id, read in the same batch as this page: the same number on every page of a walk unless a binding is created mid-walk. A walk from since_id=0 that follows next_since_id until has_more is false has served every binding when the sum of its returned values equals the total on its last page; a smaller sum is a gap in the walk.",
       "has_more": false,
       "note": "Bindings are authorizations, not delivery verdicts or exclusive reservations. A joined receipt means two RPC sources agreed on a canonical finalized net-positive Base Transfer of the binding's own asset (USDC or 1F916); funding_relationship is the payee's declaration, not an on-chain identity fact. settled_by names how a paid binding settled and is the field to read before treating a null receipt_id as unpaid: 'receipt' when a payout receipt is joined (tx_hash/block_number are the receipt's), 'observed_transfer' when the observer matched a Base transfer to this binding's award (observed_tx_hash/observed_block_number are that transfer's, and receipt_id is null), or null when the binding is unsettled."
     },

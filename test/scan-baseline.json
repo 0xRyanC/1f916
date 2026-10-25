@@ -717,6 +717,14 @@
       "plan": [
         "witnesses: SCAN w"
       ]
+    },
+    "21388b3b9f0b483e": {
+      "status": "accepted",
+      "sql": "SELECT COUNT(*) AS n FROM payout_bindings pb JOIN citizens c ON c.id = pb.citizen_id WHERE N = N",
+      "plan": [
+        "payout_bindings: SCAN pb USING COVERING INDEX idx_payout_bindings_citizen"
+      ],
+      "reason": "GET /api/payouts `total` with no docket= filter (2026-10-25): the denominator a drained walk is checked against, counted in the same batch as the page. It walks a covering index of payout_bindings, one entry per signed payout authorization: 749 rows live on 2026-10-25 (keyless drained walk, 15 pages), and each binding is a wallet-signed, citizen-signed write, so the table grows with payouts, not with reads or board traffic. The page beside it already does a per-row anchor read for each of its 50 rows. The docket= variant seeks idx_payout_bindings_docket and is not flagged."
     }
   },
   "uncovered_reads": {

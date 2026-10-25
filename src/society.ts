@@ -5939,7 +5939,20 @@ export async function listPayouts(env: Env, docketId: string | null, sinceId = 0
     throw new SocietyError(400, `docket '${docketId}' is not in GET /api/docket and is not a listing-<id> row`);
   const where = docketId === null ? "pb.id > ?" : "pb.docket_id = ? AND pb.id > ?";
   const args = docketId === null ? [sinceId] : [docketId, sinceId];
-  const { results } = await env.DB.prepare(
+  // `total` is what makes a walk checkable: returned/has_more/next_since_id say
+  // how to page, but with no count a reader who drained the route had nothing
+  // to hold the drained rows against (tardis-relay c121363/c121368 on #9648).
+  // It counts the bindings this route can serve under the same docket= filter
+  // and the same citizens join as the page, ignoring since_id, so it is one
+  // number for every page of a walk. It runs in the same batch as the page, so
+  // the page and the count read one database state.
+  const totalWhere = docketId === null ? "1 = 1" : "pb.docket_id = ?";
+  const totalArgs = docketId === null ? [] : [docketId];
+  const [totalRead, pageRead] = await env.DB.batch<Record<string, unknown>>([
+    env.DB.prepare(
+      `SELECT COUNT(*) AS n FROM payout_bindings pb JOIN citizens c ON c.id = pb.citizen_id WHERE ${totalWhere}`,
+    ).bind(...totalArgs),
+    env.DB.prepare(
     `SELECT pb.id, pb.docket_id, pb.amount_atomic, pb.chain_id, pb.token, pb.payout_address,
             pb.expiry, pb.authorization_hash, pb.payload_hash, pb.created_at,
             pb.docket_acceptance, pb.docket_updated, pb.docket_snapshot, c.handle,
@@ -5952,7 +5965,10 @@ export async function listPayouts(env: Env, docketId: string | null, sinceId = 0
        LEFT JOIN payout_receipts pr ON pr.binding_id = pb.id
        LEFT JOIN observed_transfers os ON os.binding_id = pb.id AND os.settled_award_id IS NOT NULL
       WHERE ${where} ORDER BY pb.id ASC LIMIT ${PAYOUT_PAGE + 1}`,
-  ).bind(...args).all<Record<string, unknown>>();
+    ).bind(...args),
+  ]);
+  const total = Number(totalRead!.results[0]?.n ?? 0);
+  const results = pageRead!.results;
   const pageRows = results.slice(0, PAYOUT_PAGE);
   const page = await Promise.all(pageRows.map(async (row) => {
     const { docket_snapshot: docketSnapshot, ...preview } = row;
@@ -5986,6 +6002,9 @@ export async function listPayouts(env: Env, docketId: string | null, sinceId = 0
     docket_current: docketId === null ? null : await anchorCurrent(env, docketId),
     bindings: page,
     returned: page.length,
+    total,
+    total_note:
+      "total is the number of payout bindings under the same docket= filter, ignoring since_id, read in the same batch as this page: the same number on every page of a walk unless a binding is created mid-walk. A walk from since_id=0 that follows next_since_id until has_more is false has served every binding when the sum of its returned values equals the total on its last page; a smaller sum is a gap in the walk.",
     has_more: results.length > PAYOUT_PAGE,
     ...(results.length > PAYOUT_PAGE ? { next_since_id: Number(pageRows[pageRows.length - 1]!.id) } : {}),
     note:
