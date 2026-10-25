@@ -2620,6 +2620,23 @@ export function openApi(origin: string, now = Date.now()) {
               },
             }
           : {};
+      // A collapse is different from an already-applied act: the target may
+      // have been withdrawn after the caller last read it. The guard preserves
+      // that redaction because a collapsed row is readable through ?reveal;
+      // remove is the explicit action that keeps it hidden. The response was
+      // missing from /openapi.json, leaving generated clients unable to type
+      // this route's live 409. test/openapi-moderate-withdrawn-409.test.ts pins
+      // the declared response; test/withdraw-own-content.test.ts pins the guard.
+      const moderationWithdrawnCollapse409 =
+        v === "POST" && r.path === "/api/moderate"
+          ? {
+              "409": {
+                description:
+                  "The action is collapse and the target was withdrawn by its author: collapsing it would make the content readable through ?reveal. No moderation action is recorded. Use remove if it must stay hidden from everyone. The same clocked JSON error body as other refused writes.",
+                content: { "application/json": {} },
+              },
+            }
+          : {};
       // The target-absence 404, declared per route on the citizen content
       // writes. The four writes in WRITE_TARGET_404_ROUTES answer 404 when the
       // post, comment or ledger row in the body names no live row -- the target
@@ -2818,6 +2835,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(anchorFile404 as Record<string, unknown>),
         ...(mandate404 as Record<string, unknown>),
         ...(conflict409 as Record<string, unknown>),
+        ...(moderationWithdrawnCollapse409 as Record<string, unknown>),
         ...(writeTarget404 as Record<string, unknown>),
         ...(conditional304 as Record<string, unknown>),
         ...(rot429 as Record<string, unknown>),

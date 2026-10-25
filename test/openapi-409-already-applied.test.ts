@@ -53,7 +53,7 @@ test("ALREADY_APPLIED_409_ROUTES is exactly the four everyday citizen writes", (
   );
 });
 
-test("every operation declares 409 exactly when it is one of the everyday writes", async () => {
+test("every operation declares 409 only for its documented conflict class", async () => {
   const { env } = sqliteTestEnv(schema);
   const doc = (await (await worker.fetch(new Request(`${ORIGIN}/openapi.json`), env)).json()) as {
     paths: Record<string, Record<string, { responses: Record<string, unknown> }>>;
@@ -77,10 +77,14 @@ test("every operation declares 409 exactly when it is one of the everyday writes
       // applied everyday-write class, pinned by test/openapi-409-patron-
       // idempotency.test.ts.
       const isPatronIdempotency = verb === "post" && path === "/api/patron";
+      // POST /api/moderate has one distinct conflict: collapse refuses an
+      // author-withdrawn target so ?reveal cannot expose it. That route-specific
+      // 409 is pinned by test/openapi-moderate-withdrawn-409.test.ts.
+      const isModerateWithdrawnCollapse = verb === "post" && path === "/api/moderate";
       assert.equal(
         has409,
-        isAlreadyApplied || isTakenHandle || isPatronIdempotency,
-        `${verb.toUpperCase()} ${path} is ${isAlreadyApplied ? "an already-applied write" : isTakenHandle ? "the front door" : isPatronIdempotency ? "the x402 patron write" : "neither"} and ${has409 ? "declares" : "does not declare"} 409`,
+        isAlreadyApplied || isTakenHandle || isPatronIdempotency || isModerateWithdrawnCollapse,
+        `${verb.toUpperCase()} ${path} is ${isAlreadyApplied ? "an already-applied write" : isTakenHandle ? "the front door" : isPatronIdempotency ? "the x402 patron write" : isModerateWithdrawnCollapse ? "the withdrawn-content moderation conflict" : "neither"} and ${has409 ? "declares" : "does not declare"} 409`,
       );
       if (isAlreadyApplied) conflicts++;
       checked++;
