@@ -111,6 +111,41 @@ export interface AnchorRow {
 // one every pass, and a transient node error is retried within the hour.
 export const BASE_RETRY_MS = 60 * 60 * 1000;
 
+// Pure: does an existing Base row hold this checkpoint's Base slot? Any row
+// that is not a failure does; a failure does for BASE_RETRY_MS after it.
+export function baseBlockedBy(existing: Pick<AnchorRow, "checkpoint_id" | "kind" | "target">[], checkpointId: number, now: number): boolean {
+  return existing.some((a) => a.checkpoint_id === checkpointId && a.kind === "base" && (!a.target.startsWith("failed:") || now - Number(a.target.slice(7)) < BASE_RETRY_MS));
+}
+
+// A pass claims a checkpoint's Base send before it sends (0081). Two passes
+// that overlap both read the anchors table before either has written its
+// transaction hash, so the read alone let each send one transaction for the
+// same checkpoint (live: checkpoint 41777, rows 16901 and 16902; checkpoint
+// 42953, rows 18392 and 18393; found by kerf-and-chatter, #9938 c121093).
+// The claim is a row in anchor_base_claims, keyed by checkpoint, so it never
+// appears among the anchors, is never asked about by the confirmation loop and
+// never holds a failed checkpoint's retry. A claim older than
+// BASE_CLAIM_STALE_MS can be taken over: a pass that died between claiming and
+// writing its row would otherwise block that checkpoint forever. That window
+// is far longer than a send, and far shorter than BASE_RETRY_MS, so the retry
+// an hour after a failure always finds the old claim stale. After winning the
+// claim the pass reads that checkpoint's Base rows again, so a row written by
+// a pass that finished before this one claimed still blocks the send.
+export const BASE_CLAIM_STALE_MS = 10 * 60 * 1000;
+
+async function claimBase(env: Env, checkpointId: number, now: number): Promise<boolean> {
+  const won = await env.DB.prepare(
+    "INSERT INTO anchor_base_claims (checkpoint_id, claimed_at) VALUES (?, ?) ON CONFLICT(checkpoint_id) DO UPDATE SET claimed_at = excluded.claimed_at WHERE anchor_base_claims.claimed_at < ?",
+  )
+    .bind(checkpointId, now, now - BASE_CLAIM_STALE_MS)
+    .run();
+  if (Number(won.meta?.changes ?? 0) !== 1) return false;
+  const rows = (
+    await env.DB.prepare("SELECT checkpoint_id, kind, target FROM anchors WHERE checkpoint_id = ? AND kind = 'base' LIMIT 1000").bind(checkpointId).all<Pick<AnchorRow, "checkpoint_id" | "kind" | "target">>()
+  ).results;
+  return !baseBlockedBy(rows, checkpointId, now);
+}
+
 export function anchorsDue(
   latest: CheckpointForAnchor[],
   existing: Pick<AnchorRow, "checkpoint_id" | "kind" | "target">[],
@@ -119,8 +154,7 @@ export function anchorsDue(
 ): { checkpoint: CheckpointForAnchor; kind: AnchorRow["kind"]; target: string }[] {
   const have = new Set(existing.map((a) => `${a.checkpoint_id}|${a.kind}|${a.target}`));
   const out: { checkpoint: CheckpointForAnchor; kind: AnchorRow["kind"]; target: string }[] = [];
-  const baseBlocked = (c: CheckpointForAnchor) =>
-    existing.some((a) => a.checkpoint_id === c.id && a.kind === "base" && (!a.target.startsWith("failed:") || now - Number(a.target.slice(7)) < BASE_RETRY_MS));
+  const baseBlocked = (c: CheckpointForAnchor) => baseBlockedBy(existing, c.id, now);
   for (const c of latest) {
     for (const cal of targets.ots) if (!have.has(`${c.id}|ots|${cal}`)) out.push({ checkpoint: c, kind: "ots", target: cal });
     if (targets.base && !baseBlocked(c)) out.push({ checkpoint: c, kind: "base", target: "base" });
@@ -458,7 +492,11 @@ export async function anchorCheckpoints(env: Env, now = Date.now(), deps: Anchor
   for (const d of due) {
     if (d.kind === "base") {
       if (baseSent) continue;
+      // One attempt per pass whether or not the claim is won: a pass that
+      // loses the claim sends no Base this pass, so two overlapping passes
+      // never put two transactions on the wallet's nonce at once either.
       baseSent = true;
+      if (!(await claimBase(env, d.checkpoint.id, now))) continue;
     }
     report.attempted++;
     const payload = payloadOf(d.checkpoint);

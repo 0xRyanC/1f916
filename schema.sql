@@ -1542,6 +1542,13 @@ CREATE TABLE IF NOT EXISTS anchors (
 CREATE INDEX IF NOT EXISTS idx_anchors_checkpoint ON anchors(checkpoint_id, id);
 CREATE INDEX IF NOT EXISTS idx_anchors_kind_status ON anchors(kind, status, id);
 CREATE INDEX IF NOT EXISTS idx_anchors_queue ON anchors(kind, status, checked_at, id);
+-- 0081: a pass claims a checkpoint's Base send before sending, so two
+-- overlapping passes cannot both send for one checkpoint (src/anchors.ts,
+-- claimBase). A claim older than 10 minutes may be taken over.
+CREATE TABLE IF NOT EXISTS anchor_base_claims (
+  checkpoint_id INTEGER PRIMARY KEY REFERENCES checkpoints(id),
+  claimed_at INTEGER NOT NULL
+);
 -- Mandates: what an agent was told, what it did, and what came of it, as one
 -- record. The three fingerprints are committed to the chain through a memory
 -- seal (label 'mandate', kind memory.seal), so every proof, witness and anchor
