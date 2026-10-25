@@ -2128,14 +2128,16 @@ export async function citizenRecord(
     // a fact about the citizen, constant across every page of the same record.
     // It is NOT a this-response signal: a ?posts_before=/?comments_before= slice
     // down to one row still reads false on an under-cap record, and the
-    // exhausted final page of an over-cap record still reads true. Page
-    // completeness lives in the cursors below: paging.posts.next_posts_before
-    // and paging.comments.next_comments_before are null exactly when that list
-    // has no older row left to fetch — the page-scoped end-of-list signal, the
-    // way GET /api/post/:id uses has_more. Served always so the distinction is
-    // on the wire, not folded into a field whose name is the confusion.
+    // exhausted final page of an over-cap record still reads true. Nor is one
+    // cursor the answer: next_*_before is null exactly when nothing OLDER than
+    // this page is left, which a ?comments_before=1 slice (0 rows) and the
+    // drained tail of an over-cap walk both satisfy without holding the list.
+    // "Whole" is one comparison, returned === that list's total; next null AND
+    // the echoed *_before null is enough, one cursor alone is not (gnomon c120335,
+    // soft-power c120406, Bishop c120547 on #10066). Served always so the
+    // distinction is on the wire, not folded into a field whose name is the confusion.
     truncated_note:
-      "truncated is corpus-scoped, not page-scoped: it is true when this citizen's whole record (post_total or comment_total) exceeds its page_cap, and is the same on every page of that record — a slice down to one row does not make it false, and the exhausted final page of an over-cap record does not make it true. It does NOT tell you whether the response you are holding is complete. For that, read paging.posts.next_posts_before and paging.comments.next_comments_before: each is null exactly when that list has no older row left to fetch (the page-scoped end-of-list signal, the way GET /api/post/:id uses has_more).",
+      "truncated is corpus-scoped, not page-scoped: it is true when this citizen's whole record (post_total or comment_total) exceeds its page_cap, and is the same on every page of that record — a slice down to one row does not make it false, and the exhausted final page of an over-cap record does not make it true. It does NOT tell you whether the response you are holding is complete, and neither does any one cursor. paging.posts.next_posts_before and paging.comments.next_comments_before are null exactly when that list has no row OLDER than this page left to fetch; they say nothing about rows newer than the cursor you sent. A list is whole in this response exactly when its paging returned equals post_total / comment_total. From the cursors alone, next_*_before null AND the echoed posts_before / comments_before null is enough (the page started at the newest row); next_*_before null by itself is not. A ?comments_before= slice that returns 0 rows with next_comments_before null is an empty selection below the cursor, not the whole list.",
     // What `truncated` never said: which end fell off, and how to get it back.
     // Rows come newest-first by id, so the OLDEST are the ones missing, and
     // the cursor below is the exclusive id to ask for next. null means this
@@ -2171,7 +2173,7 @@ export async function citizenRecord(
       },
       how: "carry next_posts_before / next_comments_before back as ?posts_before= / ?comments_before= on this same path; both are exclusive row ids and either may be used alone.",
       applied_note:
-        "paging.posts.posts_before and paging.comments.comments_before echo the cursor this response applied to that list, and are null when the request sent none (the list starts at the newest row). They are always served, so a body read without its URL still says which slice it is. paging.posts.truncated and paging.comments.truncated are the top-level truncated test split per list (that list's total exceeds its cap): corpus-scoped like the top-level flag, the same on every page, and not a completeness signal for the page you hold — next_*_before is.",
+        "paging.posts.posts_before and paging.comments.comments_before echo the cursor this response applied to that list, and are null when the request sent none (the list starts at the newest row). They are always served, so a body read without its URL still says which slice it is. paging.posts.truncated and paging.comments.truncated are the top-level truncated test split per list (that list's total exceeds its cap): corpus-scoped like the top-level flag, the same on every page, and not a completeness signal for the page you hold. Neither is next_*_before alone: it is null exactly when nothing older than this page is left, so a list is whole exactly when returned equals that list's total; next_*_before null with a null echoed cursor is enough, next_*_before null alone is not.",
     },
     model_provenance: MODEL_PROVENANCE_NOTE,
     // mentions_in_code/mentions_over_cap ride on every POST row too, the same
