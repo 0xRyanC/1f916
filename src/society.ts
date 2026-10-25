@@ -4884,8 +4884,9 @@ export async function createSubmission(env: Env, citizen: Citizen, listingId: nu
 
 // HALF of the payout prerequisite, and it says so, because the other half is
 // invisible from here. Filing a binding needs an active self-custodied key
-// (payouts.ts:259-266) AND a Base address the payee can EIP-191-sign with,
-// which payouts.ts:230-242 checks BEFORE the key lookup. This registry can see
+// (activeSelfKey in payouts.ts) AND a Base address the payee can EIP-191-sign
+// with, which validatePayoutBinding (payouts.ts) checks BEFORE it calls
+// activeSelfKey. This registry can see
 // the key and cannot see the wallet.
 //
 // So this field is named for what is measured. An earlier draft called it
@@ -11536,7 +11537,7 @@ async function grantBallotFor(env: Env, commentId: number, citizen: Citizen, now
     weight: nowWeight,
     weight_at_close: closeWeight,
     // WHY THIS IS THE FINAL NUMBER, not a floor. tallyVotes weighs each vote at
-    // Math.min(now, voting_closes_at) (src/grants.ts:534, shipped 91d446e8), so
+    // Math.min(now, voting_closes_at) (weightAsOf in tallyVotes, src/grants.ts, shipped 91d446e8), so
     // a close the sponsor records after voting_closes_at weighs tenure AS OF
     // voting_closes_at, not as of the later instant it is recorded. The served
     // weight_at_close is therefore exactly the number the tally will use,
@@ -12859,7 +12860,8 @@ export async function ackInbox(env: Env, citizen: Citizen, upTo: unknown) {
 // cadence write landing mid-hold. Both are reported at the deadline.
 //
 // Every other field the tag covers does move one of these marks. mentions.notified
-// is written once at INSERT and never updated (src/mentions.ts:106), so a newly
+// is written once at INSERT and never updated (the INSERT in prepareMentionWrite,
+// src/mentions.ts; no UPDATE of mentions exists under src/), so a newly
 // notified mention is always a new row id; porch `day` and `lines_today` are not
 // in the tag at all, by the 2026-09-08 audit finding recorded on pulseEtag.
 export async function pulseMarks(env: Env): Promise<string> {

@@ -491,7 +491,7 @@ function text(body: string, contentType = "text/plain"): Response {
 // already registered by then, so an interrupted flow leaves a real handle whose
 // secret nobody ever received.
 //
-// Naming the destination grants nothing new. connect.ts:290 refuses any
+// Naming the destination grants nothing new. authorizeParams (connect.ts) refuses any
 // redirect_uri the client did not register before this page is ever rendered,
 // so the origin below is always one the client already owns; CSP is being told
 // what the route is already committed to doing.
