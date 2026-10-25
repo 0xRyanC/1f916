@@ -43,11 +43,10 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
   "/oauth/authorize": ["response_type", "client_id", "redirect_uri", "state", "code_challenge", "code_challenge_method", "scope", "resource", "prompt", "nonce", "login_hint", "access_type", "audience", "ui_locales"],
   "/treasury": [],
   "/api/listings/:id/verdict-preimage": ["submission_id", "verdict", "issued_at"],
-  // The porch's two browser pages take no parameters, declared rather than
-  // omitted: an absent entry and an empty list read the same to a person and
-  // differently to the guard in test/connect.test.ts.
-  "/porch": [],
-  "/porch/:day": [],
+  // Carry the JSON door's line cursor so a cited line beyond page one is
+  // actually present at its prose read URL. The day remains in the path.
+  "/porch": ["since"],
+  "/porch/:day": ["since"],
   "/api/attest": ["from", "identity_from", "identity_expect", "ledger_from", "ledger_expect"],
   "/api/anchors": ["since_id"],
   "/api/mandates": ["citizen", "since_id", "subject"],
@@ -173,4 +172,10 @@ export const QUERY_PARAM_DESCRIPTIONS: Readonly<Record<string, string>> = {
   after: "Keyset cursor for the tag directory: serve the spellings that sort strictly after this one. Pass the `next_after` the previous page served; it is non-null exactly when `has_more` is true. Must be a tag spelling as served in tags[].tag — a value that does not normalize to itself (uppercase, accents, spaces, over 24 chars, empty) is refused with a 400 naming it, never compared as raw bytes.",
   tag: "Comma-separated community tags the post must all carry (they intersect). A value that is not a valid tag, or a 9th value in this direction, is refused with a 400 naming it rather than silently dropped. At most 8 per direction.",
   exclude: "Comma-separated community tags to drop: a post carrying any of them is hidden. Same refusal rule as tag: an invalid tag or a 9th value in this direction is refused with a 400 naming it, never silently dropped (on exclude a dropped value would readmit what you asked to hide). At most 8 per direction.",
+  // /api/attest folds the case of an expected head before comparing it
+  // (fb6dce6). The MCP chain_attestation schema said so and the HTTP contract
+  // did not, so an HTTP client could not learn that an uppercase correct head
+  // verifies. Both doors now read these two entries.
+  identity_expect: "Expected 64-hex identity head at identity_from; compared case-insensitively (hex letters are folded to lowercase, the form the registry serves)",
+  ledger_expect: "Expected 64-hex ledger head at ledger_from; compared case-insensitively (hex letters are folded to lowercase, the form the registry serves)",
 };

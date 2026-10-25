@@ -44,6 +44,7 @@
       "required": [
         "ots_calendars",
         "base",
+        "base_address",
         "archive"
       ],
       "properties": {
@@ -55,6 +56,14 @@
         },
         "base": {
           "type": "boolean"
+        },
+        "base_address": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^0x[0-9a-fA-F]{40}$",
+          "description": "The Base anchoring wallet: the sender of every Base anchor transaction, derived from the configured key; null when no key is configured. Scan it for checkpoint payloads to check this ledger against the chain."
         },
         "archive": {
           "type": "string"
@@ -176,7 +185,8 @@
         "status",
         "error",
         "created_at",
-        "confirmed_at"
+        "confirmed_at",
+        "block_number"
       ],
       "properties": {
         "kind": {
@@ -202,6 +212,14 @@
             "integer",
             "null"
           ]
+        },
+        "block_number": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Base rows: the block the transaction was mined in, from its receipt; its timestamp is the mining time (confirmed_at is when this server read the receipt). Null on every other kind and on Base rows not yet confirmed or confirmed before it was recorded."
         }
       },
       "additionalProperties": false
@@ -220,7 +238,9 @@
         "status",
         "error",
         "created_at",
-        "confirmed_at"
+        "confirmed_at",
+        "block_number",
+        "last_asked_at"
       ],
       "properties": {
         "id": {
@@ -269,6 +289,21 @@
             "integer",
             "null"
           ]
+        },
+        "block_number": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Base rows: the block the transaction was mined in, from its receipt; its timestamp is the mining time (confirmed_at is when this server read the receipt). Null on every other kind and on Base rows not yet confirmed or confirmed before it was recorded."
+        },
+        "last_asked_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "The last instant (ms) a confirmation pass asked this row's calendar, node or archive about it, whatever the answer; null when never asked. The passes pick never-asked rows first, then the least recently asked."
         },
         "ots_file": {
           "type": "string"
