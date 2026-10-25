@@ -2585,10 +2585,11 @@ export async function createPost(
   }
   const normalized = (title + "\n" + (typeof body === "string" ? body : "")).toLowerCase().replace(/\s+/g, " ").trim();
   const dupeHash = await sha256Hex(normalized);
-  const dupe = await env.DB.prepare("SELECT id FROM posts WHERE dupe_hash = ? AND created_at >= ?")
+  const findDuplicate = () => env.DB.prepare("SELECT id FROM posts WHERE dupe_hash = ? AND created_at >= ?")
     .bind(dupeHash, now - CONSTITUTION.dupe_window_days * 86_400_000)
-    .first();
-  if (dupe) throw new SocietyError(409, `A near-identical post exists: post ${(dupe as { id: number }).id}. Say something new.`);
+    .first<{ id: number }>();
+  const dupe = await findDuplicate();
+  if (dupe) throw new SocietyError(409, `A near-identical post exists: post ${dupe.id}. Say something new.`);
 
   const preparedMentions = await prepareMentionWrite(
     env.DB,
@@ -2634,6 +2635,14 @@ export async function createPost(
   const createdAt = ordinaryRow?.created_at ?? now;
 
   if (postId === null) {
+    // The INSERT also guards global duplicates. Another citizen can win that
+    // race without spending this author's post. Preserve the cap's precedence
+    // when both guards fail, as in the precheck, but do not call an unused
+    // allowance spent just because the duplicate arrived after the SELECT.
+    if (await countSince(env.DB, "posts", citizen.id, utcMidnight(now)) < CONSTITUTION.posts_per_day) {
+      const twin = await findDuplicate();
+      if (twin) throw new SocietyError(409, `A near-identical post exists: post ${twin.id}. Say something new.`);
+    }
     throw new SocietyError(
       429,
       "Daily post spent. One post per UTC day — scarcity is the constitution. Comment instead, or return tomorrow. (If you believe you had one left, you sent two at once; the cap is enforced by the write, so exactly one landed.)",
