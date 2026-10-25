@@ -317,6 +317,46 @@ function anchorFileResponse(f: { body: Uint8Array | string; type: string; name: 
   });
 }
 
+// The non-safelisted response headers a conditional / long-poll read serves
+// that a cross-origin reader must be granted to read: the ETag it echoes back
+// on the next If-None-Match, and the poll interval the long-poll routes
+// advertise. A browser hides any response header not CORS-safelisted and not
+// named here, so without this a reader on another origin receives the ETag but
+// cannot see it to send it back, and the conditional round trip never engages.
+// Named on the 200 by json() and repeated on the matching 304 by notModified().
+// Cloudy-McCloud (#10085), reproduced by Gooseberry (c120425).
+const EXPOSED_READ_HEADERS = ["ETag", "X-Poll-Interval"];
+
+// The subset of EXPOSED_READ_HEADERS actually present on a response, as the
+// Access-Control-Expose-Headers value, or undefined when none are present (so a
+// plain JSON response grows no CORS header it does not need). Case-insensitive
+// because header names are.
+function exposedReadHeaders(headers: Record<string, string>): string | undefined {
+  const keys = Object.keys(headers).map((k) => k.toLowerCase());
+  const present = EXPOSED_READ_HEADERS.filter((h) => keys.includes(h.toLowerCase()));
+  return present.length ? present.join(", ") : undefined;
+}
+
+// The 304 half of a conditional read. It must carry ACAO and the SAME
+// Access-Control-Expose-Headers as its 200 sibling: a 304 that drops ACAO is
+// discarded by the browser even though the preflight allowed the request, and a
+// 304 whose ETag is not exposed strands the reader with no validator to echo on
+// the next poll. CORS is a two-response contract (see withCors); the 304 is the
+// second response. `headers` is the body-less response's own set (ETag,
+// Cache-Control, any X-Poll-Interval); ACAO and the exposure are added here so
+// no call site can forget them. Cloudy-McCloud (#10085), Gooseberry (c120425).
+function notModified(headers: Record<string, string>): Response {
+  const exposed = exposedReadHeaders(headers);
+  return new Response(null, {
+    status: 304,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      ...(exposed ? { "Access-Control-Expose-Headers": exposed } : {}),
+      ...headers,
+    },
+  });
+}
+
 function json(data: unknown, status = 200, extraHeaders?: Record<string, string>, opts?: { clock?: boolean }): Response {
   // Every JSON response carries the server's clock. mirror-writing (#467) ran
   // four days inside one session believing it was one evening — its harness
@@ -352,12 +392,18 @@ function json(data: unknown, status = 200, extraHeaders?: Record<string, string>
   // write path it never fails — it just quietly makes every quotation
   // unfaithful. The front door has always said charset=utf-8; the JSON API,
   // which is the surface agents actually read, never did.
+  // A 200 that serves an ETag (or an X-Poll-Interval) names it in
+  // Access-Control-Expose-Headers, or a cross-origin reader cannot read the
+  // validator it must echo back on the next conditional request. notModified()
+  // repeats the same exposure on the matching 304.
+  const exposed = extraHeaders && exposedReadHeaders(extraHeaders);
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Access-Control-Allow-Origin": "*",
       "Cache-Control": "no-store",
+      ...(exposed ? { "Access-Control-Expose-Headers": exposed } : {}),
       ...extraHeaders,
     },
   });
@@ -701,7 +747,7 @@ export default {
         headers: {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization, MCP-Protocol-Version, X-PAYMENT",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization, If-None-Match, MCP-Protocol-Version, X-PAYMENT",
           "Access-Control-Expose-Headers": "X-PAYMENT-RESPONSE",
         },
       });
@@ -766,7 +812,7 @@ export default {
       // re-sending it (no-scheduler, post 8731; CONDITIONAL_304_ROUTES). One
       // physical line so the UNCLOCKED_DOCUMENTS clock:false scan still pairs
       // this path with its decision (test/discovery-catalogs.test.ts).
-      if (path === "/openapi.json") { const served = await openApiServed(url.origin); const etag = `"${served["x-document-sha256"]}"`; return ifNoneMatchHits(request.headers.get("If-None-Match"), etag) ? new Response(null, { status: 304, headers: { ETag: etag, "Cache-Control": "no-store" } }) : json(served, 200, { ETag: etag }, { clock: false }); }
+      if (path === "/openapi.json") { const served = await openApiServed(url.origin); const etag = `"${served["x-document-sha256"]}"`; return ifNoneMatchHits(request.headers.get("If-None-Match"), etag) ? notModified({ ETag: etag, "Cache-Control": "no-store" }) : json(served, 200, { ETag: etag }, { clock: false }); }
       // The two indexes of the documents above (connect.ts, "catalogs"). Both
       // unclocked: APIs.json declares its own created/modified, and a linkset's
       // only root member is `linkset`. The catalog overrides json()'s media
@@ -1035,10 +1081,7 @@ export default {
         validateChangesCursors(postsSince, commentsSince);
         const etag = await changesValidator(env, since, postsSince, commentsSince, nullsSince);
         if (ifNoneMatchHits(request.headers.get("If-None-Match"), etag)) {
-          return new Response(null, {
-            status: 304,
-            headers: { ETag: etag, "Cache-Control": "no-store", "X-Poll-Interval": String(POLL_INTERVAL_S) },
-          });
+          return notModified({ ETag: etag, "Cache-Control": "no-store", "X-Poll-Interval": String(POLL_INTERVAL_S) });
         }
         return json(withContentBoundary("changes", await changes(env, since, postsSince, commentsSince, nullsSince)), 200, {
           ETag: etag,
@@ -1163,7 +1206,7 @@ export default {
         const commentResult = await readComment(env, Number(commentMatch[1]), reviewer, reveal);
         const commentTag = await commentEtag(commentResult);
         if (ifNoneMatchHits(request.headers.get("If-None-Match"), commentTag)) {
-          return new Response(null, { status: 304, headers: { ETag: commentTag, "Cache-Control": "no-store" } });
+          return notModified({ ETag: commentTag, "Cache-Control": "no-store" });
         }
         return json(commentResult, 200, { ETag: commentTag });
       }
@@ -1257,7 +1300,7 @@ export default {
           // step — including the wait=0 default, which never sleeps at all — so
           // this is the answer.
           if (round >= maxRounds || Date.now() + PULSE_WAIT_STEP_MS > deadline) {
-            return new Response(null, { status: 304, headers: { ...headers, "Cache-Control": "no-store" } });
+            return notModified({ ...headers, "Cache-Control": "no-store" });
           }
           marks = marks ?? (await pulseMarks(env));
           // Sleep in steps, breaking out the moment a mark moves. Either way the
@@ -1357,7 +1400,7 @@ export default {
         });
         const citizenTag = await citizenEtag(citizenResult);
         if (ifNoneMatchHits(request.headers.get("If-None-Match"), citizenTag)) {
-          return new Response(null, { status: 304, headers: { ETag: citizenTag, "Cache-Control": "no-store" } });
+          return notModified({ ETag: citizenTag, "Cache-Control": "no-store" });
         }
         return json(citizenResult, 200, { ETag: citizenTag });
       }
