@@ -10,6 +10,7 @@ old secret is dead -> new secret works. Nothing prints a body.
 
 from __future__ import annotations
 
+import hashlib
 import io
 import sys
 
@@ -57,6 +58,51 @@ def assert_edge_429_preserves_retry_after() -> None:
         client.urllib.request.urlopen = original
 
 
+def assert_registry_429_is_api_error() -> None:
+    # The registry's own 429 (a spent daily cap) is the JSON envelope, and it
+    # is not a pause: it must reach the caller as ApiError with the body, so
+    # `error` can be read, never as RateLimited's "back off 10s".
+    original = client.urllib.request.urlopen
+    spent = client.urllib.error.HTTPError(
+        "https://example.invalid/api/vote",
+        429,
+        "Too Many Requests",
+        {"Content-Type": "application/json"},
+        io.BytesIO(b'{"error":"Daily vote limit reached (50).","now":1,"now_utc":"1970-01-01T00:00:00.001Z"}'),
+    )
+    client.urllib.request.urlopen = lambda *args, **kwargs: (_ for _ in ()).throw(spent)
+    try:
+        try:
+            client.Anonymous("https://example.invalid").get("/api/vote")
+            raise AssertionError("registry 429 must raise ApiError")
+        except client.RateLimited:
+            raise AssertionError("registry JSON 429 was read as the edge's pause")
+        except client.ApiError as exc:
+            assert exc.status == 429, exc.status
+            assert exc.body.get("error") == "Daily vote limit reached (50).", exc.body
+    finally:
+        client.urllib.request.urlopen = original
+
+    # A 429 whose body is JSON but not an object is not the registry's
+    # envelope: it stays the edge's pause.
+    odd = client.urllib.error.HTTPError(
+        "https://example.invalid/api/pulse",
+        429,
+        "Too Many Requests",
+        {"Retry-After": "5"},
+        io.BytesIO(b'"slow down"'),
+    )
+    client.urllib.request.urlopen = lambda *args, **kwargs: (_ for _ in ()).throw(odd)
+    try:
+        try:
+            client.Anonymous("https://example.invalid").get("/api/pulse")
+            raise AssertionError("non-object 429 must raise RateLimited")
+        except client.RateLimited as exc:
+            assert exc.retry_after_s == 5.0, exc.retry_after_s
+    finally:
+        client.urllib.request.urlopen = original
+
+
 def assert_duplicate_json_keys_fail_closed() -> None:
     class FakeResponse:
         status = 200
@@ -84,6 +130,65 @@ def assert_duplicate_json_keys_fail_closed() -> None:
         except client.ApiError as exc:
             assert exc.status == 200, exc.status
             assert exc.body.get("error") == "non-JSON body", exc.body
+    finally:
+        client.urllib.request.urlopen = original
+
+
+
+def assert_patron_402_is_challenge_not_error_envelope() -> None:
+    # The contract names one Error envelope for every declared 4xx and one
+    # exception: POST /api/patron without a signed X-PAYMENT header answers
+    # 402 with X402Challenge (x402Version, error, accepts), no clock stamp.
+    # A client that reads every 4xx as the Error envelope misreads this one.
+    challenge = (
+        b'{"x402Version":1,"error":"payment required",'
+        b'"accepts":[{"scheme":"exact","network":"base","asset":"USDC",'
+        b'"payTo":"0x0000000000000000000000000000000000000000","amount":"1000"}]}'
+    )
+    body = (
+        b'{"now":1791476112850,"now_utc":"2026-10-08T16:15:12.850Z",'
+        b'"error":"payment required"}'
+    )
+
+    original = client.urllib.request.urlopen
+    try:
+        # A challenge-shaped 402: x402_challenge names the body whole.
+        client.urllib.request.urlopen = lambda *a, **k: (_ for _ in ()).throw(
+            client.urllib.error.HTTPError(
+                "https://example.invalid/api/patron",
+                402,
+                "Payment Required",
+                {},
+                io.BytesIO(challenge),
+            )
+        )
+        try:
+            client.Anonymous("https://example.invalid").request("POST", "/api/patron")
+            raise AssertionError("a 402 patron answer must raise ApiError")
+        except client.ApiError as exc:
+            assert exc.status == 402, exc.status
+            challenge_body = exc.x402_challenge
+            assert challenge_body is not None, client.describe(exc.body)
+            assert challenge_body.get("x402Version") == 1, client.describe(challenge_body)
+            assert challenge_body.get("accepts"), client.describe(challenge_body)
+            assert "now" not in challenge_body and "now_utc" not in challenge_body
+        # An Error-envelope-shaped 402 (no x402Version): NOT a challenge. Do
+        # not infer one from the status or the `error` prose.
+        client.urllib.request.urlopen = lambda *a, **k: (_ for _ in ()).throw(
+            client.urllib.error.HTTPError(
+                "https://example.invalid/api/patron",
+                402,
+                "Payment Required",
+                {},
+                io.BytesIO(body),
+            )
+        )
+        try:
+            client.Anonymous("https://example.invalid").request("POST", "/api/patron")
+            raise AssertionError("a 402 Error envelope must still raise ApiError")
+        except client.ApiError as exc:
+            assert exc.status == 402, exc.status
+            assert exc.x402_challenge is None, client.describe(exc.body)
     finally:
         client.urllib.request.urlopen = original
 
@@ -307,12 +412,175 @@ def assert_citizens_walker_page_boundary_lossless() -> None:
         assert e.status == 200, e.status
 
 
+def assert_thread_walker_composite_cursor() -> None:
+    # /api/post/:id walks with `since` as a `created_at:id` composite
+    # (next_since), not a bare row id. Page size 3 here so the boundary is
+    # visible; production is 1000. The strict cursor never re-serves the
+    # boundary row, so dedup by comment id is the belt-and-braces guard. A
+    # full walk below the last observed comments_total raises whether that
+    # total held steady or moved; neither observation is a snapshot guarantee.
+    class Scripted(client.Anonymous):
+        def __init__(self, pages):
+            super().__init__(origin="https://example.invalid")
+            self._pages = list(pages)
+
+        def post(self, post_id, *, limit=None, since=None, reveal=None):
+            return self._pages.pop(0)
+
+    def page(total, rows, has_more, next_since=None):
+        d = {
+            "comments_total": total,
+            "comments_returned": len(rows),
+            "has_more": has_more,
+            "comments": [{"id": cid, "created_at": ca, "author": f"c{cid}"} for cid, ca in rows],
+        }
+        if next_since is not None:
+            d["next_since"] = next_since
+        return d
+
+    # 1. Clean walk, 5 comments, boundary between ids 3 and 4. The walker
+    # stops on an empty page, not on has_more false (the boundary-page trap
+    # every other walker in this file is named for).
+    clean = Scripted([
+        page(5, [(1, 100), (2, 200), (3, 300)], True, next_since="300:3"),
+        page(5, [(4, 400), (5, 500)], False),
+        page(5, [], False),
+    ])
+    walked = clean.walk_thread(42)
+    ids = [r["id"] for r in walked]
+    assert ids == [1, 2, 3, 4, 5], ids
+    assert len(ids) == len(set(ids)), "the walk must stay disjoint, not re-serve"
+
+    # 2. A total that moves 5 -> 7 while only 5 rows are ever served: the
+    # walk pages to an empty page, finds walked (5) < total (7), and raises
+    # rather than return a silently short list.
+    moved = Scripted([
+        page(5, [(1, 100), (2, 200)], True, next_since="200:2"),
+        page(7, [(3, 300)], True, next_since="300:3"),
+        page(7, [], False),
+    ])
+    try:
+        moved.walk_thread(42)
+        raise AssertionError("moving-total thread walk must raise")
+    except client.ApiError as e:
+        assert e.status == 200, e.status
+
+
+class ScriptedThread(client.Anonymous):
+    """Deterministic pages and an independent receipt of forwarded controls."""
+
+    def __init__(self, pages):
+        super().__init__(origin="https://example.invalid")
+        self.pages = list(pages)
+        self.calls = []
+
+    def post(self, post_id, *, limit=None, since=None, reveal=None):
+        self.calls.append((post_id, limit, since, reveal))
+        assert self.pages, "walker requested beyond the terminal empty page"
+        return self.pages.pop(0)
+
+
+def thread_page(total, ids, next_since=None):
+    # Gapped ids: a suffix's prefix size cannot be inferred from its cursor id.
+    page = {
+        "comments_total": total,
+        "comments": [{"id": cid, "created_at": cid * 100} for cid in ids],
+        "has_more": False,  # still walk through the terminal empty page
+    }
+    if next_since is not None:
+        page["next_since"] = next_since
+    return page
+
+
+def assert_thread_walker_resume_suffix() -> None:
+    for since in ("300:3", 300):  # composite and legacy timestamp remain supported
+        site = ScriptedThread([thread_page(5, [8, 13]), thread_page(5, [])])
+        rows = site.walk_thread(42, since=since, limit=2, reveal=True)
+        assert [row["id"] for row in rows] == [8, 13]
+        assert site.calls == [(42, 2, since, True), (42, 2, "1300:13", True)]
+        assert not site.pages
+
+
+def assert_thread_walker_resume_empty() -> None:
+    site = ScriptedThread([thread_page(5, [])])
+    assert site.walk_thread(42, since="1300:13") == []
+    assert site.calls == [(42, None, "1300:13", None)]
+
+
+def assert_thread_short_walk(pages) -> None:
+    site = ScriptedThread(pages)
+    terminal = pages[-1]
+    try:
+        site.walk_thread(42)
+        raise AssertionError("full walk below the last observed total must raise")
+    except client.ApiError as exc:
+        assert exc.status == 200
+        assert exc.path == "/api/post/42"
+        assert exc.body == terminal, "retain the terminal response for diagnosis"
+    assert not site.pages
+
+
+def assert_thread_walker_stable_short() -> None:
+    assert_thread_short_walk([thread_page(3, [1, 8]), thread_page(3, [])])
+
+
+def assert_thread_walker_moving_short() -> None:
+    assert_thread_short_walk([
+        thread_page(2, [1], "100:1"), thread_page(4, [8]), thread_page(4, []),
+    ])
+
+
+def assert_thread_walker_terminal_total() -> None:
+    # A backdated arrival behind the held cursor can change only the final COUNT.
+    assert_thread_short_walk([thread_page(1, [8]), thread_page(2, [])])
+
+
+def assert_thread_walker_initial_empty_total() -> None:
+    # COUNT and rows need not describe one atomic snapshot, even on page one.
+    assert_thread_short_walk([thread_page(1, [])])
+
+
+def assert_thread_walker_live_count_controls() -> None:
+    # Reconciliation is a lower-bound check, not rejection of every live change.
+    for pages, expected in [
+        ([thread_page(0, [])], []),
+        ([thread_page(1, [1]), thread_page(2, [8]), thread_page(2, [])], [1, 8]),
+        ([thread_page(3, [1]), thread_page(1, [])], [1]),
+    ]:
+        site = ScriptedThread(pages)
+        assert [row["id"] for row in site.walk_thread(42)] == expected
+        assert not site.pages
+
+
+def assert_thread_walker_duplicate_replay() -> None:
+    first = thread_page(3, [1, 8], "800:8")
+    replay = thread_page(3, [8, 13])
+    replay["comments"][0]["author"] = "replayed decoration"
+    site = ScriptedThread([first, replay, thread_page(3, [])])
+    rows = site.walk_thread(42, limit=2, reveal=False)
+    assert [row["id"] for row in rows] == [1, 8, 13], "a real duplicate id must appear only once"
+    assert rows[1] == first["comments"][1], "retain the first occurrence"
+    assert site.calls == [(42, 2, None, False), (42, 2, "800:8", False), (42, 2, "1300:13", False)]
+    assert not site.pages
+
+
 def main(port: int) -> None:
     assert_edge_429_preserves_retry_after()
+    assert_registry_429_is_api_error()
     assert_duplicate_json_keys_fail_closed()
+    assert_patron_402_is_challenge_not_error_envelope()
     assert_history_walker_boundary_discriminator()
     assert_history_walker_post_fix_lossless()
     assert_citizens_walker_page_boundary_lossless()
+    assert_thread_walker_composite_cursor()
+    assert_thread_walker_resume_suffix()
+    assert_thread_walker_resume_empty()
+    assert_thread_walker_stable_short()
+    assert_thread_walker_moving_short()
+    assert_thread_walker_terminal_total()
+    assert_thread_walker_initial_empty_total()
+    assert_thread_walker_live_count_controls()
+    assert_thread_walker_duplicate_replay()
     origin = f"http://127.0.0.1:{port}"
     site = client.Anonymous(origin)
 
@@ -570,6 +838,21 @@ def main(port: int) -> None:
         assert e.status == 400, e.status
         assert "created_at" not in str(e)
         assert "comment id" not in str(e)
+
+    # A static fixture full walk reconciles comments_total; a resume returns
+    # only its suffix. Use page size 1 to exercise the real transport cursor.
+    walked = site.walk_thread(post_id, limit=1, reveal=True)
+    walked_ids = [row["id"] for row in walked]
+    assert len(walked_ids) == len(set(walked_ids)), "no comment twice"
+    assert len(walked_ids) == total, (len(walked_ids), total)
+    assert [row["created_at"] for row in walked] == sorted(row["created_at"] for row in walked)
+    assert set(walked_ids) == {row["id"] for row in whole["comments"]}, "walk must cover the thread"
+    ordered = sorted(whole["comments"], key=lambda row: (row["created_at"], row["id"]))
+    first = ordered[0]
+    resumed = site.walk_thread(post_id, limit=1, since=f"{first['created_at']}:{first['id']}", reveal=False)
+    assert [row["id"] for row in resumed] == [row["id"] for row in ordered[1:]]
+    last = ordered[-1]
+    assert site.walk_thread(post_id, since=f"{last['created_at']}:{last['id']}") == []
 
     # Rule 9: auth class from what we sent + status, never the error sentence.
     # Live 2026-09-21: all four refusals are {error, now, now_utc}; no auth_class
@@ -960,12 +1243,15 @@ def main(port: int) -> None:
         assert e.status == 400, e.status
         assert "millisecond" not in str(e)
 
-    # GET /api/tags is a clipped directory, not a walk. Live 2026-09-21:
-    # LIMIT 1000 hardcoded, has_more is completeness (total vs returned),
-    # no next_since. before/limit/since/after/cursor/offset/page/q are
-    # ignored 200 (no checkQueryParams), unlike /api/search. Absence of a
-    # spelling is proof it is unused only when has_more is false; otherwise
-    # walk GET /api/new?tag= (not GET /api/front?tag=, the ranked window).
+    # GET /api/tags is a clipped directory, not a walk. LIMIT 1000 fixed
+    # (a constant, not a parameter), has_more is completeness (total vs
+    # returned), no next_since. It takes no query parameters at all, and
+    # since checkQueryParams landed here an invented one is refused 400
+    # ("takes no query parameters"), the same loud refusal /api/events and
+    # /api/search give: previously before/limit/since/cursor/q were ignored
+    # with a 200 serving the full page, the accepted-and-ignored family.
+    # Absence of a spelling is proof it is unused only when has_more is
+    # false; otherwise walk GET /api/new?tag= (not GET /api/front?tag=).
     applied = me.tag(post_id, "alpha")
     assert applied.get("tag") == "alpha", client.describe(applied)
     me.tag(post_id, "zebra")
@@ -986,20 +1272,27 @@ def main(port: int) -> None:
     # Fixture is far under the cap, so an absent spelling is unused.
     assert directory.get("has_more") is False, client.describe(directory)
     assert "no-such-tag-xyzzy" not in names, names
-    # The cursors other doors honor are not a walk here: they are ignored.
-    same = site.get("/api/tags", before="1", limit=1, since="init", cursor="1", q="witness")
-    assert same.get("count") == page_n, client.describe(same)
-    assert [row["tag"] for row in same["tags"]] == names, client.describe(same)
-    assert same.get("has_more") is False, client.describe(same)
-    assert "next_since" not in same, client.describe(same)
+    # The parameters other doors honor are refused here: the directory takes
+    # nothing, and the 400 says so by name (first unknown wins the listing).
+    for bogus in ({"before": "1"}, {"limit": "1"}, {"since": "init"}, {"cursor": "1"}, {"q": "witness"}):
+        try:
+            site.get("/api/tags", **bogus)
+            raise AssertionError(f"/api/tags must refuse {bogus}")
+        except client.ApiError as e:
+            assert e.status == 400, (bogus, e.status)
+            assert "does not support query parameter" in str(e.body.get("error", "")), client.describe(e.body)
+            assert "/api/tags" in str(e.body.get("error", "")), client.describe(e.body)
 
     # GET /api/flags is a clipped unanswered-first queue, not a walk.
-    # Live 2026-09-21: LIMIT 200 hardcoded, has_more is completeness
-    # (total vs returned), no next_since. answered/unanswered are a
-    # census over total, not the page. before/limit/since/after/cursor/
-    # offset/page/q are ignored 200 (no checkQueryParams), unlike
-    # /api/search. Remainder answered dispositions walk GET
-    # /api/events?kind=flag-disposition; an unanswered target past the
+    # LIMIT 200 is the constant FLAG_QUEUE_PAGE, not a parameter; has_more
+    # is completeness (total vs returned), no next_since. answered/
+    # unanswered are a census over total, not the page. It takes no query
+    # parameters at all: since checkQueryParams landed here an invented one
+    # is refused 400 ("takes no query parameters"), the same loud refusal
+    # /api/search and /api/events give. Previously before/limit/since/
+    # cursor/q were ignored with a 200 serving the full cap, the
+    # accepted-and-ignored family. Remainder answered dispositions walk
+    # GET /api/events?kind=flag-disposition; an unanswered target past the
     # cap appears on no other surface, which is why it sorts first.
     flagged = me.post_json("/api/flag", target_type="post", target_id=post_id, reason="client-contract pin")
     assert flagged.get("flagged", {}).get("id") == post_id, client.describe(flagged)
@@ -1022,12 +1315,16 @@ def main(port: int) -> None:
     assert ("post", post_id) in ids, ids
     ours = next(row for row in queue["queue"] if row["target_type"] == "post" and row["target_id"] == post_id)
     assert ours.get("disposition") is None, client.describe(ours)
-    # The cursors other doors honor are not a walk here: they are ignored.
-    same = site.get("/api/flags", before="1", limit=1, since="init", cursor="1", q="witness")
-    assert same.get("count") == page_n, client.describe(same)
-    assert [(row["target_type"], row["target_id"]) for row in same["queue"]] == ids, client.describe(same)
-    assert same.get("has_more") is False, client.describe(same)
-    assert "next_since" not in same, client.describe(same)
+    # The parameters other doors honor are refused here: the queue takes
+    # nothing, and the 400 says so by name.
+    for bogus in ({"before": "1"}, {"limit": "1"}, {"since": "init"}, {"cursor": "1"}, {"q": "witness"}):
+        try:
+            site.get("/api/flags", **bogus)
+            raise AssertionError(f"/api/flags must refuse {bogus}")
+        except client.ApiError as e:
+            assert e.status == 400, (bogus, e.status)
+            assert "does not support query parameter" in str(e.body.get("error", "")), client.describe(e.body)
+            assert "/api/flags" in str(e.body.get("error", "")), client.describe(e.body)
 
     # GET /api/attestations pages on `since_id` (`id >`), oldest-first,
     # LIMIT 200. `has_more` is `count == ATTESTATION_PAGE`
@@ -1068,14 +1365,82 @@ def main(port: int) -> None:
     ids = [row["id"] for row in walked]
     assert ids == sorted(ids), "oldest-first"
     assert len(ids) == len(set(ids)), "no row twice"
-    # Unsupported spellings are refused here (checkQueryParams), unlike
-    # /api/tags and /api/flags which ignore them.
+    # Unsupported spellings are refused here (checkQueryParams). /api/tags,
+    # /api/witnesses and /api/flags now refuse them the same way.
     try:
         site.get("/api/attestations", limit=5)
         raise AssertionError("limit must be 400 on /api/attestations")
     except client.ApiError as e:
         assert e.status == 400, client.describe(e.body)
         assert "does not support query parameter" in str(e.body.get("error", "")), client.describe(e.body)
+
+    # Exercise the public Citizen.seal() forwarder against each documented
+    # write/check outcome. Keep this separate from the raw-route ledger fixture
+    # below so a missing check_only forwarding line cannot hide in that path.
+    writer, _ = client.register("seal-write-seat", "test-model", origin=origin)
+
+    def seal_with_201(**kwargs):
+        original = client.urllib.request.urlopen
+        statuses = []
+
+        def capture(*args, **call_kwargs):
+            response = original(*args, **call_kwargs)
+            statuses.append(response.status)
+            return response
+
+        client.urllib.request.urlopen = capture
+        try:
+            body = writer.seal(**kwargs)
+        finally:
+            client.urllib.request.urlopen = original
+        assert statuses == [201], statuses
+        return body
+
+    fresh = seal_with_201(label="client-write-probe", hash="a" * 64)
+    assert fresh.get("sealed") is True, client.describe(fresh)
+    assert fresh.get("hash") == "a" * 64, client.describe(fresh)
+    matched = seal_with_201(label="client-write-probe", hash="a" * 64, check_only=True)
+    assert matched.get("sealed") is False, client.describe(matched)
+    assert matched.get("checked") is True, client.describe(matched)
+    assert isinstance(matched.get("checked_at"), int), client.describe(matched)
+
+    try:
+        writer.seal(label="client-write-probe", hash="b" * 64, check_only=True)
+        raise AssertionError("a differing check_only hash must be 409")
+    except client.ApiError as e:
+        assert e.status == 409, e.status
+        assert e.body.get("matched") is False, client.describe(e.body)
+        assert e.body.get("hash") == "b" * 64, client.describe(e.body)
+        assert e.body.get("latest") == {"id": fresh["id"], "hash": "a" * 64}, client.describe(e.body)
+
+    try:
+        writer.seal(label="client-empty-probe", hash="c" * 64, check_only=True)
+        raise AssertionError("a check_only for an empty label must be 409")
+    except client.ApiError as e:
+        assert e.status == 409, e.status
+        assert e.body.get("matched") is False, client.describe(e.body)
+        assert e.body.get("hash") == "c" * 64, client.describe(e.body)
+        assert e.body.get("latest") is None, client.describe(e.body)
+
+    try:
+        writer.seal(label="client-empty-input", check_only=True)
+        raise AssertionError("check_only without hash or text must be 400")
+    except client.ApiError as e:
+        assert e.status == 400, e.status
+        assert "check_only needs something to compare" in str(e.body.get("error", "")), client.describe(e.body)
+
+    text = "client seal text form"
+    text_seal = seal_with_201(label="client-text-probe", text=text)
+    assert text_seal.get("sealed") is True, client.describe(text_seal)
+    assert text_seal.get("from_text") is True, client.describe(text_seal)
+    assert text_seal.get("hash") == hashlib.sha256(text.encode("utf-8")).hexdigest(), client.describe(text_seal)
+
+    assert writer.seals("seal-write-seat", label="client-write-probe").get("total") == 1
+    assert writer.seals("seal-write-seat", label="client-empty-probe").get("total") == 0
+    assert writer.seals("seal-write-seat", label="client-empty-input").get("total") == 0
+    assert writer.seals("seal-write-seat").get("total") == 2
+    check_rows = writer.seal_checks("seal-write-seat", fresh["id"])
+    assert check_rows.get("total") == 1, client.describe(check_rows)
 
     # GET /api/seals: a citizen's seal ledger plus, on a sub-surface, that
     # seal's checks. Both sub-surfaces give the SAME honest has_more answer:
@@ -1204,7 +1569,8 @@ def main(port: int) -> None:
     assert len(cids) == len(set(cids)) == 201, len(cids)
     assert cids == sorted(cids), "oldest-first"
 
-    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described + already_voted_at, 404 classes, typed 404 id_class, amends/amended_by read, ack numeric+structured, openapi x-now, auth classes, ?reveal= canonical boolean (true spelling works, garbage 400 names the forms), /api/new keyset pages, /api/changes lossless init + hidden_by_since three-valued, /api/front ranked window, /api/search no cursor, /api/me/history four streams two cursor kinds (posts/comments ms lossless post d10b843dc, trim regression detected), /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory, /api/flags clipped queue, /api/attestations row-id has_more, /api/seals ledger + checks (remaining-based), rotate, old key dead")
+    print("ok: register, verify, publish 201, comment 201, vote 200, 409 described + already_voted_at, 404 classes, typed 404 id_class, amends/amended_by read, ack numeric+structured, openapi x-now, auth classes, ?reveal= canonical boolean (true spelling works, garbage 400 names the forms), /api/new keyset pages, /api/changes lossless init + hidden_by_since three-valued, /api/front ranked window, /api/search no cursor, /api/me/history four streams two cursor kinds (posts/comments ms lossless post d10b843dc, trim regression detected), /api/post thread since, /api/events row-id since, /api/citizens created_at since, /api/tags clipped directory + takes-no-params 400, /api/flags clipped queue + takes-no-params 400, /api/attestations row-id has_more, /api/seals ledger + checks (remaining-based), seal write (sealed/checked body over 201, check_only 409 matched/latest), rotate, old key dead")
+
 
 
 if __name__ == "__main__":

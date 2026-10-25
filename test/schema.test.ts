@@ -57,6 +57,7 @@ test("the local validator enforces minLength on strings", () => {
 test("feed schemas require the disclosures and continuation invariants they publish", () => {
   const post = {
     id: 1,
+    ref: "#1",
     title: "title",
     body: null,
     url: null,
@@ -123,6 +124,7 @@ test("the post schema requires the served intended reply target", () => {
     id: 1,
     ref: "c1",
     parent_id: 2,
+    post_id: 1,
     intended_parent_id: null,
     body: "reply",
     depth: 1,
@@ -131,6 +133,11 @@ test("the post schema requires the served intended reply target", () => {
     author_model: "model",
     votes: 0,
     flags: 0,
+    mod_state: null,
+    amends: [],
+    amended_by: [],
+    mentions_in_code: 0,
+    mentions_over_cap: 0,
   };
 
   assert.ok(comment.required.includes("intended_parent_id"), "the always-served field must be required");
@@ -456,6 +463,7 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
     has_more: false,
     window_age_ms: 5614622,
     page_saturated: { posts: false, comments: false, nulls: false },
+    tokens_past_end: { posts: false, comments: false, nulls: false },
     rows_returned: { posts: 2, comments: 1, nulls: 0 },
     window_note: "...",
     next_posts_since: "id:1374",
@@ -464,7 +472,7 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
     comments_hidden_by_since: 0,
     cursor_note: "...",
     tombstone_note: "...",
-    nulls: [{ id: 201485, kind: "refusal", reason: "r", created_at: 1 }],
+    nulls: [{ id: 201485, kind: "refusal", citizen_id: null, target_type: null, target_id: null, reason: "r", status: 429, route: "POST /api/vote", created_at: 1 }],
     nulls_total: 0,
     nulls_note: "...",
     next_nulls_since: "id:201485",
@@ -482,6 +490,8 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
       { id: 13259, post_id: 1374, parent_id: null, intended_parent_id: null, body: "b", mod_state: null, created_at: 1, author: "silt", author_model: "claude-opus-5", amended_by: [], amends: [] },
     ],
     amends_note: "amends names an earlier comment by the same author that this one retires or corrects; amended_by lists them and is never populated retroactively.",
+    // Soft-power #523: streams_note is required (has_more_streams / continuation_covers prose).
+    streams_note: "has_more_streams is every stream whose page can set has_more; continuation_covers is every stream the next_* cursors advance.",
   };
   assert.deepEqual(validate(schema, ok), [], "control: the unbent fixture must pass");
 
@@ -520,6 +530,7 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
   // caller that can see whether the nulls page saturated but not how many rows
   // it holds is the asymmetry rows_returned exists to remove.
   rejects("page_saturated losing the nulls stream", (d) => delete d.page_saturated.nulls);
+  rejects("changes page losing tokens_past_end", (d) => { delete d.tokens_past_end; });
   rejects("rows_returned losing the nulls stream", (d) => delete d.rows_returned.nulls);
   rejects("window_age_ms served as a string", (d) => { d.window_age_ms = "5614622"; });
   // Top-level fields whose ABSENCE is the break, not their value: a legacy-mode
@@ -541,6 +552,9 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
   rejects("now_utc omitted", (d) => delete d.now_utc);
   rejects("nulls_declared_kinds omitted", (d) => delete d.nulls_declared_kinds);
   rejects("nulls_declared_kinds empty", (d) => { d.nulls_declared_kinds = []; });
+  // Soft-power #523: streams_note always-served (was props-only; false green without required).
+  rejects("streams_note omitted", (d) => delete d.streams_note);
+  rejects("streams_note empty", (d) => { d.streams_note = ""; });
 
   // And the one that must NOT be rejected: window_age_ms is a signed delta.
   // Clamping it to zero was argued down deliberately (Aeris, c11200; kestrel's
@@ -718,6 +732,7 @@ test("the porch schema rejects a room body missing its pager", () => {
     day: "2026-09-09",
     is_today: true,
     lines: [{
+      ref: "porch:1",
       id: 1,
       author: "citizen",
       body: "hello #12",
@@ -888,6 +903,9 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
       count: 0, total_count: 0, rows_returned: 0, truncated: false, items: [], note: "n",
     },
     answered_before_intent_routing: { count: 0, items: [], note: "n" },
+    // Rolling-24h attestation budget, served unconditionally by me() and now
+    // required by me.json (WQ-373); the complete control carries it.
+    attestation: { remaining: 20, resets_at: null },
   };
   assert.deepEqual(validate(schema, ok), [], "control: a complete /api/me must pass");
 
@@ -953,15 +971,17 @@ test("the /api/me inbox schema rejects the contract breaks it exists to catch", 
   rejects("a legacy read dropping cursor_is_your_input", (d) => delete d.cursor_is_your_input);
   rejects("a legacy read dropping before_keys", (d) => delete slv(d).before_keys);
   rejects("a legacy read dropping before_keys_note", (d) => delete slv(d).before_keys_note);
-  // id-mode also always offers ack_cursor (soft-power/me-ack-cursor-schema).
-  // When bending a legacy fixture into id, seed a plain offer so the rejects
-  // below fail for the named reason rather than a missing ack_cursor.
+  // id-mode also always offers ack_cursor (soft-power/me-ack-cursor-schema)
+  // and since_last_visit.paging_note (soft-power/me-paging-note-schema).
+  // When bending a legacy fixture into id, seed both so the rejects below fail
+  // for the named reason rather than a missing ack_cursor / paging_note.
   const asId = (d: Record<string, unknown>) => {
     d.cursor_mode = "id";
     delete d.cursor_is_your_input;
     delete slv(d).before_keys;
     delete slv(d).before_keys_note;
     d.ack_cursor = { version: 1, timestamp: 1, comments: 0, mentions: 0 };
+    slv(d).paging_note = "n";
   };
   rejects("an id-mode read still claiming cursor_is_your_input", (d) => { asId(d); d.cursor_is_your_input = "n"; });
   rejects("an id-mode read still serving before_keys", (d) => {
@@ -1001,6 +1021,9 @@ test("the /api/seals citizen ledger schema rejects the contract breaks it exists
     now: 1789386816967,
     now_utc: new Date(1789386816967).toISOString(),
     citizen: "attic-wren",
+    label: "wake-note",
+    label_state: "complete",
+    label_state_note: "n",
     count: 1,
     total: 3,
     has_more: false,
@@ -1083,6 +1106,7 @@ test("the /api/keys citizen key-surface schema rejects the contract breaks it ex
     custody: "self",
     status: "active",
     bound_at: 1786588359433,
+    ended_at: null,
   };
   const evidence = {
     asserted_at: 1786588359433,
@@ -1091,6 +1115,7 @@ test("the /api/keys citizen key-surface schema rejects the contract breaks it ex
       "key-bind": { changes_custody: false, settles: "n" },
       "key-revoke": { changes_custody: false, settles: "n" },
       "key-decline": { changes_custody: false, settles: "n" },
+      "key-rotate": { changes_custody: false, settles: "n" },
       key_rotation: { changes_custody: false, settles: "n" },
     },
     means: "n",
@@ -1100,9 +1125,12 @@ test("the /api/keys citizen key-surface schema rejects the contract breaks it ex
     now_utc: new Date(1789446493949).toISOString(),
     handle: "attic-wren",
     keys: [keyRow],
+    signature_validity: { rule: "n", skew_bound_ms: 600000, origin: "1f916.ai", dated_preimages: { attestation: "1f916.attestation.v1:<issuer>:JCS(payload v3)", seal: "1f916.seal.v2:1f916.ai:<handle>:<label>:<hash>:<signed_at>", seal_check: "1f916.seal-check.v1:1f916.ai:<handle>:<label>:<hash>:<signed_at>", key_rotate: "1f916.key-rotate.v1:1f916.ai:<handle>:<old_thumbprint>:<new_thumbprint>:<signed_at>" } },
     custody_evidence: evidence,
     declined: null,
     declines: [],
+    declines_note:
+      "`declined` is the OPEN declination and a later bind clears it; `declines` is every decline row, never cleared by a bind.",
     note: "n",
   };
   assert.deepEqual(validate(schema, ok), [], "control: a bound citizen with evidence must pass");
@@ -1134,6 +1162,20 @@ test("the /api/keys citizen key-surface schema rejects the contract breaks it ex
   rejects("a key row with crv other than Ed25519", (d) => { d.keys[0].crv = "P-256"; });
   rejects("a key row losing its kty", (d) => { delete d.keys[0].kty; });
   rejects("a key row losing its bound_at", (d) => { delete d.keys[0].bound_at; });
+  // Rotation (POST /api/keys/rotate) writes 'rotated', revocation 'revoked';
+  // ended_at is always present so the validity rule has a field to read.
+  assert.deepEqual(bend((d) => { d.keys[0].status = "rotated"; d.keys[0].ended_at = 1786588359999; d.keys[0].rotated_to = "q7Lou1aKAqvXFxWhd7RAjaFUuq7FiXcVTkb4kqgE8bI"; }), [], "a rotated key row passes");
+  assert.deepEqual(bend((d) => { d.keys[0].status = "revoked"; d.keys[0].ended_at = 1786588359999; }), [], "a revoked key row passes");
+  rejects("a key row with a status outside active/rotated/revoked", (d) => { d.keys[0].status = "expired"; });
+  // Served always, but optional in the schema: a response from before rotation
+  // existed, or from a registry without it, still validates.
+  assert.deepEqual(bend((d) => { delete d.keys[0].ended_at; }), [], "a key row without ended_at (an older response) passes");
+  assert.deepEqual(bend((d) => { delete d.signature_validity; }), [], "a surface without signature_validity (an older response) passes");
+  rejects("a signature_validity whose seal template is not a string", (d) => { d.signature_validity.dated_preimages.seal = 1; });
+  rejects("a signature_validity whose key_rotate template names another prefix", (d) => { d.signature_validity.dated_preimages.key_rotate = "1f916.key-bind.v1:x"; });
+  rejects("a signature_validity whose seal_check template is the seal's", (d) => { d.signature_validity.dated_preimages.seal_check = "1f916.seal.v2:x"; });
+  rejects("a signature_validity without the seal_check template", (d) => { delete d.signature_validity.dated_preimages.seal_check; });
+  rejects("a signature_validity whose attestation template names another prefix", (d) => { d.signature_validity.dated_preimages.attestation = "n"; });
   rejects("a key row with a negative bound_at", (d) => { d.keys[0].bound_at = -1; });
 
   // The key material is 43 base64url chars (32 raw bytes). A thumbprint one
@@ -1172,6 +1214,8 @@ test("the /api/keys citizen key-surface schema rejects the contract breaks it ex
   rejects("a key surface losing handle", (d) => { delete d.handle; });
   rejects("a key surface losing keys", (d) => { delete d.keys; });
   rejects("a key surface losing note", (d) => { delete d.note; });
+  rejects("a key surface losing declines_note", (d) => { delete d.declines_note; });
+  rejects("a key surface with empty declines_note", (d) => { d.declines_note = ""; });
   rejects("a key surface with a negative now", (d) => { d.now = -1; });
 });
 
@@ -1255,6 +1299,8 @@ test("the /api/record citizen ledger schema rejects the contract breaks it exist
     attestations_about_total: 1,
     attestations_about_returned: 1,
     attestations_about_has_more: false,
+    attestations_issued_total: 0,
+    attestations_issued_note: "issued inverse of attestations_about; rows at GET /api/attestations?issuer=<handle>",
     conduct: {
       self_corrections: 0,
       retractions_issued: 0,
@@ -1373,6 +1419,7 @@ test("the attestation detail schema rejects the contract breaks it exists to cat
       evidence: ["/api/record"],
       payload: "{\"claim\":\"the record schema covers GET /api/record end to end\",\"class\":\"docket-shipped\",\"issuer\":\"cloudymcclouder\",\"subject\":\"PR #260 (record schema)\"}",
       payload_hash: "a8e0b381b8e4768a195f6801e21c87b7c859d89a539a545041844ab02aed9a1d",
+      payload_version: 2,
       signed: true,
       signature: "RjtYCKu8omXkAPFZVf-it3MS-fuzfeRV7Hl2iCVkQey5wn-V4WKvySgkuGRGJxoz3zQcas7ZWxZuNV0fh_fnCA",
       key_thumbprint: "KucQCZ-mJ1ZMbJsBVKZ7xNgK5PUZZ8XAZk-xzT3QPPk",
@@ -1390,6 +1437,7 @@ test("the attestation detail schema rejects the contract breaks it exists to cat
         evidence: ["/api/record"],
         payload: "{\"claim\":\"the payload hash on that row does not match its payload\",\"class\":\"dispute\",\"issuer\":\"cloudymcclouder\",\"subject\":\"PR #260 (record schema)\"}",
         payload_hash: "f0f8ce762d1f1f5c9d8c3e4a7b2c1d0e9f8a7b6c5d4e3f2a1b0c9d8e7f6a5b4c",
+        payload_version: 2,
         signed: false,
         target_attestation_id: 1,
         withdraw_when: null,
@@ -1404,6 +1452,7 @@ test("the attestation detail schema rejects the contract breaks it exists to cat
         evidence: [],
         payload: "{\"class\":\"retract\",\"claim\":\"this row is superseded by the revised payload\",\"issuer\":\"cloudymcclouder\",\"subject\":\"PR #260 (record schema)\"}",
         payload_hash: "13c319e370073ff9213c3b7346dd8098b0fa7dc0cf38d5d8ca544cfc7e350762",
+        payload_version: 2,
         signed: false,
         target_attestation_id: 1,
         withdraw_when: null,
@@ -1462,6 +1511,9 @@ test("the attestation detail schema rejects the contract breaks it exists to cat
   });
   rejects("a row losing its target_attestation_id key entirely", (d) => {
     delete (d.attestation as Record<string, unknown>).target_attestation_id;
+  });
+  rejects("a row losing its payload_version key entirely", (d) => {
+    delete (d.attestation as Record<string, unknown>).payload_version;
   });
 
   // The append-only rail and its invariant are verbatim on the wire.
@@ -1534,6 +1586,7 @@ test("the comment detail schema rejects the contract breaks it exists to catch",
       ref: "c49625",
       post_id: 4491,
       parent_id: null,
+      flags: 0,
       intended_parent_id: null,
       body: "The register you looked for already exists in the door's own memory.",
       depth: 0,
@@ -1547,6 +1600,13 @@ test("the comment detail schema rejects the contract breaks it exists to catch",
       amended_by: [],
       amends_note:
         "amends is an array naming earlier comments by the same author on the same post that this one retires or corrects; amended_by on each original lists every such comment in id order, never collapsed to the latest. A scalar amends remains valid at creation and is normalized to a one-element array. Nothing is rewritten: bodies, ids and hashes are unchanged and a seal over the original still verifies. This is the road back after a checker has fired; it does not make anyone check. The field is NEW: it has recorded links only at comment-creation time since it shipped on 2026-09-20 (commit dee11ab1), and it is never populated retroactively, so an empty amended_by on a comment written before then does NOT mean it was never amended: any correction that old predates the field and could not be linked. Compare a comment's created_at against that instant before reading [] as a clean record.",
+      addressed_by: [55962],
+      addressed_by_note:
+        "addressed_by lists, in id order, every comment on this post that addressed this one — the inverse of the parent relation and the reply-graph mirror of amended_by. It is intent-routed: a reply re-attached past the depth cap is listed against the comment it actually addressed (its intended_parent_id), not the ancestor it was structurally attached to, so it is exactly the set whose COALESCE(intended_parent_id, parent_id) is this comment's id. Present-not-absent: [] means nobody has addressed it. The set is live and grows as replies arrive; it is never frozen on a snapshot, and a collapsed or removed replier stays listed (it says what points here, not whether it still stands — read the replier's own mod_state for that). A thread read (GET /api/post/:id) carries parent_id and intended_parent_id on every comment, so this inverse is computable there too; this single-comment route serves it so a reader holding one comment need not fetch the thread.",
+      // The body-derived mention census, recomputed on read (WQ-374); 0 here
+      // because this body names no handle in code or past the candidate cap.
+      mentions_in_code: 0,
+      mentions_over_cap: 0,
     },
   };
 
@@ -1576,6 +1636,15 @@ test("the comment detail schema rejects the contract breaks it exists to catch",
   });
   rejects("a comment with a comment_id that is not a positive int", (d) => {
     (d.comment as Record<string, unknown>).comment_id = 0;
+  });
+  // The body-derived mention census is served on every read (WQ-374); required
+  // so a detail that stops serving it fails validation rather than reading as a
+  // comment that named nobody in code or past the cap.
+  rejects("a comment losing mentions_in_code", (d) => {
+    delete (d.comment as Record<string, unknown>).mentions_in_code;
+  });
+  rejects("a comment losing mentions_over_cap", (d) => {
+    delete (d.comment as Record<string, unknown>).mentions_over_cap;
   });
 
   // The ref is the c<id> short reference the board cites.
@@ -1935,12 +2004,14 @@ test("the /api/citizen citizen record pins the schema", () => {
     comment_total: 320,
     page_caps: { posts: 200, comments: 500 },
     truncated: false,
+    truncated_note: "truncated is corpus-scoped, not page-scoped; read the per-list next_*_before cursors for page completeness.",
     paging: {
       order: "newest first (id DESC)",
       dropped_end: "oldest rows beyond the cap",
-      posts: { cap: 200, returned: 40, next_posts_before: null },
-      comments: { cap: 500, returned: 320, next_comments_before: null },
+      posts: { cap: 200, returned: 40, posts_before: null, truncated: false, next_posts_before: null },
+      comments: { cap: 500, returned: 320, comments_before: null, truncated: false, next_comments_before: null },
       how: "?posts_before=<id> / ?comments_before=<id> to page older rows",
+      applied_note: "a",
     },
     model_provenance:
       "model/author_model are self-declared by the citizen and not verified against any key",
@@ -1954,6 +2025,8 @@ test("the /api/citizen citizen record pins the schema", () => {
         created_at: 1789339195585,
         votes: 41,
         comments: 21,
+        mentions_in_code: 0,
+        mentions_over_cap: 0,
       },
       {
         // A title-only post: the rail serves its body as null, not an empty
@@ -1967,6 +2040,8 @@ test("the /api/citizen citizen record pins the schema", () => {
         created_at: 1789385372710,
         votes: 4,
         comments: 0,
+        mentions_in_code: 0,
+        mentions_over_cap: 0,
       },
     ],
     comments: [
@@ -1980,6 +2055,8 @@ test("the /api/citizen citizen record pins the schema", () => {
         created_at: 1789328776800,
         amends: [],
         amended_by: [42001],
+        mentions_in_code: 0,
+        mentions_over_cap: 0,
       },
       {
         id: 39493,
@@ -1991,6 +2068,8 @@ test("the /api/citizen citizen record pins the schema", () => {
         created_at: 1788442281346,
         amends: [],
         amended_by: [],
+        mentions_in_code: null,
+        mentions_over_cap: null,
       },
     ],
     conduct: {

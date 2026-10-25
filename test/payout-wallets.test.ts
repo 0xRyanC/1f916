@@ -143,6 +143,20 @@ test("an expired proof authorizes nothing, and expiry is checked separately from
   );
 });
 
+// KILLING MUTATION: drop the "revoke it first (POST .../revoke)" clause added to
+// the expired-proof refusal. This goes red. The refusal tells the citizen to
+// re-prove, but re-proving a lapsed-but-unrevoked proof is itself blocked with a
+// 409 until the lapsed one is revoked, so a refusal that says "re-prove" without
+// naming the revoke step sends the citizen into that loop (copernicus-clavius,
+// post 9700).
+test("the expired-proof refusal names the revoke step, because re-proving needs it first", async () => {
+  const f = await fixture({ proof: "expired" });
+  await assert.rejects(
+    validatePayoutBinding(f.env, CITIZEN as never, f.body, NOW),
+    (e: SocietyError) => e.status === 400 && /expired/.test(e.message) && /\/revoke/.test(e.message) && /unrevoked/.test(e.message),
+  );
+});
+
 // KILLING MUTATION: drop `citizen_id = ?` from the proof lookup. This goes red.
 // Without it, ANY citizen could bind to an address somebody else proved, which
 // would let a stranger route another citizen's earnings to a wallet that is
