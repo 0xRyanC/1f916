@@ -14069,16 +14069,19 @@ const NULLS_NOTE =
 // walk, which cannot have changed — and this board takes a comment every
 // couple of minutes, so an archive re-walker would never see a 304 and the
 // most expensive read on the site would be untouched. Bounded pages drop the
-// ordinary row watermarks, keeping moderation and (when comments are served)
+// ordinary above-cut arrivals, keeping moderation and (when comments are served)
 // amendments, which lets a repeated archive walk go quiet between real changes.
+// A caller can also supply a cut ahead of the current head. Until that cut is
+// reached, new rows can enter its page; clamp each row head to the supplied cut
+// rather than assuming every accepted snapshot token was minted at a past tip.
 //
 // `init` is deliberately NOT bounded: it samples MAX(id) at request time, so
 // its baseline moves. Legacy timestamp mode is not bounded either — its window
 // runs to now and new rows land inside it.
 export function changesPageIsBounded(postsCursor: ChangesCursor, commentsCursor: ChangesCursor): boolean {
   // Both snapshot kinds pin `id <= maxId` (the query WHERE for `snapshot` and
-  // `snapshot_id` differ only in an extra created_at floor), so new rows take
-  // higher ids and cannot enter either page. The id-mode `snapi:` cursor is the
+  // `snapshot_id` differ only in an extra created_at floor). Once the cut has
+  // been reached, higher ids cannot enter either page. The id-mode `snapi:` cursor is the
   // live lossless path — `init` transitions into it — so if it is not counted
   // bounded, the archive re-walk this whole feature exists for never goes quiet:
   // its tag carries the board-wide row watermarks and a comment landing anywhere
@@ -14140,11 +14143,20 @@ export function changesEtag(v: {
   const scope = `${sinceKey}:${v.postsSince ?? ""}:${v.commentsSince ?? ""}:${nullsActive ? (v.nullsSince ?? "window") : ""}`;
   const nullsHead = nullsActive ? `.${v.maxNullId}` : "";
   const amendmentHead = v.maxAmenderId === undefined ? "" : `.a${v.maxAmenderId}`;
-  // Distinct prefixes so a bounded and an unbounded tag can never compare
-  // equal, even if the watermarks behind them happened to line up.
-  return v.bounded
-    ? `"chg1b-${scope}-${v.maxEventId}${nullsHead}${amendmentHead}"`
-    : `"chg1-${scope}-${v.maxPostId}.${v.maxCommentId}.${v.maxEventId}${nullsHead}"`;
+  // Accepted future cuts can still admit rows and change past-end diagnostics.
+  // Their per-stream head moves until the cut settles, then remains quiet on
+  // ordinary above-cut arrivals. A silenced stream contributes no row head.
+  if (v.bounded) {
+    const snapshotHead = (token: string | null, head: number) => {
+      const cursor = parseChangesCursor(token);
+      return cursor != null && typeof cursor !== "string" && (cursor.kind === "snapshot" || cursor.kind === "snapshot_id")
+        ? Math.min(head, cursor.maxId)
+        : 0;
+    };
+    // A new bounded prefix prevents old arrival-inert tags authorizing reuse.
+    return `"chg2b-${scope}-${snapshotHead(v.postsSince, v.maxPostId)}.${snapshotHead(v.commentsSince, v.maxCommentId)}.${v.maxEventId}${nullsHead}${amendmentHead}"`;
+  }
+  return `"chg1-${scope}-${v.maxPostId}.${v.maxCommentId}.${v.maxEventId}${nullsHead}"`;
 }
 
 // `since` is resolved ONCE, here, before anything reads it: the validator,
@@ -14198,9 +14210,12 @@ export async function changesValidator(
     ? Number((await env.DB.prepare("SELECT COALESCE(MAX(amender_id), 0) AS m FROM comment_amends").all<{ m: number }>()).results[0]?.m ?? 0)
     : undefined;
   const nullsSuppressed = nullsSince !== null && nullsSince.trim() === "done";
-  const [maxPostId, maxCommentId, maxEventId, maxNullId] = bounded
-    ? [0, 0, await head("identity_events"), nullsSuppressed ? null : await head("nulls")]
-    : await Promise.all([head("posts"), head("comments"), head("identity_events"), nullsSuppressed ? null : head("nulls")]);
+  const [maxPostId, maxCommentId, maxEventId, maxNullId] = await Promise.all([
+    bounded && postsCursor === "done" ? 0 : head("posts"),
+    bounded && commentsCursor === "done" ? 0 : head("comments"),
+    head("identity_events"),
+    nullsSuppressed ? null : head("nulls"),
+  ]);
   return changesEtag({ since, postsSince, commentsSince, maxPostId, maxCommentId, maxEventId, bounded, maxAmenderId, nullsSince, maxNullId });
 }
 
