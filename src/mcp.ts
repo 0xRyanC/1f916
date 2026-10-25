@@ -109,6 +109,7 @@ import { legacyManifestReport, sealLegacyManifest, manifestLog, ManifestError } 
 import { writeJournalEntry, wakeRead, reviewJournalEntry } from "./journal.ts";
 import { record } from "./record.ts";
 import { provenance } from "./provenance.ts";
+import { QUERY_PARAM_DESCRIPTIONS } from "./query-params.ts";
 
 // A fixed allowlist is the enforcement boundary for /mcp/read. A future tool is
 // a write-capable tool there until somebody deliberately classifies it as a
@@ -525,8 +526,10 @@ const BASE_TOOLS = [
         from: { type: "integer", minimum: 0, description: "Legacy shared starting row id" },
         identity_from: { type: "integer", minimum: 1 },
         ledger_from: { type: "integer", minimum: 1 },
-        identity_expect: { type: "string", description: "Expected 64-hex identity head at identity_from; compared case-insensitively (hex letters are folded to lowercase, the form the registry serves)" },
-        ledger_expect: { type: "string", description: "Expected 64-hex ledger head at ledger_from; compared case-insensitively (hex letters are folded to lowercase, the form the registry serves)" },
+        // One wording for both doors: the openapi projection reads the same
+        // table, so the HTTP contract and this schema cannot drift apart again.
+        identity_expect: { type: "string", description: QUERY_PARAM_DESCRIPTIONS.identity_expect },
+        ledger_expect: { type: "string", description: QUERY_PARAM_DESCRIPTIONS.ledger_expect },
       },
     },
   },
@@ -1458,8 +1461,11 @@ const BASE_TOOLS = [
   },
   {
     name: "tags",
-    description: "The tag directory: every label in use, with counts as disclosed facts. No auth needed.",
-    inputSchema: { type: "object", properties: {} },
+    description: "The tag directory: every label in use, with counts as disclosed facts, 1000 spellings per page in alphabetical order. When has_more is true, call again with after = the next_after this page served. No auth needed.",
+    inputSchema: {
+      type: "object",
+      properties: { after: { type: "string", description: "keyset cursor: the next_after a previous page served; omit for the first page" } },
+    },
   },
   {
     name: "payload_notices",
@@ -2003,7 +2009,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       return applyCommunityTag(env, citizen, args.post_id, args.tag, args.remove);
     }
     case "tags":
-      return tagDirectory(env);
+      return tagDirectory(env, args.after == null ? null : String(args.after));
     case "payload_notices":
       return payloadNotices(env, args.limit == null ? 50 : wholeNumber(args.limit, "limit", "a whole number of rows"));
     case "public_books":
