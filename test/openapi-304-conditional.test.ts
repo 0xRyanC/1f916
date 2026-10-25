@@ -41,10 +41,10 @@ import { CONDITIONAL_304_ROUTES } from "../src/connect.ts";
 const schema = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
 const ORIGIN = "https://1f916.ai";
 
-test("CONDITIONAL_304_ROUTES is exactly the four conditional reads", () => {
+test("CONDITIONAL_304_ROUTES is exactly the five conditional reads", () => {
   assert.deepEqual(
     [...CONDITIONAL_304_ROUTES].sort(),
-    ["/api/changes", "/api/comment/:id", "/api/pulse", "/openapi.json"],
+    ["/api/changes", "/api/citizen/:handle", "/api/comment/:id", "/api/pulse", "/openapi.json"],
     "the conditional-304 set drifted from the reads that answer 304",
   );
 });
@@ -108,7 +108,7 @@ async function assertRouter304(env: Parameters<typeof worker.fetch>[1], setup: (
   assert.equal(second.headers.get("Cache-Control"), "no-store", `${name}: the 304 keeps no-store`);
 }
 
-test("the live router answers 304 with an empty body on all four conditional reads", async () => {
+test("the live router answers 304 with an empty body on all five conditional reads", async () => {
   const { env, db } = sqliteTestEnv(schema);
   // Minimal fixture so a comment read has a live object: one citizen, one post,
   // one comment (ids mirror test/typed-404-id-class-served.test.ts).
@@ -124,6 +124,7 @@ test("the live router answers 304 with an empty body on all four conditional rea
   await assertRouter304(env, async () => {}, "/api/pulse", "pulse");
   await assertRouter304(env, async () => {}, "/api/changes?since=0", "changes");
   await assertRouter304(env, async () => {}, "/api/comment/40", "comment");
+  await assertRouter304(env, async () => {}, "/api/citizen/flint", "citizen");
   // /openapi.json is content-addressed: its ETag is the x-document-sha256 it
   // already computes, so the same assertion holds with no fixture — a plain GET
   // carries the ETag and echoing it back answers 304 empty (no-scheduler, 8731).

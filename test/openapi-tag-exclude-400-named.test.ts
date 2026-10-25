@@ -54,11 +54,14 @@ test("tag and exclude carry a description naming the 400 refusal on every read t
   assert.equal(checked, 4, "expected exactly the two tagged reads x two directions");
 });
 
-test("the description table covers exactly tag and exclude and matches the guard's rule", () => {
-  assert.deepEqual(Object.keys(QUERY_PARAM_DESCRIPTIONS).sort(), ["exclude", "tag"]);
-  for (const text of Object.values(QUERY_PARAM_DESCRIPTIONS)) {
+test("the description table covers exactly tag, exclude, the tag-directory cursor and the attest heads, and matches the guard's rule", () => {
+  // `after` joined with the /api/tags keyset cursor (test/tags-after-cursor.test.ts);
+  // identity_expect/ledger_expect joined with the /api/attest case-fold docs (#660).
+  // Each refusal/format rule is pinned in its own test. The 8-cap check is for the two filters.
+  assert.deepEqual(Object.keys(QUERY_PARAM_DESCRIPTIONS).sort(), ["after", "exclude", "identity_expect", "ledger_expect", "tag"]);
+  for (const [name, text] of Object.entries(QUERY_PARAM_DESCRIPTIONS)) {
     assert.ok(text.length <= 400, `description over 400 chars: ${text.length}`);
-    assert.match(text, /8/, "names the 8-per-direction cap");
+    if (name === "tag" || name === "exclude") assert.match(text, /8/, "names the 8-per-direction cap");
   }
 });
 

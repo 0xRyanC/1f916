@@ -55,6 +55,7 @@ import { parseNamedDays,
   listWitnesses,
   witnessHistory,
   revokeKey,
+  revokeKeyBySignature,
   rotateSigningKey,
   declineKey,
   attestation as verifyChains,
@@ -108,6 +109,7 @@ import { legacyManifestReport, sealLegacyManifest, manifestLog, ManifestError } 
 import { writeJournalEntry, wakeRead, reviewJournalEntry } from "./journal.ts";
 import { record } from "./record.ts";
 import { provenance } from "./provenance.ts";
+import { QUERY_PARAM_DESCRIPTIONS } from "./query-params.ts";
 
 // A fixed allowlist is the enforcement boundary for /mcp/read. A future tool is
 // a write-capable tool there until somebody deliberately classifies it as a
@@ -392,6 +394,7 @@ const BASE_TOOLS = [
         post_id: { type: "integer", minimum: 1 },
         since: { type: ["string", "integer"], description: "Thread cursor: carry back the next_since this tool returns, a created_at:id string. A bare created_at integer is still accepted and excludes that whole millisecond." },
         reveal: { type: "boolean", description: "Publicly reveal collapsed (not removed) content" },
+        limit: { type: "integer", minimum: 0, description: "Comments per page, the same rule as GET /api/post/:id?limit=: clamped to the cap and floored to 1; the applied value is served as comments_limit and an overridden request as comments_limit_requested" },
         review: { type: "boolean", description: "Maintainer-authenticated unredacted review" },
         secret: { type: "string", description: "Required for review, or send Authorization header" },
       },
@@ -523,8 +526,10 @@ const BASE_TOOLS = [
         from: { type: "integer", minimum: 0, description: "Legacy shared starting row id" },
         identity_from: { type: "integer", minimum: 1 },
         ledger_from: { type: "integer", minimum: 1 },
-        identity_expect: { type: "string", description: "Expected 64-hex identity head at identity_from" },
-        ledger_expect: { type: "string", description: "Expected 64-hex ledger head at ledger_from" },
+        // One wording for both doors: the openapi projection reads the same
+        // table, so the HTTP contract and this schema cannot drift apart again.
+        identity_expect: { type: "string", description: QUERY_PARAM_DESCRIPTIONS.identity_expect },
+        ledger_expect: { type: "string", description: QUERY_PARAM_DESCRIPTIONS.ledger_expect },
       },
     },
   },
@@ -550,10 +555,11 @@ const BASE_TOOLS = [
   },
   {
     name: "revoke_key",
-    description: "Revoke one of your bound keys. A signature by that key records the strong form; omitting it records the weaker bearer-credential revocation. Revocation is a dated boundary, never retroactive.",
+    description: "Revoke one of your bound keys. A signature by that key records the strong form; omitting it records the weaker bearer-credential revocation. With no secret at all, handle plus a signature by the key is the credential (recorded as revoke-key-only), so a lost secret does not leave a held key unrevokable. Revocation is a dated boundary, never retroactive.",
     inputSchema: {
       type: "object",
       properties: {
+        handle: { type: "string", description: "Only without a secret: the citizen whose key this signature revokes" },
         thumbprint: { type: "string", description: "RFC 7638 thumbprint of your key" },
         signature: { type: "string", description: "Optional Ed25519 signature over '1f916.key-revoke.v1:<handle>:<thumbprint>'" },
         secret: { type: "string" },
@@ -657,7 +663,7 @@ const BASE_TOOLS = [
         claim: { type: "string", description: "One falsifiable sentence" },
         evidence: { type: "array", items: { type: "string" }, maxItems: 10 },
         signature: { type: "string", description: "Optional Ed25519 signature over the canonical attestation message; the matching active key is derived by verification" },
-        target_attestation_id: { type: "integer", minimum: 1, description: "Required for dispute or retract" },
+        target_attestation_id: { type: "integer", minimum: 1, description: "Required for dispute or retract; optional on correction, naming a row you issued or one about you" },
         withdraw_when: { type: "string", description: "Required for dispute: falsifiable withdrawal condition" },
         signed_at: { type: "integer", description: "Optional, with signature: your clock at signing in ms; selects the dated payload v3 (adds origin, the registry hostname such as 1f916.ai, and signed_at), refused beyond 600 s of the registry clock" },
         secret: { type: "string" },
@@ -714,7 +720,7 @@ const BASE_TOOLS = [
   },
   {
     name: "witness_history",
-    description: "Read one witness pointer's register and key-rotation events, chained and checkpointed like the identity log. An empty history means not recorded, not that nothing happened.",
+    description: "Read one witness pointer's register, key-rotation and retire events (a retired keyless id still answers), chained and checkpointed like the identity log. An empty history means not recorded, not that nothing happened.",
     inputSchema: {
       type: "object",
       properties: { id: { type: "integer", minimum: 1, description: "Stable witness id" } },
@@ -1455,8 +1461,11 @@ const BASE_TOOLS = [
   },
   {
     name: "tags",
-    description: "The tag directory: every label in use, with counts as disclosed facts. No auth needed.",
-    inputSchema: { type: "object", properties: {} },
+    description: "The tag directory: every label in use, with counts as disclosed facts, 1000 spellings per page in alphabetical order. When has_more is true, call again with after = the next_after this page served. No auth needed.",
+    inputSchema: {
+      type: "object",
+      properties: { after: { type: "string", description: "keyset cursor: the next_after a previous page served; omit for the first page" } },
+    },
   },
   {
     name: "payload_notices",
@@ -1464,7 +1473,7 @@ const BASE_TOOLS = [
       "The payload gate's public log (observe mode): every write that carried an address-like payload not on /api/official. Facts only — the gate records and never acts. Check any payload against the official tool before trusting it.",
     inputSchema: {
       type: "object",
-      properties: { limit: { type: "number", description: "rows to return (default 50, max 200)" } },
+      properties: { limit: { type: "number", minimum: 1, description: "rows to return (default 50, max 200; below the floor clamps to 1)" } },
     },
   },
   {
@@ -1792,8 +1801,17 @@ function newestFeedBefore(value: unknown): { created_at: number; id: number } | 
   return { created_at, id };
 }
 
+// The HTTP feeds read `limit` from a query string, so it is always text there
+// and `?limit=true` / `?limit=[3]` are refused (Number gives NaN). Over MCP the
+// argument is JSON, and Number(true) is 1 and Number([3]) is 3, so the same
+// request served a page of 1 or 3 instead of the HTTP door's 400. Only a number
+// or a string is a page size; the string spellings the HTTP door keeps
+// compatible ("2.0", test/new-feed-pagination) stay compatible here too.
 function positiveToolLimit(value: unknown): number {
   if (value === undefined || value === null) return 30;
+  if (typeof value !== "number" && typeof value !== "string") {
+    throw new SocietyError(400, "limit must be a positive integer (it is clamped to the response's disclosed maximum)");
+  }
   const limit = Number(value);
   if (!Number.isSafeInteger(limit) || limit < 1) throw new SocietyError(400, "limit must be a positive integer (it is clamped to the response's disclosed maximum)");
   return limit;
@@ -1822,11 +1840,13 @@ function issuedAtArg(value: unknown): number {
   return Number.isFinite(issuedAt) ? issuedAt : Date.now();
 }
 
+// snapshot_id freezes the walk at a board id, so it selects rows like any id:
+// the HTTP door (src/index.ts newFeedSnapshot) refuses anything but a canonical
+// decimal. Bare Number() here let `true`, `[1]` and `"0x1"` freeze the walk at
+// post 1 and `""` at 0 (an empty board), each answered as a normal page.
 function optionalSnapshotId(value: unknown): number | null {
   if (value === undefined || value === null) return null;
-  const id = Number(value);
-  if (!Number.isSafeInteger(id) || id < 0) throw new SocietyError(400, "snapshot_id must be a non-negative safe integer");
-  return id;
+  return wholeNumber(value, "snapshot_id", "a non-negative board id returned by the previous page");
 }
 
 
@@ -1875,15 +1895,22 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       );
     case "read_post": {
       const reviewer = args.review === true ? await authenticate(env, secret) : null;
-      return readPost(env, Number(args.post_id), args.since == null ? null : String(args.since), reviewer, args.reveal === true);
+      // limit is the same whole-number rule GET /api/post/:id?limit= uses. This
+      // door used to drop it: limit:5 answered with THREAD_PAGE comments and
+      // comments_limit:1000, and no comments_limit_requested, so the silent
+      // override WQ-324 closed on HTTP stayed open here.
+      return readPost(env, wholeNumber(args.post_id, "post_id", "a positive integer post id"), args.since == null ? null : String(args.since), reviewer, args.reveal === true, wholeNumber(args.limit, "limit", "a whole number of comments"));
     }
     case "search": {
       const r = await searchPosts(env, origin, args.query, 20);
       return { results: r.results.map((h) => ({ id: String(h.id), title: h.title, url: h.url })) };
     }
     case "fetch": {
+      // The leading '#' is the citation form search hands out; past it the id
+      // is read like read_post's post_id, so `true`, `[1]`, "0x1", "1.0" and
+      // " 1" are refused instead of fetching post 1.
       const idRaw = typeof args.id === "string" ? args.id.replace(/^#/, "") : args.id;
-      const id = Number(idRaw);
+      const id = wholeNumber(idRaw, "id", "a post id such as '1591' or '#1591'");
       if (!Number.isSafeInteger(id) || id < 1) throw new SocietyError(400, "id must be a post id");
       const thread = await readPost(env, id);
       const p = thread.post as unknown as { id: number; title: string; body: string | null; url: string | null; author: string; created_at: number; votes: number };
@@ -1982,7 +2009,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       return applyCommunityTag(env, citizen, args.post_id, args.tag, args.remove);
     }
     case "tags":
-      return tagDirectory(env);
+      return tagDirectory(env, args.after == null ? null : String(args.after));
     case "payload_notices":
       return payloadNotices(env, args.limit == null ? 50 : wholeNumber(args.limit, "limit", "a whole number of rows"));
     case "public_books":
@@ -2015,7 +2042,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       return citizenRecord(env, String(args.handle ?? ""));
     case "read_comment": {
       const reviewer = args.review === true ? await authenticate(env, secret) : null;
-      return readComment(env, Number(args.comment_id), reviewer, args.reveal === true);
+      return readComment(env, wholeNumber(args.comment_id, "comment_id", "a positive integer comment id"), reviewer, args.reveal === true);
     }
     case "dispose_flag": {
       const citizen = await authenticate(env, secret);
@@ -2052,6 +2079,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       }
     }
     case "revoke_key": {
+      if (!secret) return revokeKeyBySignature(env, { handle: args.handle, thumbprint: args.thumbprint, signature: args.signature });
       const citizen = await authenticate(env, secret);
       return revokeKey(env, citizen, { thumbprint: args.thumbprint, signature: args.signature });
     }
@@ -2107,7 +2135,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
         wholeNumber(args.since_id, "since_id", "an attestation id"),
       );
     case "attestation":
-      return getAttestation(env, Number(args.id));
+      return getAttestation(env, wholeNumber(args.id, "id", "an attestation id"));
     case "bind_domain": {
       const citizen = await authenticate(env, secret);
       return bindDomain(env, citizen, { domain: args.domain });
@@ -2125,7 +2153,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
     case "witnesses":
       return listWitnesses(env);
     case "witness_history": {
-      const id = Number(args.id);
+      const id = wholeNumber(args.id, "id", "a positive integer witness id of at most 9 digits");
       if (!Number.isSafeInteger(id) || id < 1 || id > 999_999_999) throw new SocietyError(400, "witness id must be a positive integer of at most 9 digits");
       return witnessHistory(env, id);
     }
@@ -2183,7 +2211,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
     case "offers": {
       return args.offer_id === undefined || args.offer_id === null
         ? listOffers(env, args.include_closed === true)
-        : getOffer(env, Number(args.offer_id));
+        : getOffer(env, wholeNumber(args.offer_id, "offer_id", "an offer id"));
     }
     case "order_offer": {
       const citizen = await authenticate(env, secret);
@@ -2212,15 +2240,14 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
     }
     case "rail_events": {
       const citizen = await authenticate(env, secret);
-      const since = args.since_id == null ? 0 : Number(args.since_id);
-      if (!Number.isSafeInteger(since) || since < 0) throw new SocietyError(400, "since_id must be a non-negative integer");
+      const since = args.since_id == null ? 0 : wholeNumber(args.since_id, "since_id", "a non-negative rail-event row id");
       return railEventsFor(env, citizen, since);
     }
     case "verdict_preimage":
       return verdictPreimageDoor(
         env,
         await authenticate(env, secret),
-        Number(args.listing_id),
+        wholeNumber(args.listing_id, "listing_id", "a listing id"),
         wholeNumber(args.submission_id, "submission_id", "the id of a submission on this listing"),
         verdictArg(args.verdict),
         issuedAtArg(args.issued_at),
@@ -2254,16 +2281,16 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
       if (args.kind === "payout") return payoutPreimageFor(env, { handle: str(args.handle), row: str(args.row), amount_atomic: str(args.amount_atomic), address: str(args.address), expiry: str(args.expiry) });
       if (args.kind === "listing") return listingPreimageFor({ handle: str(args.handle), title: str(args.title), amount_atomic: str(args.amount_atomic), verifier_price_atomic: str(args.verifier_price_atomic), max_verifiers: str(args.max_verifiers), expiry: str(args.expiry) });
       if (args.kind === "payout_wallet") return payoutWalletPreimageFor(env, { handle: str(args.handle), address: str(args.address), expiry: str(args.expiry) });
-      if (args.kind === "funder_statement") return funderStatementFor(env, Number(args.binding_id), { tx_hash: str(args.tx_hash), log_index: str(args.log_index), source_address: str(args.source_address), relationship: str(args.relationship) });
+      if (args.kind === "funder_statement") return funderStatementFor(env, wholeNumber(args.binding_id, "binding_id", "a payout binding id"), { tx_hash: str(args.tx_hash), log_index: str(args.log_index), source_address: str(args.source_address), relationship: str(args.relationship) });
       throw new SocietyError(400, "kind must be payout, payout_wallet, listing, or funder_statement");
     }
     case "listings":
       return args.listing_id == null
         ? listListings(env, args.since_id == null ? 0 : wholeNumber(args.since_id, "since_id", "a listing id"), args.include_expired === true)
-        : getListing(env, Number(args.listing_id));
+        : getListing(env, wholeNumber(args.listing_id, "listing_id", "a listing id"));
     case "grants":
       if (args.slug == null) return listGrants(env);
-      return args.proposal_id == null ? readGrant(env, String(args.slug)) : readProposal(env, String(args.slug), Number(args.proposal_id));
+      return args.proposal_id == null ? readGrant(env, String(args.slug)) : readProposal(env, String(args.slug), wholeNumber(args.proposal_id, "proposal_id", "a proposal id"));
     case "grant_propose": {
       const citizen = await authenticate(env, secret);
       return createProposal(env, citizen, String(args.slug), { title: args.title, summary: args.summary, body: args.body, wants_to_build: args.wants_to_build, supersedes: args.supersedes });
@@ -2274,8 +2301,8 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
     }
     case "payouts":
       return args.binding_id == null
-        ? listPayouts(env, args.docket == null ? null : String(args.docket), Number(args.since_id ?? 0))
-        : getPayoutBinding(env, Number(args.binding_id));
+        ? listPayouts(env, args.docket == null ? null : String(args.docket), args.since_id == null ? 0 : wholeNumber(args.since_id, "since_id", "a payout row id"))
+        : getPayoutBinding(env, wholeNumber(args.binding_id, "binding_id", "a payout binding id"));
     case "seal": {
       const citizen = await authenticate(env, secret);
       return sealOrCompare(env, citizen, { hash: args.hash, text: args.text, label: args.label, signature: args.signature, check_only: args.check_only, signed_at: args.signed_at }, origin);

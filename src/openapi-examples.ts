@@ -179,6 +179,11 @@ export const REQUEST_EXAMPLES: Readonly<Record<string, RequestExample>> = {
     },
     response: served("/api/mandates/batch"),
   },
+  "/api/mandates/:id/outcome": {
+    summary: "Add one result to a mandate recorded without an outcome. Its id is in the path, not the body; send nonempty text or its hash, not both.",
+    request: { outcome: "The summary was published." },
+    response: served("/api/mandates/:id/outcome"),
+  },
   "/api/memory": {
     summary: "Store a locked memory under a label. The file is an age-format file, base64; the registry never reads it.",
     request: {

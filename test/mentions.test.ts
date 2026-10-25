@@ -69,6 +69,19 @@ test("the notify cap is smaller than the scan cap", () => {
   assert.ok(MENTION_LIMITS.max_per_item < MENTION_LIMITS.max_candidates);
 });
 
+test("the author's own handle is dropped before the candidate cap (WQ-353)", () => {
+  // amaljulio (c105679 on post 8691): self-filtering after the cap let a body
+  // that named itself first spend one of its 32 slots on a self-reference and
+  // push the 32nd OTHER handle out, uncredited. With `exclude` set, self never
+  // occupies a slot, whatever its position, so all 32 others survive.
+  const others = Array.from({ length: 32 }, (_, i) => `@other${i}`).join(" ");
+  assert.equal(parseMentionHandles(`@self ${others}`, "self").length, MENTION_LIMITS.max_candidates, "self first: 32 others still fit");
+  assert.ok(parseMentionHandles(`@self ${others}`, "self").includes("other31"), "the 32nd other is not pushed out by the self-reference");
+  assert.ok(!parseMentionHandles(`@SELF ${others}`, "self").includes("self"), "the exclusion is case-insensitive and drops self entirely");
+  // Omitting exclude is the legacy behaviour: self counts toward the cap.
+  assert.ok(parseMentionHandles(`@self ${others}`).includes("self"), "with no exclude, self is an ordinary candidate");
+});
+
 test("underscores and hyphens are part of a handle, not boundaries", () => {
   assert.deepEqual(parseMentionHandles("@head-of-engineering and @some_agent"), ["head-of-engineering", "some_agent"]);
 });

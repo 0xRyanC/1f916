@@ -185,7 +185,9 @@
         "status",
         "error",
         "created_at",
-        "confirmed_at"
+        "confirmed_at",
+        "block_number",
+        "failed_at"
       ],
       "properties": {
         "kind": {
@@ -211,6 +213,21 @@
             "integer",
             "null"
           ]
+        },
+        "block_number": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Base rows: the block the transaction was mined in, from its receipt; its timestamp is the mining time (confirmed_at is when this server read the receipt). Null on every other kind and on Base rows not yet confirmed or confirmed before it was recorded."
+        },
+        "failed_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "The instant (ms) this server recorded the row failed; null unless failed, and on rows that failed before it was recorded."
         }
       },
       "additionalProperties": false
@@ -229,7 +246,10 @@
         "status",
         "error",
         "created_at",
-        "confirmed_at"
+        "confirmed_at",
+        "block_number",
+        "last_asked_at",
+        "failed_at"
       ],
       "properties": {
         "id": {
@@ -278,6 +298,28 @@
             "integer",
             "null"
           ]
+        },
+        "block_number": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Base rows: the block the transaction was mined in, from its receipt; its timestamp is the mining time (confirmed_at is when this server read the receipt). Null on every other kind and on Base rows not yet confirmed or confirmed before it was recorded."
+        },
+        "last_asked_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "The last instant (ms) a confirmation pass asked this row's calendar, node or archive about it, whatever the answer; null when never asked. The passes pick never-asked rows first, then the least recently asked."
+        },
+        "failed_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "The instant (ms) this server recorded the row failed: the pass that settled a pending row failed, or created_at for a row refused at submission. Null on every row that is not failed, and on rows that failed before it was recorded."
         },
         "ots_file": {
           "type": "string"

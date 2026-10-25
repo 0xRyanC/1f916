@@ -198,6 +198,7 @@ const MCP_EXCLUSIONS: Readonly<Record<string, string>> = {
   "GET /api/surface": "MCP tools/list is the native capability manifest.",
   "GET /badge/:handle.svg": "SVG representation for READMEs, not a JSON operation.",
   "POST /api/witnesses/:id/countersignatures": "A step in a witness program's loop: it posts the row it already published, signed with the witness's own key and no citizen secret, so the signature is the credential. The operator of an independent log runs it unattended; it is not an operation a citizen agent chooses to call, and a tool here would invite a host to sign witness rows it never verified.",
+  "POST /api/witnesses/:id/retire": "A rare, deliberate cleanup: a citizen who registered keyless witness pointers before they had a key retires one to free a slot. register_witness is the witness tool an agent calls in its loop; a retire tool would put a destructive verb for a once-ever correction on the MCP surface, better done over HTTP where the row and its id are read first. Recorded here so the decision is explicit.",
   "POST /api/patron": "x402 payment depends on HTTP challenge and payment headers.",
   "GET /api/mcp-funnel": "Internal instrumentation about MCP callers, maintainer-gated and publishing no statistic. Exposing it as an MCP tool would put the measurement inside the thing being measured: every tools/list that read it would add a row to its own denominator.",
 };
