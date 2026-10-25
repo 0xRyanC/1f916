@@ -897,6 +897,19 @@ export const CONDITIONAL_304_ROUTES: ReadonlySet<string> = new Set([
   "/openapi.json",
 ]);
 
+const CONDITIONAL_IF_NONE_MATCH_PARAMETER = {
+  name: "If-None-Match",
+  in: "header",
+  required: false,
+  description: "An entity tag from a prior response for this representation. A live match returns 304 with no body; otherwise the route returns the current representation.",
+  schema: { type: "string" },
+};
+
+const CONDITIONAL_ETAG_RESPONSE_HEADER = {
+  description: "Entity tag for this representation. Send it as If-None-Match on a later read; a live match returns 304 with no body.",
+  schema: { type: "string" },
+};
+
 // The refused-write 400, declared on every write that can answer it, not on one
 // write at a time. Every write whose handler parses a body (or a header or an
 // argument) and can refuse it answers the SAME clocked JSON error body as every
@@ -2084,15 +2097,19 @@ export function openApi(origin: string, now = Date.now()) {
     for (const v of verbs) {
       // Query parameters are read on GET only; the router never reads the
       // query string on a POST (auditor, 2026-08-23).
-      const verbParams = v === "GET" ? [...params, ...(QUERY_PARAMS[r.path] ?? []).map((q) => ({
-        name: q,
-        in: "query",
-        required: q === "q",
-        schema: { type: "string" },
-        // A description only where the behavior is not visible in the schema:
-        // the source of truth and its reason live in src/query-params.ts.
-        ...(QUERY_PARAM_DESCRIPTIONS[q] ? { description: QUERY_PARAM_DESCRIPTIONS[q] } : {}),
-      }))] : params;
+      const verbParams = v === "GET" ? [
+        ...params,
+        ...(QUERY_PARAMS[r.path] ?? []).map((q) => ({
+          name: q,
+          in: "query",
+          required: q === "q",
+          schema: { type: "string" },
+          // A description only where the behavior is not visible in the schema:
+          // the source of truth and its reason live in src/query-params.ts.
+          ...(QUERY_PARAM_DESCRIPTIONS[q] ? { description: QUERY_PARAM_DESCRIPTIONS[q] } : {}),
+        })),
+        ...(CONDITIONAL_304_ROUTES.has(r.path) ? [CONDITIONAL_IF_NONE_MATCH_PARAMETER] : []),
+      ] : params;
       // The served media type, declared once in SURFACE and asserted against
       // the live router in test/connect.test.ts. Only GET carries a body worth
       // typing; a POST that redirects or 201s is left as the JSON default.
@@ -2668,6 +2685,7 @@ export function openApi(origin: string, now = Date.now()) {
               "304": {
                 description:
                   "If-None-Match carried the ETag this endpoint serves and the representation has not moved. No body: the client keeps the page it already holds.",
+                headers: { ETag: CONDITIONAL_ETAG_RESPONSE_HEADER },
               },
             }
           : {};
@@ -2844,7 +2862,13 @@ export function openApi(origin: string, now = Date.now()) {
         ...(submission429 as Record<string, unknown>),
         ...(payout429 as Record<string, unknown>),
         ...(mcpTransport as Record<string, unknown>),
-        [success]: { description: responseDesc, content: { [media]: successExample ? { examples: { served: successExample } } : {} } },
+        [success]: {
+          description: responseDesc,
+          ...(v === "GET" && CONDITIONAL_304_ROUTES.has(r.path)
+            ? { headers: { ETag: CONDITIONAL_ETAG_RESPONSE_HEADER } }
+            : {}),
+          content: { [media]: successExample ? { examples: { served: successExample } } : {} },
+        },
         // Last so its 200 (text/html error page) overrides the JSON success
         // default and its 303 redirect success is the only success declared.
         ...(oauthRedirect as Record<string, unknown>),

@@ -74,6 +74,29 @@ test("every operation declares 304 exactly when it is a conditional read", async
   assert.ok(checked >= 100, `only ${checked} operations in the document; the path scan has drifted`);
 });
 
+test("conditional GET declarations expose the ETag round trip", async () => {
+  const { env } = sqliteTestEnv(schema);
+  const doc = (await (await worker.fetch(new Request(`${ORIGIN}/openapi.json`), env)).json()) as {
+    paths: Record<string, Record<string, {
+      parameters?: { name?: string; in?: string; required?: boolean; schema?: { type?: string } }[];
+      responses: Record<string, { headers?: Record<string, { schema?: { type?: string } }> }>;
+    }>>;
+  };
+  for (const route of CONDITIONAL_304_ROUTES) {
+    const opPath = route.replace(/:([A-Za-z_]+)/g, "{$1}");
+    const op = doc.paths[opPath].get;
+    const validator = op.parameters?.find((p) => p.in === "header" && p.name?.toLowerCase() === "if-none-match");
+    assert.ok(validator, `GET ${route} accepts If-None-Match`);
+    assert.equal(validator.required, false, `GET ${route} does not require a validator`);
+    assert.equal(validator.schema?.type, "string", `GET ${route} accepts an entity tag`);
+    for (const status of ["200", "304"]) {
+      const etag = op.responses[status]?.headers?.ETag;
+      assert.ok(etag, `GET ${route} ${status} declares ETag`);
+      assert.equal(etag.schema?.type, "string", `GET ${route} ${status} returns an entity tag`);
+    }
+  }
+});
+
 test("the declared 304 carries no body, unlike the JSON 200", async () => {
   const { env } = sqliteTestEnv(schema);
   const doc = (await (await worker.fetch(new Request(`${ORIGIN}/openapi.json`), env)).json()) as {
