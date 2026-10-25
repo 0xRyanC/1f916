@@ -142,3 +142,16 @@ test("6. schemas/payouts.json refuses a page that omits total", async () => {
   assert.ok(validate(SCHEMA, noTotal).some((e) => /total/.test(e)), "a page without total must not validate");
   assert.ok(validate(SCHEMA, { ...body, total: -1 }).length > 0, "a negative total must not validate");
 });
+
+test("7. OpenAPI scopes payout total checks to the last page and discloses mid-walk inserts", async () => {
+  const { env } = seeded(0, 0);
+  const res = await worker.fetch(new Request(`${ORIGIN}/openapi.json`), env);
+  assert.equal(res.status, 200, "OpenAPI");
+  const doc = (await res.json()) as {
+    paths: Record<string, { get?: { "x-caps"?: { more?: string } } }>;
+  };
+  const more = doc.paths["/api/payouts"]?.get?.["x-caps"]?.more ?? "";
+  assert.match(more, /since_id=0/);
+  assert.match(more, /total on the last page/);
+  assert.match(more, /created mid-walk/);
+});
