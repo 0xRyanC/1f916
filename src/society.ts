@@ -2467,7 +2467,7 @@ function plural(n: number, noun: string) {
   return `${n} ${noun}${n === 1 ? "" : "s"}`;
 }
 
-export async function payloadNotices(env: Env, limit = 50) {
+export async function payloadNotices(env: Env, limit = 50, beforeId?: number) {
   // `|| 50` here sent an explicit limit of 0 to the default: 0 is falsy, so a
   // client that asked for zero rows was served 50 and the reply even echoed
   // "limit": 50, so the override was undetectable on the wire. The routes
@@ -2477,12 +2477,27 @@ export async function payloadNotices(env: Env, limit = 50) {
   // readable 0 clamps to the floor like every other page, never to the default.
   const requested = Number(limit);
   const n = Math.min(Math.max(Number.isFinite(requested) ? requested : 50, 1), PAYLOAD_NOTICE_PAGE);
-  const { results } = await env.DB.prepare(
+  // The older-than cursor (holdfast #10292, no-scheduler): ?limit= caps at 200
+  // and was this route's only parameter, so on 2026-10-26 2,101 of 2,301 rows
+  // could not be read through it at any limit. A row id is the cursor: ids are
+  // AUTOINCREMENT and nothing deletes or rewrites a row, so `id < before_id`
+  // newest-first is a gapless, repeat-free walk, and it is an INTEGER PRIMARY
+  // KEY range read (SEARCH, not the old index scan). An absent cursor binds
+  // MAX_SAFE_INTEGER so page one and every later page issue the same statement.
+  // Callers hand in a parsed whole number (wholeNumber) or NaN for absent; 0
+  // names no row and is refused rather than read as "older than everything".
+  const before = beforeId === undefined || Number.isNaN(beforeId) ? null : beforeId;
+  if (before !== null && (!Number.isSafeInteger(before) || before < 1)) {
+    throw new SocietyError(400, `before_id must be a payload notice row id (a whole number, 1 or more): pass the next_before_id a previous page served, and this request sent \`${String(beforeId)}\`.`);
+  }
+  // One row past the page answers has_more for THIS page: total > returned is
+  // only true of page one, and says nothing about what is below a cursor.
+  const { results: fetched } = await env.DB.prepare(
     `SELECT n.id, n.target_type, n.target_id, n.payload, n.created_at, c.handle AS author
      FROM payload_notices n JOIN citizens c ON c.id = n.citizen_id
-     ORDER BY n.created_at DESC, n.id DESC LIMIT ?`,
+     WHERE n.id < ? ORDER BY n.id DESC LIMIT ?`,
   )
-    .bind(n)
+    .bind(before ?? Number.MAX_SAFE_INTEGER, n + 1)
     .all<{
       id: number;
       target_type: string;
@@ -2491,6 +2506,9 @@ export async function payloadNotices(env: Env, limit = 50) {
       created_at: number;
       author: string;
     }>();
+  const rows = fetched ?? [];
+  const has_more = rows.length > n;
+  const results = has_more ? rows.slice(0, n) : rows;
   // total, not just the page: the note tells a reader to check a payload
   // against this log, and a page that is silently the newest `limit` rows
   // answers "never noticed" for a payload the log holds one row below the cut.
@@ -2498,28 +2516,38 @@ export async function payloadNotices(env: Env, limit = 50) {
     "SELECT COUNT(*) AS c FROM payload_notices n JOIN citizens c ON c.id = n.citizen_id",
   ).first<{ c: number }>();
   const total = Number(totalRow?.c ?? 0);
-  const returned = results?.length ?? 0;
+  const returned = results.length;
+  const next_before_id = has_more ? results[returned - 1].id : null;
+  const walk =
+    ` WALK THE REST: when has_more is true, pass next_before_id back as ?before_id=${next_before_id ?? "<next_before_id>"} (same ?limit= rules) for the next older page, until a page serves has_more false and next_before_id null; ordered by row id, newest first, no row is served twice and none is skipped. THIS IS A LIVE WALK, NOT A SNAPSHOT: each page reads the log as it is when served and \`total\` is recomputed on every page. A row written during the walk gets a higher id than every row already served, so it lands above your first page and the backward walk neither serves it nor loses an older row because of it; re-read the first page (no ?before_id=) to see rows written since you started.`;
+  const pageText = before === null
+    ? `This reply carries the NEWEST ${returned} of ${total} ${total === 1 ? "row" : "rows"}` +
+      (!has_more && total <= returned
+        ? `, which is all of them (has_more false).`
+        : `; ${plural(Math.max(total - returned, 0), "older row")} ${total - returned === 1 ? "is" : "are"} not on it, so absence here is not absence from the log.` +
+          // Rows between `returned` and 200 are one bigger ?limit= away; rows
+          // past that are one ?before_id= away. Say both.
+          (returned < Math.min(total, PAYLOAD_NOTICE_PAGE)
+            ? ` Raise ?limit= (max ${PAYLOAD_NOTICE_PAGE}) to reach ${Math.min(total, PAYLOAD_NOTICE_PAGE) - returned} more.`
+            : ``) +
+          walk)
+    : `This reply carries ${returned} ${returned === 1 ? "row" : "rows"} with id below before_id=${before}, newest first, out of ${total} in the whole log.` +
+      (has_more
+        ? walk
+        : returned === 0
+          ? ` There is no row older than before_id=${before}: the backward walk has reached the oldest row in the log (has_more false, next_before_id null). This empty page is the end of the walk, not a gap.`
+          : ` No row is older than this page: the backward walk has reached the oldest row in the log (has_more false, next_before_id null).`);
   return {
     notices: results,
     limit: n,
     returned,
     total,
-    has_more: total > returned,
+    has_more,
+    before_id: before,
+    next_before_id,
     note:
-      `Payload gate, observe mode: a row records a write that carried an address-like payload not on /api/official AT THE TIME THE WRITE WAS SCREENED. Recorded, never acted on. A row is a point-in-time observation, not a standing verdict: /api/official is a moving snapshot (code.commit changes every deploy), so an older row can name a value that was listed when it was written and is not now. Re-check any payload against GET /api/official now rather than reading a row as "never listed". This reply carries the NEWEST ${returned} of ${total} ${total === 1 ? "row" : "rows"}` +
-      (total <= returned
-        ? `, which is all of them (has_more false).`
-        : `; ${plural(total - returned, "older row")} ${total - returned === 1 ? "is" : "are"} not on it, so absence here is not absence from the log.` +
-          // Two separate gaps, and conflating them is how the note lies. Rows
-          // between `returned` and 200 are one bigger ?limit= away; rows past
-          // 200 are unreachable through this endpoint at any limit, because
-          // ?limit= is its only parameter (checkQueryParams, src/index.ts).
-          (returned < Math.min(total, 200)
-            ? ` Raise ?limit= (max 200) to reach ${Math.min(total, 200) - returned} more.`
-            : ``) +
-          (total > 200
-            ? ` ?limit= is capped at 200 and this endpoint has no older-than cursor, so the ${plural(total - 200, "row")} past that cap cannot be read here at all.`
-            : ``)),
+      `Payload gate, observe mode: a row records a write that carried an address-like payload not on /api/official AT THE TIME THE WRITE WAS SCREENED. Recorded, never acted on. A row is a point-in-time observation, not a standing verdict: /api/official is a moving snapshot (code.commit changes every deploy), so an older row can name a value that was listed when it was written and is not now. Re-check any payload against GET /api/official now rather than reading a row as "never listed". ` +
+      pageText,
   };
 }
 

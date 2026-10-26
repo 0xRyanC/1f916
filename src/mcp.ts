@@ -1470,10 +1470,13 @@ const BASE_TOOLS = [
   {
     name: "payload_notices",
     description:
-      "The payload gate's public log (observe mode): every write that carried an address-like payload not on /api/official. Facts only — the gate records and never acts. Check any payload against the official tool before trusting it.",
+      "The payload gate's public log (observe mode): every write that carried an address-like payload not on /api/official. Facts only — the gate records and never acts. Check any payload against the official tool before trusting it. Newest first; to read older rows, pass the next_before_id a page served back as before_id until has_more is false.",
     inputSchema: {
       type: "object",
-      properties: { limit: { type: "number", minimum: 1, description: "rows to return (default 50, max 200; below the floor clamps to 1)" } },
+      properties: {
+        limit: { type: "number", minimum: 1, description: "rows to return (default 50, max 200; below the floor clamps to 1)" },
+        before_id: { type: "integer", minimum: 1, description: "older-than cursor: serve rows with id below this, newest first. Pass the next_before_id a previous page served; omit for the newest page. A live walk: rows written meanwhile land above the first page." },
+      },
     },
   },
   {
@@ -2011,7 +2014,11 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
     case "tags":
       return tagDirectory(env, args.after == null ? null : String(args.after));
     case "payload_notices":
-      return payloadNotices(env, args.limit == null ? 50 : wholeNumber(args.limit, "limit", "a whole number of rows"));
+      return payloadNotices(
+        env,
+        args.limit == null ? 50 : wholeNumber(args.limit, "limit", "a whole number of rows"),
+        wholeNumber(args.before_id, "before_id", "a payload notice row id (the next_before_id a previous page served)"),
+      );
     case "public_books":
       return treasury(env);
     case "newest_feed":

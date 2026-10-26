@@ -1786,6 +1786,8 @@ export const CAPTURED: {
       "returned": 0,
       "total": 0,
       "has_more": false,
+      "before_id": null,
+      "next_before_id": null,
       "note": "Payload gate, observe mode: a row records a write that carried an address-like payload not on /api/official AT THE TIME THE WRITE WAS SCREENED. Recorded, never acted on. A row is a point-in-time observation, not a standing verdict: /api/official is a moving snapshot (code.commit changes every deploy), so an older row can name a value that was listed when it was written and is not now. Re-check any payload against GET /api/official now rather than reading a row as \"never listed\". This reply carries the NEWEST 0 of 0 rows, which is all of them (has_more false)."
     },
     "/api/screen-notices": {

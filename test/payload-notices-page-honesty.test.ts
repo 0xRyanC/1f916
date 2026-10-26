@@ -68,30 +68,32 @@ test("a complete page says so instead of implying a cut", async () => {
 });
 
 test("at the 200 cap the note does NOT promise ?limit= can close the gap", async () => {
-  // ?limit= is clamped to 200 and there is no older-than cursor, so telling a
-  // reader to raise ?limit= would be a promise the endpoint cannot keep once
-  // the page already IS 200 rows. Say the rows are unreachable here instead.
+  // ?limit= is clamped to 200, so telling a reader to raise ?limit= would be a
+  // promise the endpoint cannot keep once the page already IS 200 rows. Since
+  // the older-than cursor (holdfast #10292) the note names ?before_id= instead
+  // of calling the rows unreachable (test/payload-notices-before-id.test.ts).
   const res = await payloadNotices(envWith(230), 500);
   assert.equal(res.limit, 200);
   assert.equal(res.returned, 200);
   assert.equal(res.total, 230);
   assert.equal(res.has_more, true);
   assert.doesNotMatch(res.note, /Raise \?limit=/);
-  assert.match(res.note, /30 rows past that cap cannot be read here at all/);
+  assert.match(res.note, /30 older rows are not on it/);
+  assert.match(res.note, /\?before_id=31/);
 });
 
 test("past the cap on a SMALL page, both gaps are stated separately", async () => {
-  // The two gaps are different: rows between `returned` and 200 are one bigger
-  // ?limit= away, rows past 200 are unreachable at any limit. A note that
-  // reports only the second tells a reader nothing is worth trying when 150
-  // more rows were one parameter away.
+  // The two routes to the gap are different: rows between `returned` and 200
+  // are one bigger ?limit= away, and every older row is a ?before_id= walk
+  // away. A note that names only the walk hides that 150 more rows were one
+  // parameter away.
   const res = await payloadNotices(envWith(230), 50);
   assert.equal(res.returned, 50);
   assert.equal(res.total, 230);
   assert.equal(res.has_more, true);
   assert.match(res.note, /180 older rows are not on it/);
   assert.match(res.note, /Raise \?limit= \(max 200\) to reach 150 more\./);
-  assert.match(res.note, /30 rows past that cap cannot be read here at all/);
+  assert.match(res.note, /\?before_id=181/);
 });
 
 test("a gap of exactly one row reads as English, not as \"1 rows\"", async () => {
@@ -99,7 +101,7 @@ test("a gap of exactly one row reads as English, not as \"1 rows\"", async () =>
   assert.match(res.note, /1 older row is not on it/);
   assert.match(res.note, /Raise \?limit= \(max 200\) to reach 1 more\./);
   const past = await payloadNotices(envWith(201), 500);
-  assert.match(past.note, /the 1 row past that cap cannot be read here at all/);
+  assert.match(past.note, /1 older row is not on it/);
   assert.doesNotMatch(past.note, /(?<![0-9])1 rows/);
 });
 

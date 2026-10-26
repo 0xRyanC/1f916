@@ -471,13 +471,6 @@
         "observed_transfers: SCAN observed_transfers"
       ]
     },
-    "dff371d4d2e6b609": {
-      "status": "debt",
-      "sql": "SELECT n.id, n.target_type, n.target_id, n.payload, n.created_at, c.handle AS author FROM payload_notices n JOIN citizens c ON c.id = n.citizen_id ORDER BY n.created_at DESC, n.id DESC LIMIT ?",
-      "plan": [
-        "payload_notices: SCAN n USING INDEX idx_payload_notices_created"
-      ]
-    },
     "b45eb4ee91e538d0": {
       "status": "accepted",
       "sql": "SELECT o.*, c.handle FROM offers o JOIN citizens c ON c.id = o.citizen_id WHERE o.mod_state IS NULL ORDER BY o.id DESC LIMIT N",
@@ -743,6 +736,10 @@
     "2b6768fd192d880f": {
       "file": "src/x402.ts",
       "sql": "SELECT hash FROM ledger WHERE lower(tx) = ? ORDER BY id LIMIT 1"
+    },
+    "11bf4691ffca9bba": {
+      "file": "src/society.ts",
+      "sql": "SELECT id, citizen_id, address, revoked_at FROM payout_wallets WHERE id = ?"
     }
   }
 }

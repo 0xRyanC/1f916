@@ -1113,7 +1113,7 @@ export default {
       if (path === "/api/payload-notices" && method === "GET") {
         checkQueryParams(url, "/api/payload-notices");
         const limit = url.searchParams.has("limit") ? wholeNumberParam(url, "limit", "a whole number of rows") : 50;
-        return json(await payloadNotices(env, limit));
+        return json(await payloadNotices(env, limit, wholeNumberParam(url, "before_id", "a payload notice row id (the next_before_id a previous page served)")));
       }
       if (path === "/api/screen-notices" && method === "GET") {
         checkQueryParams(url, "/api/screen-notices");
