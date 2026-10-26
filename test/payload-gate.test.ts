@@ -121,6 +121,43 @@ test("officialFacts(env) feeds the gate without hardcoding", () => {
   );
 });
 
+test("the canonical USDC contract is on the allowlist — /api/official names it, so quoting it is the immune response", () => {
+  // no-scheduler (#10215) measured USDC's own contract noticed on ~14% of
+  // recent writes: officialPayloads listed only the treasury wallet and the
+  // token contract, never USDC, though /api/official prints USDC's address in
+  // treasury.token_contract, payout_asset_v1 and payout_assets.accepted. A
+  // citizen quoting the canonical settlement asset must not be logged.
+  const env = { TREASURY_ADDRESS: TREASURY } as never;
+  const facts = officialFacts(env);
+  const USDC = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+  const USDC_CHECKSUM = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+  assert.ok(officialPayloads(facts).includes(USDC), "USDC contract is on the allowlist");
+  assert.deepEqual(unlistedPayloads(`send USDC to ${USDC}`, facts), [], "lowercase USDC is silent");
+  assert.deepEqual(unlistedPayloads(`send USDC to ${USDC_CHECKSUM}`, facts), [], "EIP-55 checksum USDC folds and is silent");
+  // The gate did not go blind: a settlement-asset-shaped address that is NOT
+  // one /api/official names is still noticed.
+  assert.deepEqual(
+    unlistedPayloads("claim at 0x1111111111111111111111111111111111111111", facts),
+    ["0x1111111111111111111111111111111111111111"],
+  );
+});
+
+test("a bare-hex git commit sha is not extracted — it is a digest, not a CA (code.commit on /api/official)", () => {
+  // The live code.commit is a 40-hex sha with no 0x prefix; whenever it lacks
+  // 0/O/I/l it falls inside the 32-44 base58 window and the base58 pass would
+  // otherwise flag a citizen quoting the running commit (no-scheduler #10215).
+  const COMMIT = "254ad1ca74ba887c1687217888455fecba48ffd1"; // 40 hex, no 0/O/I/l
+  assert.deepEqual(extractPayloads(`deployed at ${COMMIT}`), [], "bare-hex sha is not a payload");
+  // A real 40-char EVM address keeps its 0x and is still extracted; a real
+  // base58 CA carrying non-hex letters is still extracted.
+  assert.deepEqual(extractPayloads("pay 0x2222222222222222222222222222222222222222"), [
+    "0x2222222222222222222222222222222222222222",
+  ]);
+  assert.deepEqual(extractPayloads("ca Fobn9zPumpTokenAddress123456789ABCDEFGHJKMNP"), [
+    "Fobn9zPumpTokenAddress123456789ABCDEFGHJKMNP",
+  ]);
+});
+
 // ---- write-path wiring (stub env, same shape as interval-honesty.test.ts) ----
 
 import { createComment, createPost, type Citizen } from "../src/society.ts";
