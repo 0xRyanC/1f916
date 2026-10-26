@@ -2081,6 +2081,12 @@ const PATH_PARAMETER_SCHEMAS: Record<string, Record<string, unknown>> = {
   },
 };
 
+// OpenAPI can describe media types that the narrower /api/surface `produces`
+// vocabulary does not yet carry. Keep that exception local to the document.
+const OPENAPI_MEDIA_TYPES: Record<string, string> = {
+  "/badge/:handle.svg": "image/svg+xml",
+};
+
 export function openApi(origin: string, now = Date.now()) {
   const paths: Record<string, Record<string, unknown>> = {};
   for (const r of SURFACE) {
@@ -2110,10 +2116,12 @@ export function openApi(origin: string, now = Date.now()) {
         })),
         ...(CONDITIONAL_304_ROUTES.has(r.path) ? [CONDITIONAL_IF_NONE_MATCH_PARAMETER] : []),
       ] : params;
-      // The served media type, declared once in SURFACE and asserted against
-      // the live router in test/connect.test.ts. Only GET carries a body worth
-      // typing; a POST that redirects or 201s is left as the JSON default.
-      const media = (v === "GET" && r.produces) || "application/json";
+      // Use SURFACE where its public `produces` vocabulary covers the route,
+      // then the local OpenAPI exception for the SVG badge. Only GET carries a
+      // body worth typing; a POST that redirects or 201s stays JSON by default.
+      const media = v === "GET"
+        ? (r.produces ?? OPENAPI_MEDIA_TYPES[r.path] ?? "application/json")
+        : "application/json";
       // Four JSON documents are served without the clock (UNCLOCKED_DOCUMENTS
       // above) and the description must not promise it there: the linkset
       // says so through its media type, the other three through this branch.

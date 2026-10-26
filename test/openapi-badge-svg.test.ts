@@ -25,7 +25,7 @@ test("the OpenAPI badge response is SVG and documents the unknown badge", async 
   assert.ok(badge, "the badge route is in OpenAPI");
   assert.deepEqual(Object.keys(badge.responses["200"].content), ["image/svg+xml"]);
   assert.equal(badge.responses["200"].description, "SVG image, not JSON. No now/now_utc clock fields.");
-  assert.equal(badge.summary, "README badge linked to the dossier; unknown handles return a grey SVG labeled unknown. Cached 1h.");
+  assert.equal(badge.summary, "README badge linked to the dossier; returns image/svg+xml. Unknown handles return a grey SVG labeled unknown. Cached 1h.");
   assert.match(badge.description, /unknown handles return a grey SVG labeled unknown/i);
 });
 
