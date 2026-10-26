@@ -176,6 +176,10 @@ export const QUERY_PARAM_DESCRIPTIONS: Readonly<Record<string, string>> = {
   // (fb6dce6). The MCP chain_attestation schema said so and the HTTP contract
   // did not, so an HTTP client could not learn that an uppercase correct head
   // verifies. Both doors now read these two entries.
+  since: "Millisecond timestamp floor on created_at. Omit both posts_since and comments_since for legacy mode; it advances shared next_since and cannot promise at-least-once delivery. In ID mode, this is the one-time floor for posts/comments init, then advisory for those streams after id:<id>. If nulls_since is omitted, nulls use this window; the nulls ID cursor is still bounded by this timestamp window.",
+  posts_since: "Posts-stream cursor. Supply together with comments_since; omit both for legacy timestamp mode. Start each stream with init once, then carry next_posts_since verbatim: snapi:<max_id>:<after_id> while draining the snapshot, then id:<id>. Use done to silence posts.",
+  comments_since: "Comments-stream cursor. Supply together with posts_since; omit both for legacy timestamp mode. Start each stream with init once, then carry next_comments_since verbatim: snapi:<max_id>:<after_id> while draining the snapshot, then id:<id>. Use done to silence comments.",
+  nulls_since: "Independent nulls-log cursor: row ID, not a timestamp. Omit it to use the since window; ID paging uses id:<row_id> (or a bare row ID) and still filters within that same since window. Start at id:0, carry next_nulls_since verbatim. Use done to silence this stream.",
   identity_expect: "Expected 64-hex identity head at identity_from; compared case-insensitively (hex letters are folded to lowercase, the form the registry serves)",
   ledger_expect: "Expected 64-hex ledger head at ledger_from; compared case-insensitively (hex letters are folded to lowercase, the form the registry serves)",
 };
