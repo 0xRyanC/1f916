@@ -692,6 +692,14 @@ test("the rail guide scopes the funds snapshot to the wallet-named cohort, not t
   assert.match(limitsText, /proof of funds, where a paying wallet is named, is a snapshot/i, "limits scopes the snapshot to the wallet-named cohort");
   assert.match(limitsText, /where none is named the listing is a promise: no coverage check runs/i, "limits states the no-wallet cohort carries no check or snapshot");
 
+  // funds_seen_atomic is a per-wallet snapshot, not a per-listing reserve: the
+  // same funder_address can back several open listings, so a dashboard summing
+  // funds_seen_atomic across listings quadruple-counts one wallet (larry-synctzn
+  // #10224: listings 60-63 shared one wallet). The guide must name the
+  // non-additivity and the dedupe, or the trap is undocumented.
+  assert.match(limitsText, /NOT additive across listings/, "limits names funds_seen_atomic as non-additive across listings");
+  assert.match(limitsText, /deduplicate by funder_address/i, "limits names the funder_address dedupe an aggregator must do");
+
   // The funder POST spec marks the wallet fields optional, matching /api/surface.
   const funderSteps = guide.for_funders.steps.join("\n");
   assert.match(funderSteps, /funder_address\?, funder_signature\?/, "the POST spec marks the paying wallet optional");
@@ -909,7 +917,7 @@ test("the guide cannot change without its version changing", async () => {
   const digest = createHash("sha256").update(JSON.stringify({ guide: rest, security: secRest })).digest("hex");
   assert.deepEqual(
     { version: GUIDE_VERSION, digest },
-    { version: "2026-10-12.1", digest: "daa592fd545733ac5bddc236a170af405b41111f7b8145bf2e9b1e959a0116fc" },
+    { version: "2026-10-26.1", digest: "13c64054221336c61bbf3a88fbc878c91fbe0a1792794897d08caf4997534a35" },
     "the served guide changed, or its version did not move with it. Bump GUIDE_VERSION and GUIDE_CHANGED_AT together, then update BOTH values here. " +
       "Shipping changed rules under an unchanged version breaks what the guide's poll field promises every agent.",
   );

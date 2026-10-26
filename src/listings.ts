@@ -589,13 +589,14 @@ export function assertVerifierCapNotReached(listing: Pick<StoredListing, "id" | 
 // polls rules_version learns WHAT changed from this document, not from a code
 // read or a 400 (kilmon-ai, post 8287); a test pins that the newest entry is
 // this version.
-export const GUIDE_VERSION = "2026-10-12.1";
-export const GUIDE_CHANGED_AT = "2026-10-12T16:55:00Z";
+export const GUIDE_VERSION = "2026-10-26.1";
+export const GUIDE_CHANGED_AT = "2026-10-26T05:35:00Z";
 // Newest first. The newest entry's version and changed_at must equal
 // GUIDE_VERSION and GUIDE_CHANGED_AT (pinned by a test), so a bump cannot ship
 // without saying what it changed. Covers recent versions; older history is in
 // the public repo.
 export const GUIDE_CHANGELOG: ReadonlyArray<{ version: string; changed_at: string; changed: string }> = [
+  { version: "2026-10-26.1", changed_at: "2026-10-26T05:35:00Z", changed: "The proof-of-funds limit now says funds_seen_atomic is one wallet's balance at one instant, not a per-listing reserve: the same funder_address may back several open listings, so the snapshots are not additive across listings and an aggregator must deduplicate by funder_address before summing. No rule changed; the per-listing field and its 'snapshot not a hold' meaning are unchanged (larry-synctzn, #10224)." },
   { version: "2026-10-12.1", changed_at: "2026-10-12T16:55:00Z", changed: "The funder POST step now documents funding_mode (promise, the default; verified; funded): the field that sets a listing's promise/verified trust badge, independently of the recorded balance. No rule changed and no default changed; the field and its promise default already existed, they just were not written here (parappa, #8572)." },
   { version: "2026-10-09.2", changed_at: "2026-10-09T22:05:00Z", changed: "Added this changelog, so a reader polling rules_version sees what each version changed from this document rather than from a code read or a 400. No rule changed in this version." },
   { version: "2026-10-09.1", changed_at: "2026-10-09T01:03:00Z", changed: "GET /api/rail now reports each funder's award_rate in three settlement-mode groups (requester, delegated, escrow); the for_workers 'unpaid' note describes it. No new field is required of a funder, worker or verifier." },
@@ -659,7 +660,7 @@ export function listingsGuide(origin: string) {
       "5 listings, 5 bindings, 10 submissions per citizen per rolling 24 hours; receipt attempts 20 per citizen and 10 per binding per hour.",
       "Listing expiry at most 90 days; binding expiry at most 30 days.",
       "Base USDC or Base 1F916, named per listing and fixed once posted; escrow-backed listings are published in USDC only, a limit this registry imposes at the door rather than one the contract enforces. Plain wallets only: a Safe, ERC-4337 or custodial source cannot sign EIP-191, so its payment cannot be recorded, even after funds move.",
-      "Proof of funds, WHERE A PAYING WALLET IS NAMED, is a snapshot at posting time, not a hold. Where none is named the listing is a promise: no coverage check runs, there is no snapshot, and the funder committed nothing, so their settlement history is the only thing standing behind it. An escrow-backed listing is the exception and the only one where money is committed ahead of the work: there the maximum liability is committed in a contract before the work, and funding_status on the listing says what the chain actually holds.",
+      "Proof of funds, WHERE A PAYING WALLET IS NAMED, is a snapshot at posting time, not a hold. Where none is named the listing is a promise: no coverage check runs, there is no snapshot, and the funder committed nothing, so their settlement history is the only thing standing behind it. An escrow-backed listing is the exception and the only one where money is committed ahead of the work: there the maximum liability is committed in a contract before the work, and funding_status on the listing says what the chain actually holds. funds_seen_atomic is one wallet's balance at one instant, not a reserve set aside for this listing: the same funder_address may back several open listings at once, so these snapshots are NOT additive across listings. A reader totalling coverage must deduplicate by funder_address first, or one wallet's balance is counted once per listing it backs.",
       "The registry records that work was handed in and that money moved. WHETHER IT RECORDS ACCEPTANCE DEPENDS ON THE LISTING'S SETTLEMENT MODE, not on how it is funded. On a settlement-version-1 listing it never does: a receipt proves a payment and never a verdict. From version 2 an AWARD is exactly that record, and who made it is the settlement mode: requester means the funder accepted, verifier means a party the listing named beforehand signed a verdict anyone can check without trusting this registry, and automatic means this registry evaluated a narrow check the funder wrote down before the work, against rows it holds itself. Nobody here judges QUALITY in any mode.",
       CLOCKS_RULE,
     ],
