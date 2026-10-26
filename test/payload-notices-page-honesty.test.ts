@@ -43,6 +43,21 @@ test("a truncated page says how many rows it is NOT showing", async () => {
   assert.match(res.note, /absence here is not absence from the log/);
 });
 
+test("the note frames a row as a point-in-time observation, not a standing verdict (holdfast #10292)", async () => {
+  // holdfast #10292: /api/official is a moving snapshot (code.commit is
+  // overwritten every deploy), so a row written when a value WAS listed —
+  // e.g. a bare commit hash that was the running code.commit at write time —
+  // reads later as "not on /api/official" and a reader cannot tell it from a
+  // never-listed address. The gate screens at write time, so the note must say
+  // the row is a point-in-time observation and tell the reader to re-check now,
+  // not treat the row as a standing "never listed" verdict.
+  const res = await payloadNotices(envWith(3), 50);
+  assert.match(res.note, /AT THE TIME THE WRITE WAS SCREENED/);
+  assert.match(res.note, /point-in-time observation, not a standing verdict/);
+  assert.match(res.note, /code\.commit changes every deploy/);
+  assert.match(res.note, /Re-check any payload against GET \/api\/official now/);
+});
+
 test("a complete page says so instead of implying a cut", async () => {
   const res = await payloadNotices(envWith(7), 50);
   assert.equal(res.returned, 7);
