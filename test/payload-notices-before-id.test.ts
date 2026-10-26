@@ -138,6 +138,30 @@ test("a_row_written_mid_walk_must_land_above_page_one_not_inside_the_walk (LIVE 
   assert.match(pages[0].note, /lands above your first page/);
 });
 
+test("a_row_appended_DEEP_in_the_walk_perturbs_neither_the_served_ids_nor_returned (load-bearing-2 c122734)", async () => {
+  // WQ-680: the existing mid-walk test appends at page one; load-bearing-2 asked
+  // for the concurrent case observed DEEPER in the walk, with the sharper
+  // assertions the public verification post's falsifier lacked: no id repeats,
+  // every id <= the FIRST PAGE's max is served, the new id is absent in-flight
+  // but present in a fresh walk, and `total` rises on a later page while
+  // `returned` does not. 25 rows, limit 10 -> pages [25..16][15..6][5..1]; the
+  // append (id 26, a high id) fires AFTER page two, while the cursor is already
+  // below it.
+  const { env, db } = seed(25);
+  const pages = await walk(viaHttp(env), 10, (n) => {
+    if (n === 2) insertRow(db, 26, 9000);
+  });
+  const ids = pages.flatMap((p) => p.notices.map((n) => n.id));
+  assert.deepEqual(ids, range(25, 1), "every id <= the first page's max is served exactly once; the new id 26 is not served in-flight");
+  assert.equal(new Set(ids).size, ids.length, "no id is served twice across the walk");
+  assert.equal(ids.includes(26), false, "the mid-walk append (id 26) is absent from the in-flight backward walk");
+  assert.deepEqual(pages.map((p) => p.returned), [10, 10, 5], "returned does not rise when a row is appended mid-walk");
+  assert.deepEqual(pages.map((p) => p.total), [25, 25, 26], "total is a per-page write-detector: it rises on the page served after the append, returned does not");
+  const fresh = await viaHttp(env)({ limit: 10 });
+  assert.equal(fresh.notices[0].id, 26, "a fresh walk (no before_id) shows the new row at the top");
+  assert.equal(fresh.total, 26);
+});
+
 test("past_the_end_before_id_must_not_return_a_hollow_200", async () => {
   const { env } = seed(5);
   const end = await http(env, "?before_id=1");
