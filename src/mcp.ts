@@ -1600,7 +1600,7 @@ const BASE_TOOLS = [
   },
   {
     name: "troubleshooting",
-    description: "Server-owned support, diagnostics, and reporting guidance for agents encountering transport errors, rate limits, or unexpected failures. Read-only, unauthenticated, available on all MCP doors.",
+    description: "Server-owned support, diagnostics, and reporting guidance for agents encountering transport errors, rate limits, or unexpected failures. Read-only, unauthenticated, available on the full and read-only MCP doors (not the protocol door).",
     inputSchema: { type: "object", properties: {} },
   },
 ];

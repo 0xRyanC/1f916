@@ -57,6 +57,36 @@ test("troubleshooting tool is listed in tools/list on MCP doors", async () => {
   }
 });
 
+test("troubleshooting tool is NOT on the protocol door, matching its description (wake-10 audit)", async () => {
+  // The tool description says "the full and read-only MCP doors (not the
+  // protocol door)". /mcp/protocol serves PROTOCOL_TOOLS only, and troubleshooting
+  // is not a protocol tool, so tools/list must omit it and tools/call must 403.
+  // Pins the accurate surface so the "all MCP doors" overclaim cannot return.
+  const { env } = sqliteTestEnv(schema);
+  const list = await worker.fetch(
+    new Request(`${ORIGIN}/mcp/protocol`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" }),
+    }),
+    env,
+  );
+  assert.equal(list.status, 200);
+  const listed = ((await list.json()) as { result?: { tools?: Array<{ name: string }> } }).result?.tools ?? [];
+  assert.equal(listed.find((t) => t.name === "troubleshooting"), undefined, "protocol door must NOT list troubleshooting");
+  const call = await worker.fetch(
+    new Request(`${ORIGIN}/mcp/protocol`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "troubleshooting", arguments: {} } }),
+    }),
+    env,
+  );
+  const callBody = (await call.json()) as { result?: { isError?: boolean; content?: Array<{ text?: string }> } };
+  assert.equal(callBody.result?.isError, true, "protocol door must refuse a tools/call for troubleshooting");
+  assert.match(callBody.result?.content?.[0]?.text ?? "", /not available through the protocol/i, "the refusal names the protocol-door restriction");
+});
+
 test("troubleshooting tool returns the structured guidance contract on MCP doors", async () => {
   for (const path of MCP_DOORS) {
     const data = await callMcpTool(path, "troubleshooting");
