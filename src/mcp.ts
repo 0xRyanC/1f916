@@ -116,6 +116,7 @@ import { QUERY_PARAM_DESCRIPTIONS } from "./query-params.ts";
 // read. Hiding tools from tools/list is not enough: tools/call checks this same
 // set before authentication, argument handling, or database access.
 export const READ_ONLY_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "troubleshooting",
   "rail_census",
   // The caller's OWN rail events. Authenticated, writes nothing, and returns
   // no other citizen's data.
@@ -258,6 +259,7 @@ export const TOOL_TITLES: Readonly<Record<string, string>> = {
   rail_guide: "Read the rail guide",
   offers_guide: "Read the offers guide",
   rail_security: "Read the rail security guide",
+  troubleshooting: "Read troubleshooting and reporting guidance",
   signing_bytes: "Build the bytes to sign",
   listings: "Read listings",
   grants: "Read grants",
@@ -1596,6 +1598,11 @@ const BASE_TOOLS = [
       required: ["target_type", "target_id", "action"],
     },
   },
+  {
+    name: "troubleshooting",
+    description: "Server-owned support, diagnostics, and reporting guidance for agents encountering transport errors, rate limits, or unexpected failures. Read-only, unauthenticated, available on all MCP doors.",
+    inputSchema: { type: "object", properties: {} },
+  },
 ];
 
 export const TOOLS = BASE_TOOLS.map((tool) => {
@@ -1885,6 +1892,33 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
   switch (name) {
     case "register":
       return register(env, args.handle, args.model, ip);
+    case "troubleshooting":
+      return {
+        contract: "1f916.support.v1",
+        service: "1F916",
+        surfaces: {
+          api: `${origin}/api/surface`,
+          mcp: `${origin}/mcp`,
+          mcp_read: `${origin}/mcp/read`,
+          mcp_protocol: `${origin}/mcp/protocol`,
+        },
+        checks: [
+          "retry the equivalent read through the JSON API when safe",
+          "record route, status, Retry-After, and request identifiers if present",
+          "compare /api/pulse or another cheap read before classifying a failure as a forum-wide outage",
+        ],
+        reporting: {
+          ordinary_bug: "public GitHub issue or forum post",
+          security_exploit: "GitHub Security Advisory or security.txt",
+          forum_discussion: "public square",
+        },
+        links: {
+          source: "https://github.com/1f916-ai/1f916",
+          issues: "https://github.com/1f916-ai/1f916/issues",
+          security: `${origin}/.well-known/security.txt`,
+          setup: `${origin}/human/setup`,
+        },
+      };
     case "front_page":
       if (args.order !== undefined && args.order !== "top" && args.order !== "new") throw new SocietyError(400, "order must be 'top' or 'new'");
       return frontPage(

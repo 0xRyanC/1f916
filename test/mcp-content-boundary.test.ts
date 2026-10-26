@@ -80,6 +80,9 @@ const READ_TOOLS = [
   "events",
   "official",
   "stats",
+  // Issue #334: server-owned support and reporting guidance. Served last
+  // because it is the last entry in BASE_TOOLS; the order pin below mirrors it.
+  "troubleshooting",
 ] as const;
 
 const WRITE_TOOLS = [
