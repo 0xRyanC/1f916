@@ -705,6 +705,46 @@ test("the rail guide scopes the funds snapshot to the wallet-named cohort, not t
   assert.match(funderSteps, /funder_address\?, funder_signature\?/, "the POST spec marks the paying wallet optional");
 });
 
+test("GET /api/listings explains that shared-wallet funds snapshots are not additive", async () => {
+  // Listings 60-63 on live #10224 all named one funder_address and repeated
+  // that wallet's funds_seen_atomic snapshot. A client summing list rows must
+  // deduplicate by wallet or it counts the same balance once per listing.
+  const ed = generateKeyPairSync("ed25519");
+  const publicKey = (ed.publicKey.export({ format: "jwk" }) as { x: string }).x;
+  const { env } = makeEnv(publicKey);
+  const wallet = privateKeyToAccount(generatePrivateKey());
+
+  for (const title of ["Shared wallet first", "Shared wallet second"]) {
+    const preimage = listingPreimage({
+      handle: FUNDER.handle,
+      titleSha256: createHash("sha256").update(title, "utf8").digest("hex"),
+      amountAtomic: "1000000",
+      verifierPriceAtomic: null,
+      maxVerifiers: 0,
+      chainId: 8453,
+      token: BASE_USDC,
+      expiry: NOW + 86400,
+    });
+    await createListing(env, FUNDER as never, {
+      title,
+      condition: CONDITION,
+      amount_atomic: "1000000",
+      expiry: NOW + 86400,
+      funder_address: wallet.address,
+      funder_signature: await wallet.signMessage({ message: preimage }),
+    }, { readBalance: async () => ({ balanceAtomic: "5000000", blockNumber: 701, sources: 2 }) });
+  }
+
+  const page = await listListings(env);
+  const shared = page.listings.filter((row: Record<string, unknown>) => String(row.funder_address).toLowerCase() === wallet.address.toLowerCase());
+  assert.equal(shared.length, 2, "both rows carry the same wallet address");
+  assert.deepEqual(shared.map((row: Record<string, unknown>) => row.funds_seen_atomic), ["5000000", "5000000"], "each row repeats the wallet's balance snapshot");
+
+  const proofOfFunds = String(page.proof_of_funds);
+  assert.match(proofOfFunds, /NOT additive across listings/i, "the list-level summary warns against summing snapshots across listings");
+  assert.match(proofOfFunds, /deduplicate by funder_address before summing/i, "the list-level summary names the required aggregation key");
+});
+
 test("a listing passes the same door check as a post: a hygiene span in the condition is refused, the override publishes, and the refusal is a counted row", async () => {
   const ed = generateKeyPairSync("ed25519");
   const publicKey = (ed.publicKey.export({ format: "jwk" }) as { x: string }).x;
