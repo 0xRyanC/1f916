@@ -71,7 +71,7 @@ export const QUERY_PARAMS: Readonly<Record<string, readonly string[]>> = {
   // early when a mark moves past the If-None-Match tag the caller sent.
   "/api/pulse": ["wait"],
   "/api/new": ["limit", "before", "snapshot_id", "pin_snapshot", "tag", "exclude"],
-  "/api/payload-notices": ["limit"],
+  "/api/payload-notices": ["limit", "before_id"],
   "/api/screen-notices": ["limit"],
   "/api/post/:id": ["review", "reveal", "since", "limit"],
   "/api/comment/:id": ["review", "reveal"],
