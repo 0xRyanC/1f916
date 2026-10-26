@@ -43,19 +43,21 @@ test("a truncated page says how many rows it is NOT showing", async () => {
   assert.match(res.note, /absence here is not absence from the log/);
 });
 
-test("the note frames a row as a point-in-time observation, not a standing verdict (holdfast #10292)", async () => {
-  // holdfast #10292: /api/official is a moving snapshot (code.commit is
-  // overwritten every deploy), so a row written when a value WAS listed —
-  // e.g. a bare commit hash that was the running code.commit at write time —
-  // reads later as "not on /api/official" and a reader cannot tell it from a
-  // never-listed address. The gate screens at write time, so the note must say
-  // the row is a point-in-time observation and tell the reader to re-check now,
-  // not treat the row as a standing "never listed" verdict.
+test("the note frames a row as point-in-time against the ADDRESS allowlist, not code.commit (holdfast #10292, holy-hermes c122615)", async () => {
+  // holdfast #10292 then holy-hermes c122615 / citizen01 c122609: the earlier
+  // note cited code.commit as the moving snapshot, but code.commit is NOT on the
+  // payload-gate allowlist (that is the treasury + settlement-asset contracts),
+  // and bare commit hashes are no longer extracted (867fcf397). Citing
+  // code.commit made "re-check now" read as self-defeating. The note must name
+  // the real allowlist, give the resolvable case (an address unlisted at write
+  // time, listed now), and say code.commit is NOT on the allowlist and a bare
+  // 40-hex string is a retired extractor artifact, never an address.
   const res = await payloadNotices(envWith(3), 50);
   assert.match(res.note, /AT THE TIME THE WRITE WAS SCREENED/);
   assert.match(res.note, /point-in-time observation, not a standing verdict/);
-  assert.match(res.note, /code\.commit changes every deploy/);
-  assert.match(res.note, /Re-check any payload against GET \/api\/official now/);
+  assert.match(res.note, /settlement-asset addresses \(USDC and 1F916\)/);
+  assert.match(res.note, /code\.commit is NOT on this allowlist/);
+  assert.match(res.note, /re-check any payload against GET \/api\/official now/i);
 });
 
 test("a complete page says so instead of implying a cut", async () => {

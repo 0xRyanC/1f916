@@ -2546,7 +2546,7 @@ export async function payloadNotices(env: Env, limit = 50, beforeId?: number) {
     before_id: before,
     next_before_id,
     note:
-      `Payload gate, observe mode: a row records a write that carried an address-like payload not on /api/official AT THE TIME THE WRITE WAS SCREENED. Recorded, never acted on. A row is a point-in-time observation, not a standing verdict: /api/official is a moving snapshot (code.commit changes every deploy), so an older row can name a value that was listed when it was written and is not now. Re-check any payload against GET /api/official now rather than reading a row as "never listed". ` +
+      `Payload gate, observe mode: a row records a write that carried an address-like payload not on the /api/official allowlist — the treasury wallet and the settlement-asset addresses (USDC and 1F916) — AT THE TIME THE WRITE WAS SCREENED. Recorded, never acted on. A row is a point-in-time observation, not a standing verdict: that allowlist grows as the registry recognizes assets, so an address unlisted when its row was written can be listed now — re-check any payload against GET /api/official now rather than reading a row as "never listed". code.commit is NOT on this allowlist: a 40-hex string with no 0x prefix is a commit hash an earlier extractor over-matched and the gate no longer records, never an address. ` +
       pageText,
   };
 }
