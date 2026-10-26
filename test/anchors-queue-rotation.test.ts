@@ -158,6 +158,50 @@ test("an_unupgraded_ots_row_must_not_hold_an_upgrade_slot_forever", async () => 
   assert.match(body.what_an_anchor_proves, /last_asked_at/, "the prose says what last_asked_at is");
 });
 
+test("a_once_asked_ots_row_must_not_wait_behind_the_whole_never_asked_backlog", async () => {
+  // tally-stick #10271 / zola c122371: stampAsked moves a row to checked_at
+  // NOT NULL the instant it is asked, and the pass picks never-asked (NULL)
+  // rows first. So a row whose single fetch failed or came back not-yet-ready
+  // sorted BEHIND the entire never-asked backlog — days during a multi-thousand
+  // row drain, not the one hour the gate intends. One slot per pass is now
+  // reserved for the least-recently-asked row whenever never-asked rows would
+  // fill the pass on their own, bounding the retry wait by the asked queue's
+  // own length. Here a backlog of 12 never-asked rows (> OTS_UPGRADES_PER_PASS)
+  // sits ahead of row 500, which was asked once in the past and whose calendar
+  // now returns a Bitcoin attestation. With the reserve, row 500 upgrades on the
+  // FIRST pass; reverting to one `ORDER BY checked_at ASC` SELECT leaves it
+  // pending (the eight slots all go to never-asked rows), reddening this test.
+  const { env, db } = sqliteTestEnv(SCHEMA);
+  db.exec(`INSERT INTO checkpoints (id, log, tree_size, root, sig, created_at) VALUES (20, 'identity_events', 5, '${ROOT}', 's', ${T0 - DAY})`);
+  const retryId = 500;
+  const backlog = Array.from({ length: 12 }, (_, i) => 501 + i); // > OTS_UPGRADES_PER_PASS
+  const ids = [retryId, ...backlog];
+  const seeds = await Promise.all(ids.map((_, i) => seedProof(1000 + i)));
+  // retryId was asked once a pass ago (checked_at set); the backlog is never-asked (NULL).
+  db.exec(`INSERT INTO anchors (id, checkpoint_id, kind, target, proof, status, error, created_at, checked_at) VALUES (${retryId}, 20, 'ots', '${CAL}/${retryId}', '${seeds[0].proof}', 'pending', NULL, ${T0 - 3 * 60 * 60 * 1000}, ${T0 - PASS})`);
+  backlog.forEach((id, i) =>
+    db.exec(`INSERT INTO anchors (id, checkpoint_id, kind, target, proof, status, error, created_at, checked_at) VALUES (${id}, 20, 'ots', '${CAL}/${id}', '${seeds[i + 1].proof}', 'pending', NULL, ${T0 - 3 * 60 * 60 * 1000}, NULL)`),
+  );
+  const deps: AnchorDeps = {
+    fetch: (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      if (url.endsWith("/digest")) return new Response(new Uint8Array([0xf0, 0x08, 0x01]), { status: 200 });
+      const i = seeds.findIndex((s) => url.includes(s.attesteeHex));
+      if (i === 0) return new Response(UPGRADED_NODE, { status: 200 }); // retryId's calendar is now ready
+      if (i > 0) return new Response(PENDING_NODE, { status: 200 }); // backlog never upgrades
+      return new Response("", { status: 404 });
+    }) as typeof fetch,
+    submitBase: async () => { throw new Error("no Base in this fixture"); },
+    confirmBase: async () => "pending",
+  };
+  await anchorCheckpoints(env, T0, deps);
+  assert.equal(statusOf(db, retryId), "confirmed", "the once-asked, now-ready row upgrades on the first pass despite a 12-row never-asked backlog ahead of it");
+  // The reserve takes ONE slot, not all: the other seven go to never-asked rows,
+  // so the backlog still drains. Count backlog rows asked this pass.
+  const askedBacklog = backlog.filter((id) => (db.prepare("SELECT checked_at FROM anchors WHERE id = ?").get(id) as { checked_at: number | null }).checked_at !== null).length;
+  assert.equal(askedBacklog, OTS_UPGRADES_PER_PASS - 1, "exactly one slot is reserved; the remaining seven still drain the never-asked backlog");
+});
+
 test("a_pending_archive_job_must_not_hold_the_poll_slot_forever", async () => {
   const { env, db } = sqliteTestEnv(SCHEMA);
   db.exec(`INSERT INTO checkpoints (id, log, tree_size, root, sig, created_at) VALUES (10, 'identity_events', 5, '${ROOT}', 's', ${T0 - DAY})`);

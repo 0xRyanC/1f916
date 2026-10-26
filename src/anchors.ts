@@ -543,17 +543,37 @@ export async function anchorCheckpoints(env: Env, now = Date.now(), deps: Anchor
     }
   }
   // OTS upgrades: pending OpenTimestamps rows older than an hour,
-  // OTS_UPGRADES_PER_PASS per pass, never-asked first, then least recently
-  // asked (see stampAsked). The calendars batch into Bitcoin about once an hour, so
-  // asking sooner is almost always a wasted round trip. A calendar error or a
-  // not-yet-upgraded answer leaves the row untouched — it stays pending and is
-  // asked again in its turn, exactly like a Base transaction not yet seen.
-  // A row is only rewritten when its proof now carries a Bitcoin attestation,
-  // and the completed proof is stored so a reader no longer depends on the
-  // calendar still holding the commitment (issue #517).
-  const otsPend = (
-    await env.DB.prepare("SELECT id, target, proof FROM anchors WHERE kind = 'ots' AND status = 'pending' AND proof IS NOT NULL AND created_at < ? ORDER BY checked_at ASC, id ASC LIMIT ?").bind(now - 60 * 60 * 1000, OTS_UPGRADES_PER_PASS).all<{ id: number; target: string; proof: string }>()
+  // OTS_UPGRADES_PER_PASS per pass. The calendars batch into Bitcoin about once
+  // an hour, so asking sooner is almost always a wasted round trip. A calendar
+  // error or a not-yet-upgraded answer leaves the row untouched — it stays
+  // pending and is asked again in its turn, exactly like a Base transaction not
+  // yet seen. A row is only rewritten when its proof now carries a Bitcoin
+  // attestation, and the completed proof is stored so a reader no longer depends
+  // on the calendar still holding the commitment (issue #517).
+  //
+  // SELECTION. Never-asked rows (checked_at NULL) lead, as everywhere, but ONE
+  // slot per pass is RESERVED for the least-recently-asked pending row whenever
+  // the never-asked backlog would otherwise fill the whole pass. Without the
+  // reserve, stampAsked moves a row to checked_at NOT NULL the instant it is
+  // asked, so a single failed or not-yet-ready fetch sorted the row BEHIND the
+  // entire never-asked backlog — during a multi-thousand-row drain that is days,
+  // not the one hour the hour-gate intends (tally-stick #10271, refined by zola
+  // c122371). The reserve bounds a retry's wait by the asked-pending queue's own
+  // length rather than the never-asked backlog's. With no backlog to fill the
+  // pass, the reserve is unneeded and every slot fills oldest-asked-first,
+  // exactly as a single `ORDER BY checked_at ASC, id ASC` did before. The two
+  // SELECTs are disjoint (checked_at NULL vs NOT NULL), so no row is picked twice.
+  const otsGate = now - 60 * 60 * 1000;
+  const otsNever = (
+    await env.DB.prepare("SELECT id, target, proof FROM anchors WHERE kind = 'ots' AND status = 'pending' AND proof IS NOT NULL AND created_at < ? AND checked_at IS NULL ORDER BY id ASC LIMIT ?").bind(otsGate, OTS_UPGRADES_PER_PASS).all<{ id: number; target: string; proof: string }>()
   ).results;
+  const otsRetry = (
+    await env.DB.prepare("SELECT id, target, proof FROM anchors WHERE kind = 'ots' AND status = 'pending' AND proof IS NOT NULL AND created_at < ? AND checked_at IS NOT NULL ORDER BY checked_at ASC, id ASC LIMIT ?").bind(otsGate, OTS_UPGRADES_PER_PASS).all<{ id: number; target: string; proof: string }>()
+  ).results;
+  // Reserve one retry slot only when never-asked rows would fill the pass on
+  // their own; otherwise take all never-asked and backfill with oldest-asked.
+  const neverCount = otsRetry.length > 0 ? Math.min(otsNever.length, OTS_UPGRADES_PER_PASS - 1) : Math.min(otsNever.length, OTS_UPGRADES_PER_PASS);
+  const otsPend = [...otsNever.slice(0, neverCount), ...otsRetry.slice(0, OTS_UPGRADES_PER_PASS - neverCount)];
   await stampAsked(env, otsPend.map((p) => p.id), now);
   for (const p of otsPend) {
     try {
