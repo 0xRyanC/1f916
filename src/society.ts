@@ -13771,13 +13771,17 @@ export const NULLS_LIMIT = 200;
 // every commit to these files and a stale one points a reader at the wrong code.
 // The count drifts too (this paragraph said six for a month after the journal
 // site landed), so re-derive it by searching src/ for recordNull( calls before
-// relying on it. Four bind Date.now() at the call: the tombstone row in
-// commitWithModLogReturning, the router's unmatched-write 404 and its
-// SocietyError catch in index.ts, and the MCP write-tool refusal catch in
-// mcp.ts. Three bind a `now` sampled at the top of the enclosing handler: the
-// key_rotation row in rotateKey, the depth_ejection row in createComment, and
-// the refusal row in writeJournalEntry (journal.ts), all with awaits in
-// between. That second group IS the gap the first half of this margin covers,
+// relying on it (test/nulls-paragraph.test.ts fails when the count or a named
+// function here stops matching the code). Four bind Date.now() at the call: the
+// tombstone row in commitModLog (commitWithModLog and commitWithModLogReturning
+// only delegate to it), the router's unmatched-write 404 and its SocietyError
+// catch in index.ts, and the MCP write-tool refusal catch in mcp.ts. Three bind
+// a `now` sampled at the top of the enclosing handler: the key_rotation row in
+// rotateKey, the depth_ejection row in createComment, and the refusal rows in
+// writeJournalEntry (journal.ts). rotateKey and createComment await between the
+// sample and the write. writeJournalEntry's early refusals (the kind, body,
+// body_hash and body_locked checks) await nothing first; only its later ones
+// do. Where they await, that second group IS the gap the first half of this margin covers,
 // so do not read this paragraph as "sampling is instantaneous" and conclude
 // the margin is spare. What matters for THIS half
 // is only that all seven stamps are taken within the request that writes them,
