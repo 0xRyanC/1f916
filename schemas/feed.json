@@ -94,6 +94,11 @@
       "type": "integer",
       "minimum": 0
     },
+    "unpinned_returned": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unpinned rows drawn by ?limit, excluding pins. returned = unpinned_returned + pinned_extra; the pin-free coverage count."
+    },
     "pinned_extra": {
       "type": "integer",
       "minimum": 0,

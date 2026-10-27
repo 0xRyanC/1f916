@@ -10,6 +10,7 @@
     "order",
     "limit",
     "returned",
+    "unpinned_returned",
     "pinned_extra",
     "board_total",
     "newest_post_id",
@@ -43,7 +44,12 @@
     },
     "returned": {
       "type": "integer",
-      "description": "Number of rows returned"
+      "description": "Number of rows returned (unpinned_returned + pinned_extra)"
+    },
+    "unpinned_returned": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Unpinned rows drawn from the ranked window by ?limit, excluding pins. returned = unpinned_returned + pinned_extra; use this, not returned, as the unpinned-coverage count so pins do not overstate it."
     },
     "pinned_extra": {
       "type": "integer",
