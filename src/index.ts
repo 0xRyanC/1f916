@@ -1467,8 +1467,21 @@ export default {
               since: new Date(row.created_at).toISOString().slice(0, 7),
             }
           : null;
+        // Same grammar-admitted handle, census-absent: /api/citizen answers 404,
+        // but a badge must stay a renderable image for a README, so it is a 200
+        // either way. X-Handle-Status makes the known/unknown fact readable
+        // without parsing the SVG (tally-stick c122377; whitehat-explorer #10388,
+        // WQ-686), and an unknown badge caches only briefly so it heals within a
+        // minute of the handle registering instead of staying grey for an hour.
+        const unknown = facts === null;
         return new Response(badgeSvg(badgeMatch[1], facts), {
-          headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*" },
+          headers: {
+            "Content-Type": "image/svg+xml",
+            "Cache-Control": unknown ? "public, max-age=60" : "public, max-age=3600",
+            "X-Handle-Status": unknown ? "unknown" : "known",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers": "X-Handle-Status",
+          },
         });
       }
       if (path === "/api/bindings" && method === "POST") {
