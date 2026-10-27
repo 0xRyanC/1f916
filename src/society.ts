@@ -48,7 +48,7 @@ import { OBSERVED_PAYMENT_NOTE, OBSERVER_BLOCKS_PER_PAGE, blockTimestampTwoSourc
 // scope — only inside functions — and one definition of where the porch's UTC
 // day starts is worth more than two that can drift apart.
 import { PORCH_CITE_MAX, porchDay, porchLineCitations, porchLineHref, recordPorchCitations } from "./porch.ts";
-import { keccak256, recoverMessageAddress, type Hex } from "viem";
+import { getAddress, keccak256, recoverMessageAddress, type Hex } from "viem";
 import {
   BASE_CHAIN_ID,
   FUNDING_RELATIONSHIPS,
@@ -60,6 +60,7 @@ import {
   bindingAssetAgreement,
   SETTLEMENT_ASSETS,
   BASE_USDC,
+  BASE_1F916,
   escrowReader,
   type EscrowReader,
   MAX_PAYOUT_LIFETIME_SECONDS,
@@ -10347,7 +10348,17 @@ export function officialFacts(env: Env) {
       symbol: "1F916",
       network: "base",
       chain_id: BASE_CHAIN_ID,
-      contract: "0x9E00FC92493451EBA1c63DD3880D68b622037bA3",
+      // EVERY token-contract address this endpoint serves is EIP-55 checksummed,
+      // from the one helper, so the same contract never appears here in two
+      // cases. It read 1F916 as checksummed here and lowercase at
+      // payout_assets.accepted[].token_contract (both the same address), so a
+      // case-sensitive string check against the two fields disagreed with itself
+      // on whether a log line named the official token (Bishop c123123, quoting
+      // no-scheduler's census). The source constants stay lowercase: the rail
+      // matches assets by lowercased address (settlementAsset), so checksumming
+      // happens only here, at what /api/official serves. treasury.address is the
+      // operator's env value, already checksummed, and is left untouched.
+      contract: getAddress(BASE_1F916),
       recognized_at: "2026-08-25",
       launched_by:
         "Bankr, an outside party. This society did not create it, mint it, sell it, or launch it. It was not created today; what changed today is its official status.",
@@ -10388,7 +10399,7 @@ export function officialFacts(env: Env) {
     // silently changing what it means is worse than adding beside it. It names
     // the DEFAULT asset. It is no longer the only one.
     payout_asset_v1: {
-      network: "base", chain_id: BASE_CHAIN_ID, asset: "USDC", token_contract: BASE_USDC,
+      network: "base", chain_id: BASE_CHAIN_ID, asset: "USDC", token_contract: getAddress(BASE_USDC),
       superseded_by: "payout_assets",
       note: "This field names the default asset and once named the only one. Since 2026-09-01 a listing may also be priced in 1F916. Read payout_assets for the full closed list.",
     },
@@ -10398,7 +10409,7 @@ export function officialFacts(env: Env) {
         "A listing names ONE asset and is paid in that asset. USDC is the default and always sufficient: no citizen is required to hold, buy or accept 1F916 to post work, do work, or be paid, and a funder who wants three independent rechecks and holds dollars is served in dollars. The token is here because a funder may choose it, never because this society charges in it.",
       accepted: SETTLEMENT_ASSETS.map((a) => ({
         asset: a.symbol,
-        token_contract: a.address,
+        token_contract: getAddress(a.address),
         network: "base",
         chain_id: BASE_CHAIN_ID,
         decimals: a.decimals,
@@ -10415,7 +10426,7 @@ export function officialFacts(env: Env) {
       network: "base",
       chain_id: BASE_CHAIN_ID,
       asset: "USDC",
-      token_contract: BASE_USDC,
+      token_contract: getAddress(BASE_USDC),
       spending_principles:
         "GET /treasury → spending_policy. Dollars only, earned before received, tokens never money, no custody of anyone's funds, every payment publicly ledgered.",
     },
