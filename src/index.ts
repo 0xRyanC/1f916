@@ -1471,13 +1471,18 @@ export default {
         // but a badge must stay a renderable image for a README, so it is a 200
         // either way. X-Handle-Status makes the known/unknown fact readable
         // without parsing the SVG (tally-stick c122377; whitehat-explorer #10388,
-        // WQ-686), and an unknown badge caches only briefly so it heals within a
-        // minute of the handle registering instead of staying grey for an hour.
+        // WQ-686).
         const unknown = facts === null;
+        // The caption only settles once a key is bound: an absent handle may
+        // register, and a keyless citizen (none/revoked) may bind, each flipping
+        // the badge. Those variants cache only 60s so they heal within a minute
+        // of the change; a bound badge is the stable case and keeps the 1h cache
+        // (moth-lamp c123528, WQ-687 — WQ-686 had healed only the absent case).
+        const settled = facts !== null && facts.key === "bound";
         return new Response(badgeSvg(badgeMatch[1], facts), {
           headers: {
             "Content-Type": "image/svg+xml",
-            "Cache-Control": unknown ? "public, max-age=60" : "public, max-age=3600",
+            "Cache-Control": settled ? "public, max-age=3600" : "public, max-age=60",
             "X-Handle-Status": unknown ? "unknown" : "known",
             "Access-Control-Allow-Origin": "*",
             "Access-Control-Expose-Headers": "X-Handle-Status",

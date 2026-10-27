@@ -28,9 +28,10 @@ test("the OpenAPI badge response is SVG and documents the unknown badge", async 
   // summary is the surface text truncated to OPENAPI_SUMMARY_CAP at a word
   // boundary; the full text (with the new X-Handle-Status / cache facts) is the
   // description, which the regex below still matches.
-  assert.equal(badge.summary, "README badge linked to the dossier; returns image/svg+xml. Unknown handles return a grey SVG labeled unknown, carry…");
+  assert.equal(badge.summary, "README badge linked to the dossier; returns image/svg+xml. Unknown handles return a grey SVG labeled unknown and carry…");
   assert.match(badge.description, /unknown handles return a grey SVG labeled unknown/i);
   assert.match(badge.description, /X-Handle-Status: unknown/);
+  assert.match(badge.description, /no active key yet.*cached only 60s/i);
 });
 
 test("an unknown badge is a 200 SVG whose visible value is unknown, marked X-Handle-Status unknown and cached only briefly", async () => {
@@ -46,11 +47,32 @@ test("an unknown badge is a 200 SVG whose visible value is unknown, marked X-Han
   assert.match(response.headers.get("access-control-expose-headers") ?? "", /X-Handle-Status/i);
 });
 
-test("a known handle's badge carries X-Handle-Status known and the 1h cache", async () => {
+test("a bound-key citizen's badge carries X-Handle-Status known and the 1h cache (the settled case)", async () => {
   const { env, db } = sqliteTestEnv(schema);
   db.exec("INSERT INTO citizens (id, handle, model, secret_hash, karma, created_at, last_seen_at) VALUES (1, 'real-one', 'm', 'h', 0, 1756684800000, 0)");
+  db.exec("INSERT INTO keys (citizen_id, public_key, thumbprint, custody, status, bound_at) VALUES (1, 'pk', 'tp-bound', 'self', 'active', 1756684800000)");
   const response = await worker.fetch(new Request(`${ORIGIN}/badge/real-one.svg`), env);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("x-handle-status"), "known");
   assert.equal(response.headers.get("cache-control"), "public, max-age=3600");
+});
+
+test("a known-but-keyless citizen's badge is known yet cached only 60s, so it heals fast after a key bind (WQ-687)", async () => {
+  const { env, db } = sqliteTestEnv(schema);
+  db.exec("INSERT INTO citizens (id, handle, model, secret_hash, karma, created_at, last_seen_at) VALUES (1, 'keyless-one', 'm', 'h', 0, 1756684800000, 0)");
+  const response = await worker.fetch(new Request(`${ORIGIN}/badge/keyless-one.svg`), env);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-handle-status"), "known", "the citizen exists, so the handle is known");
+  assert.match(await response.text(), /no key/, "its caption is the keyless one that a bind will change");
+  assert.equal(response.headers.get("cache-control"), "public, max-age=60", "a keyless badge heals fast like the unknown case, not after an hour");
+});
+
+test("a revoked-key citizen's badge is also cached only 60s (no active key, a re-bind will change it)", async () => {
+  const { env, db } = sqliteTestEnv(schema);
+  db.exec("INSERT INTO citizens (id, handle, model, secret_hash, karma, created_at, last_seen_at) VALUES (1, 'revoked-one', 'm', 'h', 0, 1756684800000, 0)");
+  db.exec("INSERT INTO keys (citizen_id, public_key, thumbprint, custody, status, bound_at, ended_at) VALUES (1, 'pk', 'tp-revoked', 'self', 'revoked', 1756684800000, 1756684900000)");
+  const response = await worker.fetch(new Request(`${ORIGIN}/badge/revoked-one.svg`), env);
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("x-handle-status"), "known");
+  assert.equal(response.headers.get("cache-control"), "public, max-age=60", "no active key is an unsettled caption too");
 });
