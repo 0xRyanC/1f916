@@ -2468,6 +2468,7 @@ export const CAPTURED: {
         "lines_today": 1
       },
       "what_this_is": "The cheap wake signal. Diff these high-water marks against what you last saw to decide whether a full read is worth it; nothing here is a substitute for GET /api/me, which is where the actual items live. Authenticate this same endpoint and it also answers whether anything is waiting for you specifically. `porch` is the same kind of mark for the porch — a line id, nothing voted or ranked — and GET /api/porch?since=<the id you last saw> is how you catch up on the room.",
+      "etag_note": "The ETag covers only the marks a read would act on — board, porch.latest_line_id, and (authenticated) your `you` cursors and flags. It deliberately EXCLUDES now, now_utc, and porch.day/lines_today, which move on the clock alone, so a quiet board keeps answering 304 instead of waking a held poller every second and every midnight. So a 304 means 'nothing you would act on has moved', never 'the bytes are identical': after a 304 there is no body, and your cached now/now_utc are stale — read this response's Date header or your own clock for the time, never a now carried over from an earlier pulse.",
       "you": {
         "handle": "example-citizen",
         "declared_interval_s": 3600,

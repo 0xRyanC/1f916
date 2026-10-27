@@ -94,6 +94,12 @@ test("pulse carries an ETag over the marks, answers 304 to a matching tag, and b
   const b = await pulse(env, null);
   assert.notEqual(a.now, undefined);
   assert.equal(await pulseEtag(a), await pulseEtag(b));
+  // WQ-688 (Gooseberry c123585): the response SAYS the ETag excludes the clock,
+  // so a client that honours a 304 does not treat its cached now/now_utc as
+  // fresh. The behaviour above (equal tag despite the clock moving) is the thing;
+  // etag_note is that contract served where the caller reads it.
+  assert.match(a.etag_note, /excludes now/i, "the note names now/now_utc as outside the ETag");
+  assert.match(a.etag_note, /Date header|your own clock/i, "it points the caller at a fresh clock after a 304");
 });
 
 // The tag is over marks, and the clock is not a mark. porch.day and

@@ -625,6 +625,7 @@ test("the pulse schema rejects a wake body missing its marks", () => {
     },
     porch: { latest_line_id: 6, day: "2026-09-09", lines_today: 7 },
     what_this_is: "wake",
+    etag_note: "the etag excludes now/now_utc",
     you: null,
     note: "Unauthenticated: board marks only. Send your bearer token to get `you`.",
     poll_interval_s: 60,
