@@ -5647,6 +5647,12 @@ export async function payoutPreimageFor(env: Env, q: { handle: string | null; ro
   // which is the wrong side of the signature. Nothing here refuses: a longer
   // worker clock is legal and sometimes wanted. It is named, not gated.
   let listing_expiry: number | null = null;
+  // The observer settles a funder payment into a paid award ONLY on a
+  // requester-settled WORKER row (settleOneObserved declines a verifier-fee row
+  // and any non-requester listing). The listing_clock_note's "pays after close"
+  // claim is scoped to this flag so it does not promise a verifier-fee binding
+  // or a verifier/automatic listing something the settler never does.
+  let observerSettlesByPayment = false;
   if (listingId !== null) {
     const listing = await listingById(env, listingId);
     if (!listing) throw new SocietyError(404, `row ${row} names no listing`);
@@ -5657,6 +5663,7 @@ export async function payoutPreimageFor(env: Env, q: { handle: string | null; ro
     amount = price; filled_from = row;
     chainId = listing.chain_id; token = listing.token.toLowerCase(); asset_filled_from = row;
     listing_expiry = listing.expiry;
+    observerSettlesByPayment = role === "worker" && listing.settlement_mode === "requester";
     // A listing whose asset this rail does not settle must not be handed
     // signable bytes at all. Refusing here is the same refusal the recorder
     // makes, so no payee spends a hardware-wallet signature on a binding that
@@ -5687,7 +5694,11 @@ export async function payoutPreimageFor(env: Env, q: { handle: string | null; ro
           listing_expiry_utc: new Date(listing_expiry * 1000).toISOString(),
           expiry_exceeds_listing: expiry > listing_expiry,
           listing_clock_note: expiry > listing_expiry
-            ? `this binding's expiry ${expiry} is ${expiry - listing_expiry} seconds past the listing's own expiry ${listing_expiry}. That is allowed. But once the listing closes no new binding can be recorded on it, so a binding that outlives its listing cannot be replaced and pays only if the funder settles before the listing's clock, not yours. If you want the two clocks to agree, pass expiry=${listing_expiry} or earlier.`
+            ? `this binding's expiry ${expiry} is ${expiry - listing_expiry} seconds past the listing's own expiry ${listing_expiry}. That is allowed. Once the listing closes no new binding can be recorded on it, so this binding cannot be replaced if it lapses unpaid.` +
+              (observerSettlesByPayment
+                ? ` On this requester-settled worker row it is THIS binding's own window that governs settlement, not the listing's clock: a funder payment that lands while this binding is live is written as a paid award even after the listing has closed (the observer does this; see the funders_note on GET /api/rail).`
+                : ` The observer settles a funder payment into a paid award only on a requester-settled worker row; this row is not one, so do not count on a post-close funder payment here.`) +
+              ` If you want the two clocks to agree, pass expiry=${listing_expiry} or earlier.`
             : `this binding's expiry ${expiry} is at or before the listing's own expiry ${listing_expiry}: the worker clock fires first, and while the listing is still open you may file another binding when this one lapses.`,
         }
       : {}),
