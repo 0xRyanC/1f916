@@ -2072,11 +2072,14 @@ export const PATRON_IDEMPOTENCY_409_SCHEMA = {
 } as const;
 
 // Router-level path matchers are part of the request contract too. Most path
-// parameters accept any string; the citizen lookup is dispatched only for the
-// same handle grammar used at registration, and generated clients must not
-// advertise values that fall through to the router's generic 404.
+// parameters accept any string; the citizen and badge handle routes are
+// dispatched only for the registry's 2-32 character handle grammar, so clients
+// should not advertise values that fall through to the router's generic 404.
 const PATH_PARAMETER_SCHEMAS: Record<string, Record<string, unknown>> = {
   "/api/citizen/:handle": {
+    handle: { type: "string", minLength: 2, maxLength: 32, pattern: "^[A-Za-z0-9_-]{2,32}$" },
+  },
+  "/badge/:handle.svg": {
     handle: { type: "string", minLength: 2, maxLength: 32, pattern: "^[A-Za-z0-9_-]{2,32}$" },
   },
 };
@@ -2437,6 +2440,22 @@ export function openApi(origin: string, now = Date.now()) {
       // for is gone, as opposed to the endpoint itself being absent.
       // test/openapi-404-plain-miss.test.ts pins the membership and the live
       // 404 body against the router.
+      // GET /badge/:handle.svg is dispatched only when its handle matches the
+      // registered 2-32 character grammar. A malformed handle falls through
+      // before the badge handler and receives the router's clocked JSON 404
+      // envelope (with optional did_you_mean and hint), not the 200 SVG used
+      // for a well-formed but unknown handle. Keep that distinct from a valid
+      // unknown badge, whose absence is signalled by X-Handle-Status.
+      const badgePath404 =
+        v === "GET" && r.path === "/badge/:handle.svg"
+          ? {
+              "404": {
+                description:
+                  "The handle in the path does not match the 2-32 character registry grammar, so the router does not dispatch the badge handler. The response is the clocked JSON Error envelope and may include did_you_mean and hint; a well-formed unknown handle instead returns a 200 SVG with X-Handle-Status: unknown.",
+                content: { "application/json": { schema: { $ref: ERROR_SCHEMA_REF } } },
+              },
+            }
+          : {};
       const plain404 =
         v === "GET" && PLAIN_404_ROUTES.has(r.path)
           ? {
@@ -2855,6 +2874,7 @@ export function openApi(origin: string, now = Date.now()) {
         ...(patron409 as Record<string, unknown>),
         ...(screen422 as Record<string, unknown>),
         ...(typed404 as Record<string, unknown>),
+        ...(badgePath404 as Record<string, unknown>),
         ...(plain404 as Record<string, unknown>),
         ...(checkpointProof404 as Record<string, unknown>),
         ...(prose404 as Record<string, unknown>),
@@ -2875,6 +2895,24 @@ export function openApi(origin: string, now = Date.now()) {
           description: responseDesc,
           ...(v === "GET" && CONDITIONAL_304_ROUTES.has(r.path)
             ? { headers: { ETag: CONDITIONAL_ETAG_RESPONSE_HEADER } }
+            : {}),
+          ...(v === "GET" && r.path === "/badge/:handle.svg"
+            ? {
+                headers: {
+                  "X-Handle-Status": {
+                    description: "Registry existence only: `known` means this grammar-valid handle names a citizen and does not report key state; `unknown` means no citizen is registered.",
+                    schema: { type: "string", enum: ["known", "unknown"] },
+                  },
+                  "Access-Control-Expose-Headers": {
+                    description: "Exposes X-Handle-Status to browser clients making cross-origin requests.",
+                    schema: { type: "string", const: "X-Handle-Status" },
+                  },
+                  "Cache-Control": {
+                    description: "Unknown, keyless, or revoked badges use public, max-age=60; a bound-key badge uses public, max-age=3600.",
+                    schema: { type: "string" },
+                  },
+                },
+              }
             : {}),
           content: { [media]: successExample ? { examples: { served: successExample } } : {} },
         },

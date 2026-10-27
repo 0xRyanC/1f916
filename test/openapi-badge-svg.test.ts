@@ -12,8 +12,18 @@ import worker from "../src/index.ts";
 const schema = readFileSync(fileURLToPath(new URL("../schema.sql", import.meta.url)), "utf8");
 const ORIGIN = "https://1f916.ai";
 
-type BadgeResponse = { description: string; content: Record<string, unknown> };
-type BadgeOperation = { summary: string; description: string; responses: Record<string, BadgeResponse> };
+type BadgeHeader = { description?: string; schema?: Record<string, unknown> };
+type BadgeResponse = {
+  description: string;
+  content: Record<string, { schema?: { $ref?: string } }>;
+  headers?: Record<string, BadgeHeader>;
+};
+type BadgeOperation = {
+  summary: string;
+  description: string;
+  parameters?: Array<{ name: string; schema: Record<string, unknown> }>;
+  responses: Record<string, BadgeResponse>;
+};
 type OpenApiDocument = { paths: Record<string, { get?: BadgeOperation }> };
 
 test("the OpenAPI badge response is SVG and documents the unknown badge", async () => {
@@ -23,8 +33,22 @@ test("the OpenAPI badge response is SVG and documents the unknown badge", async 
   const doc = (await response.json()) as OpenApiDocument;
   const badge = doc.paths["/badge/{handle}.svg"]?.get;
   assert.ok(badge, "the badge route is in OpenAPI");
+  assert.deepEqual(Object.keys(badge.responses).sort(), ["200", "404"]);
   assert.deepEqual(Object.keys(badge.responses["200"].content), ["image/svg+xml"]);
   assert.equal(badge.responses["200"].description, "SVG image, not JSON. No now/now_utc clock fields.");
+  assert.deepEqual(badge.parameters?.find((p) => p.name === "handle")?.schema, {
+    type: "string",
+    minLength: 2,
+    maxLength: 32,
+    pattern: "^[A-Za-z0-9_-]{2,32}$",
+  });
+  const headers = badge.responses["200"].headers ?? {};
+  assert.deepEqual(headers["X-Handle-Status"]?.schema, { type: "string", enum: ["known", "unknown"] });
+  assert.match(headers["X-Handle-Status"]?.description ?? "", /does not report key state/i);
+  assert.deepEqual(headers["Access-Control-Expose-Headers"]?.schema, { type: "string", const: "X-Handle-Status" });
+  assert.match(headers["Cache-Control"]?.description ?? "", /max-age=60.*max-age=3600/i);
+  assert.deepEqual(badge.responses["404"].content["application/json"]?.schema, { $ref: "#/components/schemas/Error" });
+  assert.match(badge.responses["404"].description, /handle.*grammar/i);
   // summary is the surface text truncated to OPENAPI_SUMMARY_CAP at a word
   // boundary; the full text (with the new X-Handle-Status / cache facts) is the
   // description, which the regex below still matches.
@@ -32,6 +56,18 @@ test("the OpenAPI badge response is SVG and documents the unknown badge", async 
   assert.match(badge.description, /unknown handles return a grey SVG labeled unknown/i);
   assert.match(badge.description, /X-Handle-Status: unknown/);
   assert.match(badge.description, /no active key yet.*cached only 60s/i);
+});
+
+test("a malformed badge handle is a router 404 with the declared JSON error envelope", async () => {
+  const { env } = sqliteTestEnv(schema);
+  const response = await worker.fetch(new Request(`${ORIGIN}/badge/a.svg`), env);
+  assert.equal(response.status, 404);
+  assert.match(response.headers.get("content-type") ?? "", /^application\/json(?:;|$)/);
+  const body = (await response.json()) as Record<string, unknown>;
+  assert.equal(typeof body.error, "string");
+  assert.equal(typeof body.now, "number");
+  assert.equal(typeof body.now_utc, "string");
+  assert.ok("did_you_mean" in body && "hint" in body, "router-level path misses may carry suggestions and a route hint");
 });
 
 test("an unknown badge is a 200 SVG whose visible value is unknown, marked X-Handle-Status unknown and cached only briefly", async () => {
