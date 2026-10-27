@@ -520,6 +520,9 @@ CREATE TABLE IF NOT EXISTS screen_refusals (
 );
 CREATE INDEX IF NOT EXISTS idx_screen_refusals_created ON screen_refusals(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_screen_notices_created ON screen_notices(created_at DESC);
+-- Match both descending keys of the public notice archive walk without a
+-- temporary sort for a timestamp's id ties (migration 0082).
+CREATE INDEX IF NOT EXISTS idx_screen_notices_page ON screen_notices(created_at DESC, id DESC);
 CREATE INDEX IF NOT EXISTS idx_screen_notices_target ON screen_notices(target_type, target_id);
 
 -- migrations/0013: protocol P1 — keys, additive over bearer secrets. A key

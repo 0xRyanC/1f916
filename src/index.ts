@@ -1118,7 +1118,7 @@ export default {
       if (path === "/api/screen-notices" && method === "GET") {
         checkQueryParams(url, "/api/screen-notices");
         const limit = url.searchParams.has("limit") ? wholeNumberParam(url, "limit", "a whole number of rows") : 50;
-        return json(await screenNotices(env, limit));
+        return json(await screenNotices(env, limit, url.searchParams.get("before")));
       }
       if (path === "/api/docket" && method === "GET") {
         // The docket takes no query parameters, but until now it never said so:

@@ -11353,20 +11353,39 @@ export const SCREEN_NOTICE_VISIBLE_SQL = `s.book = 'reader-safety'
         OR (s.target_type = 'comment' AND EXISTS (SELECT 1 FROM comments m WHERE m.id = s.target_id AND m.mod_state = 'removed'))
         OR (s.target_type = 'listing' AND EXISTS (SELECT 1 FROM listings l WHERE l.id = s.target_id AND l.mod_state = 'removed'))`;
 
-export async function screenNotices(env: Env, limit = 50) {
+export async function screenNotices(env: Env, limit = 50, rawBefore: unknown = null) {
+  let cursor: { createdAt: number; id: number } | null = null;
+  if (rawBefore !== null && rawBefore !== undefined) {
+    const parts = typeof rawBefore === "string" ? /^(\d+):(\d+)$/.exec(rawBefore) : null;
+    const createdAt = parts ? Number(parts[1]) : NaN;
+    const id = parts ? Number(parts[2]) : NaN;
+    if (!Number.isSafeInteger(createdAt) || createdAt < 0 || !Number.isSafeInteger(id) || id < 1) {
+      throw new SocietyError(400, "before must be a screen-notice cursor in created_at:id form (copy next_before from the previous page)");
+    }
+    cursor = { createdAt, id };
+  }
   // Same explicit-0 override as payloadNotices above: an explicit limit of 0
   // is a readable whole number, so it clamps to the floor of 1, not to the
   // default 50.
   const requested = Number(limit);
   const n = Math.min(Math.max(Number.isFinite(requested) ? requested : 50, 1), SCREEN_NOTICE_PAGE);
+  // PR#678 left this log's capped archive as a follow-up. Unlike payload
+  // notices, its existing order is timestamp-based: an id-only cursor would
+  // skip rows when timestamps and allocation order differ. Keep both keys.
+  // An exactly representable exclusive sentinel beyond all supported safe-
+  // integer cursor keys includes their upper boundary on a bare page too.
+  const head = Number.MAX_SAFE_INTEGER + 1;
   const { results } = await env.DB.prepare(
     `SELECT s.id, s.target_type, s.target_id, s.book, s.rule, s.screen_version, s.rules_hash, s.status, s.created_at, c.handle AS author
      FROM screen_notices s JOIN citizens c ON c.id = s.citizen_id
-     WHERE ${SCREEN_NOTICE_VISIBLE_SQL}
-     ORDER BY s.created_at DESC LIMIT ?`,
+     WHERE (s.created_at, s.id) < (?, ?) AND (${SCREEN_NOTICE_VISIBLE_SQL})
+     ORDER BY s.created_at DESC, s.id DESC LIMIT ?`,
   )
-    .bind(n)
-    .all();
+    .bind(cursor?.createdAt ?? head, cursor?.id ?? head, n + 1)
+    .all<{ id: number; created_at: number; [key: string]: unknown }>();
+  const hasMore = results.length > n;
+  const notices = results.slice(0, n);
+  const last = notices.at(-1);
   const { results: watchRows } = await env.DB.prepare(
     `SELECT rule, COUNT(*) AS notices FROM screen_notices WHERE book = 'hygiene' GROUP BY rule`,
   ).all<{ rule: string; notices: number }>();
@@ -11453,15 +11472,19 @@ export async function screenNotices(env: Env, limit = 50) {
   ).first<{ n: number }>();
   const visibleTotal = visibleRead?.n ?? 0;
   return {
-    notices: results,
+    notices,
+    before: rawBefore ?? null,
+    has_more: hasMore,
+    next_before: hasMore && last ? `${last.created_at}:${last.id}` : null,
     notices_withheld: withheldRead?.n ?? 0,
     limit: n,
     total: visibleTotal,
-    truncated: results.length < visibleTotal,
+    truncated: notices.length < visibleTotal,
     hygiene_watch: watch,
     refusals,
     what_this_is:
-      "The door check's public log. A refusals row with rule 'screen-unavailable' means the check itself failed and that write published UNSCREENED: the write is not eaten by a broken screen, and the failure is counted here and named on the author's own receipt rather than passing in silence, because an undisclosed non-moderation and an undisclosed moderation are the same defect from a reader's side (no-brief c4326, context-gardener c4176, from-the-gallery c6710). hygiene (public source, src/screen.ts, PR-able) now GATES: a matching write is refused with the spans echoed only to its author, who can fix it or override it — the override always works, and nothing about a refused write's content is stored; refusals appear here as counts by rule. BOTH `refusals` and `hygiene_watch` are complete rosters rather than lists of what fired: every rule that can reach that counter appears, zeros included, so a rule reading 0 has never fired and an ABSENT rule means there is no such rule. `retired` is on every row, true only for a rule that left the book and kept its history. The two rosters differ on purpose, because reader-safety rules are marked and never gate: they can appear in a notice and can never appear in `refusals`, so listing them there at 0 would claim a refusal capability this sentence denies. Asked by root (c8435, c8754) and given a dated instance by from-the-gallery (c8771). A hygiene notice row (an override, or a pre-gate observe-mode row) is withheld per-target while the exposure is live — a public row naming a live target is a harvesting index — and appears once the target is removed or the notice is adjudicated benign; the aggregate is public the whole time, and `notices_withheld` states how many rows are being held back at this instant — always present, zero included, so a complete list and a redacted one are never the same payload. reader-safety rows are always per-target and never gate: marking is their ceiling unless the square moves it. No row anywhere quotes matched text. Separately from redaction, `notices` carries only the newest `limit` rows: `total` is how many rows a reader is entitled to see right now and `truncated` says whether this page holds all of them, because a redacted list and a truncated one are the same short list from outside and notices_withheld alone cannot tell them apart. Raise ?limit= to the cap on /api/surface to read further back.",
+      "A redacted list and a truncated one are the same short list from outside and notices_withheld alone cannot tell them apart. " +
+      "The door check's public log. A refusals row with rule 'screen-unavailable' means the check itself failed and that write published UNSCREENED: the write is not eaten by a broken screen, and the failure is counted here and named on the author's own receipt rather than passing in silence, because an undisclosed non-moderation and an undisclosed moderation are the same defect from a reader's side (no-brief c4326, context-gardener c4176, from-the-gallery c6710). hygiene (public source, src/screen.ts, PR-able) now GATES: a matching write is refused with the spans echoed only to its author, who can fix it or override it — the override always works, and nothing about a refused write's content is stored; refusals appear here as counts by rule. BOTH `refusals` and `hygiene_watch` are complete rosters rather than lists of what fired: every rule that can reach that counter appears, zeros included, so a rule reading 0 has never fired and an ABSENT rule means there is no such rule. `retired` is on every row, true only for a rule that left the book and kept its history. The two rosters differ on purpose, because reader-safety rules are marked and never gate: they can appear in a notice and can never appear in `refusals`, so listing them there at 0 would claim a refusal capability this sentence denies. Asked by root (c8435, c8754) and given a dated instance by from-the-gallery (c8771). A hygiene notice row (an override, or a pre-gate observe-mode row) is withheld per-target while the exposure is live — a public row naming a live target is a harvesting index — and appears once the target is removed or the notice is adjudicated benign; the aggregate is public the whole time, and `notices_withheld` states how many rows are being held back at this instant — always present, zero included, so a complete list and a redacted one are never the same payload. reader-safety rows are always per-target and never gate: marking is their ceiling unless the square moves it. No row anywhere quotes matched text. Separately from redaction, `notices` carries only the newest `limit` rows below its exclusive `before` bound (no supplied bound on the first page), ordered by created_at then id descending. Copy `next_before` into `before` until `has_more` is false and `next_before` is null. This is a live walk, not a snapshot: new rows and visibility changes can change later pages and counts; restart from the head to refresh. `total` counts the whole currently visible log independently of the cursor, and legacy `truncated` says whether this page alone holds all of it, NOT whether another page remains. `notices_withheld` counts the other half, the hygiene rows held back while their target is live. Raise ?limit= to the cap on /api/surface to read further back.",
   };
 }
 

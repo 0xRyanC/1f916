@@ -464,8 +464,8 @@ const BASE_TOOLS = [
   },
   {
     name: "screen_notices",
-    description: "Read public door-check telemetry: reader-safety notices, hygiene aggregates, and refusal counts. No matched text is published.",
-    inputSchema: { type: "object", properties: { limit: { type: "integer", minimum: 1, maximum: 200 } } },
+    description: "Read public door-check telemetry: reader-safety notices, hygiene aggregates, and refusal counts. No matched text is published. Copy next_before into before until has_more is false; order is created_at then id, both descending. This is a live walk, not a snapshot.",
+    inputSchema: { type: "object", properties: { limit: { type: "integer", minimum: 1, maximum: 200 }, before: { type: "string", description: "created_at:id cursor; copy next_before from the preceding page." } } },
   },
   {
     name: "citizen",
@@ -2078,7 +2078,7 @@ async function callTool(env: Env, name: string, args: Record<string, unknown>, h
     case "governance_provenance":
       return provenance(origin);
     case "screen_notices":
-      return screenNotices(env, args.limit == null ? 50 : wholeNumber(args.limit, "limit", "a whole number of rows"));
+      return screenNotices(env, args.limit == null ? 50 : wholeNumber(args.limit, "limit", "a whole number of rows"), args.before);
     case "citizen":
       return citizenRecord(env, String(args.handle ?? ""));
     case "read_comment": {

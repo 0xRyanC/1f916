@@ -676,13 +676,6 @@
         "screen_refusals: SCAN screen_refusals"
       ]
     },
-    "ff8732bf32f612eb": {
-      "status": "debt",
-      "sql": "SELECT s.id, s.target_type, s.target_id, s.book, s.rule, s.screen_version, s.rules_hash, s.status, s.created_at, c.handle AS author FROM screen_notices s JOIN citizens c ON c.id = s.citizen_id WHERE s.book = 'reader-safety' OR s.status != 'open' OR (s.target_type = 'post' AND EXISTS (SELECT N FROM p",
-      "plan": [
-        "screen_notices: SCAN s USING INDEX idx_screen_notices_created"
-      ]
-    },
     "7f344d559e7899b1": {
       "status": "debt",
       "sql": "SELECT s.listing_id, COUNT(*) AS n, SUM(CASE WHEN c.created_at < l.created_at AND s.citizen_id <> l.citizen_id AND s.created_at < l.expiry * N - MIN(? * N, (l.expiry * N - l.created_at) / N.N) THEN N ELSE N END) AS n_scored, GROUP_CONCAT(CASE WHEN c.created_at < l.created_at AND s.citizen_id <> l.ci",
