@@ -19,10 +19,13 @@ export function sqlLiterals(code) {
   const out = [];
   let i = 0;
   let lastSig = ""; // last non-whitespace char emitted, to tell a regex `/` from division
+  let regexAfterComment = null;
+  const mark = (ch) => { lastSig = ch; regexAfterComment = null; };
   // JS keywords after which a `/` begins a regex even though the preceding char
   // is a word character (e.g. `return /re/`).
   const KEYWORD_BEFORE_REGEX = /(?:^|[^.\w])(return|typeof|instanceof|in|of|case|do|else|void|delete|yield|await)$/;
   const atRegex = () => {
+    if (regexAfterComment !== null) return regexAfterComment;
     if (lastSig === "" || "([{,;:=!&|?+-*%<>~^".includes(lastSig)) return true;
     return KEYWORD_BEFORE_REGEX.test(code.slice(Math.max(0, i - 12), i).replace(/\s+$/, ""));
   };
@@ -41,20 +44,36 @@ export function sqlLiterals(code) {
     }
     while (i < code.length && /[a-z]/i.test(code[i])) i++;
   };
+  const skipComment = () => {
+    if (code[i] !== "/" || (code[i + 1] !== "/" && code[i + 1] !== "*")) return false;
+    // Trivia does not turn division into a regex, nor erase a preceding
+    // keyword's regex context when the keyword falls outside the lookbehind.
+    const allowRegex = atRegex();
+    if (code[i + 1] === "/") {
+      while (i < code.length && code[i] !== "\n") i++;
+    } else {
+      const end = code.indexOf("*/", i + 2);
+      i = end < 0 ? code.length : end + 2;
+    }
+    regexAfterComment = allowRegex;
+    return true;
+  };
   const skipInterpolation = () => {
     // i is just past "${"; walk to the matching "}", skipping nested strings,
     // templates, regexes and comments so their braces/quotes do not mislead depth.
     let depth = 1;
+    // Each ${...} starts an expression; a previous interpolation or the tag
+    // before this template must not determine how its first slash is read.
+    mark("");
     while (i < code.length && depth > 0) {
       const ch = code[i];
-      if (ch === "/" && code[i + 1] === "/") { while (i < code.length && code[i] !== "\n") i++; continue; }
-      if (ch === "/" && code[i + 1] === "*") { const end = code.indexOf("*/", i + 2); i = end < 0 ? code.length : end + 2; lastSig = "*"; continue; }
-      if (ch === "`") { readTemplate(); lastSig = "`"; continue; }
-      if (ch === '"' || ch === "'") { readQuoted(ch); lastSig = ch; continue; }
-      if (ch === "/" && atRegex()) { skipRegex(); lastSig = "/"; continue; }
+      if (skipComment()) continue;
+      if (ch === "`") { readTemplate(); mark("`"); continue; }
+      if (ch === '"' || ch === "'") { readQuoted(ch); mark(ch); continue; }
+      if (ch === "/" && atRegex()) { skipRegex(); mark("/"); continue; }
       if (ch === "{") depth++;
       else if (ch === "}") depth--;
-      if (!/\s/.test(ch)) lastSig = ch;
+      if (!/\s/.test(ch)) mark(ch);
       i++;
     }
   };
@@ -81,12 +100,11 @@ export function sqlLiterals(code) {
   }
   while (i < code.length) {
     const ch = code[i];
-    if (ch === "/" && code[i + 1] === "/") { while (i < code.length && code[i] !== "\n") i++; continue; }
-    if (ch === "/" && code[i + 1] === "*") { const end = code.indexOf("*/", i + 2); i = end < 0 ? code.length : end + 2; lastSig = "*"; continue; }
-    if (ch === "`") { out.push(readTemplate()); lastSig = "`"; continue; }
-    if (ch === '"' || ch === "'") { out.push(readQuoted(ch)); lastSig = ch; continue; }
-    if (ch === "/" && atRegex()) { skipRegex(); lastSig = "/"; continue; }
-    if (!/\s/.test(ch)) lastSig = ch;
+    if (skipComment()) continue;
+    if (ch === "`") { out.push(readTemplate()); mark("`"); continue; }
+    if (ch === '"' || ch === "'") { out.push(readQuoted(ch)); mark(ch); continue; }
+    if (ch === "/" && atRegex()) { skipRegex(); mark("/"); continue; }
+    if (!/\s/.test(ch)) mark(ch);
     i++;
   }
   return out;
