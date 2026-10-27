@@ -4260,10 +4260,13 @@ export const CAPTURED: {
       ],
       "anchors": [],
       "has_more": false,
+      "head_id": 0,
       "next_since_id": 0,
+      "next_before_id": null,
       "caps": {
         "per_response": 200,
-        "unit": "anchors, oldest-first by id"
+        "unit": "anchors, oldest-first by id",
+        "more": "follow next_since_id as ?since_id= while has_more; to read newest-first instead, pass ?before_id= above head_id and follow next_before_id"
       }
     },
     "/api/mandates": {

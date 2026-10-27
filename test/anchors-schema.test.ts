@@ -81,16 +81,33 @@ function base(overrides: Record<string, unknown> = {}) {
       },
     ],
     has_more: false,
+    head_id: 1,
     next_since_id: 1,
+    next_before_id: null,
     caps: { per_response: 200, unit: "anchors, oldest-first by id" },
     ...overrides,
   };
 }
 
-test("anchors.json requires has_more, next_since_id, and caps", () => {
-  for (const key of ["has_more", "next_since_id", "caps", "contract", "anchors", "latest_checkpoints"]) {
+test("anchors.json requires has_more, head_id, both cursors, and caps", () => {
+  for (const key of ["has_more", "head_id", "next_since_id", "next_before_id", "caps", "contract", "anchors", "latest_checkpoints"]) {
     assert.ok(schema.required.includes(key), `required must include ${key}`);
   }
+});
+
+test("head_id and next_before_id are required: dropping either must NOT validate", () => {
+  for (const key of ["head_id", "next_before_id"]) {
+    const incomplete = base();
+    delete (incomplete as Record<string, unknown>)[key];
+    assert.ok(validate(schema, incomplete).some((e) => new RegExp(key).test(e)), `missing ${key} must fail`);
+  }
+});
+
+test("a newest-first page validates: next_since_id null, next_before_id an id", () => {
+  assert.deepEqual(
+    validate(schema, base({ next_since_id: null, next_before_id: 3, caps: { per_response: 200, unit: "anchors, newest-first by id" } })),
+    [],
+  );
 });
 
 test("a final page with always-served next_since_id validates", () => {

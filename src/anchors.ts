@@ -15,6 +15,7 @@
 // standard tools and never with ours.
 
 import type { Env } from "./society.ts";
+import { SocietyError } from "./society.ts";
 import { checkpointPayload } from "./checkpoint.ts";
 
 export const OTS_CALENDARS = [
@@ -617,17 +618,53 @@ export const ANCHOR_PAGE = 200;
 // convention, the same one listSeals reads); a NaN bound into `a.id > ?`
 // matches nothing and the bare listing served zero rows while ?since_id=0
 // served them all, the first hour it was live. Absent means from the start.
-export async function listAnchors(env: Env, sinceId: number | undefined) {
-  const since = typeof sinceId === "number" && Number.isFinite(sinceId) ? sinceId : 0;
-  const rows = (
-    await env.DB.prepare(
-      "SELECT a.id, a.checkpoint_id, a.kind, a.target, a.status, a.error, a.created_at, a.confirmed_at, a.block_number, a.checked_at, a.failed_at, c.log, c.tree_size, c.root, c.created_at AS checkpoint_created_at FROM anchors a JOIN checkpoints c ON c.id = a.checkpoint_id WHERE a.id > ? ORDER BY a.id ASC LIMIT ?",
-    )
-      .bind(since, ANCHOR_PAGE + 1)
-      .all<AnchorRow & { checked_at: number | null; log: string; tree_size: number; root: string; checkpoint_created_at: number }>()
-  ).results;
+//
+// since_id walks the log OLDEST-first (a.id > ?), the original and default
+// shape. before_id walks it NEWEST-first (a.id < ?), the same gapless keyset
+// as /api/payload-notices: ids are AUTOINCREMENT and nothing deletes or
+// rewrites an anchor row, so both walks are repeat-free, and an id-range read
+// with a LIMIT is a key SEARCH, not a scan. The log is thousands of rows long;
+// before_id lets a reader reach the newest end without paging from id 1. To
+// start at the head, read head_id (served on every response) and pass any
+// before_id above it. The two cursors are mutually exclusive: a request that
+// sends both is refused, not silently resolved to one.
+export async function listAnchors(env: Env, sinceId: number | undefined, beforeId?: number) {
+  const hasSince = typeof sinceId === "number" && Number.isFinite(sinceId);
+  const hasBefore = typeof beforeId === "number" && Number.isFinite(beforeId);
+  if (hasSince && hasBefore) {
+    throw new SocietyError(
+      400,
+      "Pass since_id or before_id, not both: since_id walks the anchor log oldest-first from just after that id, before_id walks it newest-first from just below that id. This request sent both, and resolving to one would silently drop the other.",
+    );
+  }
+  if (hasBefore && (beforeId as number) < 1) {
+    throw new SocietyError(
+      400,
+      `before_id must be an anchor id (a whole number, 1 or more): pass the next_before_id a previous page served, or any id above head_id to start at the newest row, and this request sent \`${String(beforeId)}\`.`,
+    );
+  }
+  const since = hasSince ? (sinceId as number) : 0;
+  const rows = hasBefore
+    ? (
+        await env.DB.prepare(
+          "SELECT a.id, a.checkpoint_id, a.kind, a.target, a.status, a.error, a.created_at, a.confirmed_at, a.block_number, a.checked_at, a.failed_at, c.log, c.tree_size, c.root, c.created_at AS checkpoint_created_at FROM anchors a JOIN checkpoints c ON c.id = a.checkpoint_id WHERE a.id < ? ORDER BY a.id DESC LIMIT ?",
+        )
+          .bind(beforeId, ANCHOR_PAGE + 1)
+          .all<AnchorRow & { checked_at: number | null; log: string; tree_size: number; root: string; checkpoint_created_at: number }>()
+      ).results
+    : (
+        await env.DB.prepare(
+          "SELECT a.id, a.checkpoint_id, a.kind, a.target, a.status, a.error, a.created_at, a.confirmed_at, a.block_number, a.checked_at, a.failed_at, c.log, c.tree_size, c.root, c.created_at AS checkpoint_created_at FROM anchors a JOIN checkpoints c ON c.id = a.checkpoint_id WHERE a.id > ? ORDER BY a.id ASC LIMIT ?",
+        )
+          .bind(since, ANCHOR_PAGE + 1)
+          .all<AnchorRow & { checked_at: number | null; log: string; tree_size: number; root: string; checkpoint_created_at: number }>()
+      ).results;
   const hasMore = rows.length > ANCHOR_PAGE;
   const page = hasMore ? rows.slice(0, ANCHOR_PAGE) : rows;
+  // The newest anchor id in the whole log, so a reader can start the
+  // newest-first (before_id) walk at the head without first paging to it: pass
+  // any before_id above head_id. 0 when the log is empty (no row names id 0).
+  const headId = Number((await env.DB.prepare("SELECT MAX(id) AS id FROM anchors").first<{ id: number | null }>())?.id ?? 0);
   // The newest checkpoint per log and every anchor row it has: bounded by
   // construction (two checkpoints, a handful of targets each), so a reader
   // sees at a glance whether the current heads are anchored without paging.
@@ -694,8 +731,24 @@ export async function listAnchors(env: Env, sinceId: number | undefined) {
       ...(r.kind === "ots" ? { ots_file: `/api/anchors/${r.id}.ots`, payload_file: `/api/anchors/${r.id}.txt` } : {}),
     })),
     has_more: hasMore,
-    next_since_id: page.length ? page[page.length - 1].id : since,
-    caps: { per_response: ANCHOR_PAGE, unit: "anchors, oldest-first by id" },
+    // The newest anchor id in the whole log (0 when empty): the fixed point a
+    // newest-first walk starts above. Always served, both modes.
+    head_id: headId,
+    // Forward cursor (since_id / default walk, rows ascending): the last
+    // (largest) id on this page, or the request's since when the page is empty.
+    // Null in the newest-first (before_id) walk, which has no forward cursor.
+    next_since_id: hasBefore ? null : page.length ? page[page.length - 1].id : since,
+    // Backward cursor (before_id walk, rows descending): the last (smallest) id
+    // on this page while more remain older than it, else null — the empty page
+    // or the end of the walk, never a gap. Null in the oldest-first walk.
+    next_before_id: hasBefore ? (hasMore ? page[page.length - 1].id : null) : null,
+    caps: {
+      per_response: ANCHOR_PAGE,
+      unit: hasBefore ? "anchors, newest-first by id" : "anchors, oldest-first by id",
+      more: hasBefore
+        ? "follow next_before_id as ?before_id= while has_more; the oldest-first walk is ?since_id= from 0"
+        : "follow next_since_id as ?since_id= while has_more; to read newest-first instead, pass ?before_id= above head_id and follow next_before_id",
+    },
   };
 }
 

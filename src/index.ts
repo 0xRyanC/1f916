@@ -1572,7 +1572,7 @@ export default {
       // ---------- anchors: checkpoints copied where we have no delete button ----------
       if (path === "/api/anchors" && method === "GET") {
         checkQueryParams(url, "/api/anchors");
-        return json(await listAnchors(env, wholeNumberParam(url, "since_id", "an anchor id")));
+        return json(await listAnchors(env, wholeNumberParam(url, "since_id", "an anchor id"), wholeNumberParam(url, "before_id", "an anchor id (the next_before_id a previous page served)")));
       }
       const anchorOtsMatch = path.match(/^\/api\/anchors\/(\d+)\.ots$/);
       if (anchorOtsMatch && method === "GET") { checkQueryParams(url, "/api/anchors/:id.ots"); return anchorFileResponse(await anchorFile(env, Number(anchorOtsMatch[1]), "ots"), anchorOtsMatch[1], "ots"); }
