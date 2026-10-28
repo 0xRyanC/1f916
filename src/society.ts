@@ -11360,8 +11360,8 @@ export async function recordScreenNotices(
 // test/surface-caps.test.ts binds the declaration to the query.
 export const SCREEN_NOTICE_PAGE = 200;
 
-// Visibility predicate for GET /api/screen-notices. Shared by the page SELECT,
-// notices_withheld (as NOT (...)), and total — three statements that must
+// Visibility predicate for GET /api/screen-notices. Shared by the page SELECTs,
+// notices_withheld (as NOT (...)), and total — all these reads must
 // agree on which rows a reader is entitled to see. A listing arm that exists
 // in only one of them is exactly how total drifted below notices.length.
 export const SCREEN_NOTICE_VISIBLE_SQL = `s.book = 'reader-safety'
@@ -11392,14 +11392,32 @@ export async function screenNotices(env: Env, limit = 50, rawBefore: unknown = n
   // An exactly representable exclusive sentinel beyond all supported safe-
   // integer cursor keys includes their upper boundary on a bare page too.
   const head = Number.MAX_SAFE_INTEGER + 1;
-  const { results } = await env.DB.prepare(
+  const olderPage = env.DB.prepare(
     `SELECT s.id, s.target_type, s.target_id, s.book, s.rule, s.screen_version, s.rules_hash, s.status, s.created_at, c.handle AS author
      FROM screen_notices s JOIN citizens c ON c.id = s.citizen_id
-     WHERE (s.created_at, s.id) < (?, ?) AND (${SCREEN_NOTICE_VISIBLE_SQL})
+     WHERE s.created_at < ? AND (${SCREEN_NOTICE_VISIBLE_SQL})
      ORDER BY s.created_at DESC, s.id DESC LIMIT ?`,
-  )
-    .bind(cursor?.createdAt ?? head, cursor?.id ?? head, n + 1)
-    .all<{ id: number; created_at: number; [key: string]: unknown }>();
+  ).bind(cursor?.createdAt ?? head, n + 1);
+  type NoticeRow = { id: number; created_at: number; [key: string]: unknown };
+  let results: NoticeRow[];
+  if (cursor) {
+    // SQLite's tuple comparison can seek only the timestamp prefix and then
+    // revisit every already-passed id in a dense tie. Two disjoint ranges
+    // seek both keys. Batch them so the page still reads one database state;
+    // every same-timestamp row sorts before every older-timestamp row.
+    const [tied, older] = await env.DB.batch<NoticeRow>([
+      env.DB.prepare(
+        `SELECT s.id, s.target_type, s.target_id, s.book, s.rule, s.screen_version, s.rules_hash, s.status, s.created_at, c.handle AS author
+         FROM screen_notices s JOIN citizens c ON c.id = s.citizen_id
+         WHERE s.created_at = ? AND s.id < ? AND (${SCREEN_NOTICE_VISIBLE_SQL})
+         ORDER BY s.created_at DESC, s.id DESC LIMIT ?`,
+      ).bind(cursor.createdAt, cursor.id, n + 1),
+      olderPage,
+    ]);
+    results = [...tied!.results, ...older!.results].slice(0, n + 1);
+  } else {
+    results = (await olderPage.all<NoticeRow>()).results;
+  }
   const hasMore = results.length > n;
   const notices = results.slice(0, n);
   const last = notices.at(-1);

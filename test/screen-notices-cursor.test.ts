@@ -178,19 +178,26 @@ test("screen-notices migration supplies the exact order and both page forms avoi
     db.exec(migration); // Safe to replay on a database already carrying it.
     const columns = db.prepare("PRAGMA index_xinfo('idx_screen_notices_page')").all();
     assert.deepEqual(columns.filter(r => r.key === 1).map(r => [r.name, r.desc]), [["created_at", 1], ["id", 1]]);
-    let pageSql = "";
+    const pageSql = new Set<string>();
     const original = env.DB.prepare.bind(env.DB);
     env.DB.prepare = (sql: string) => {
-      if (sql.startsWith("SELECT s.id, s.target_type, s.target_id")) pageSql = sql;
+      if (sql.startsWith("SELECT s.id, s.target_type, s.target_id")) pageSql.add(sql);
       return original(sql);
     };
     const head = await read(env, { limit: 7 });
-    assert.notEqual(pageSql, "");
-    const firstSql = pageSql;
+    assert.equal(pageSql.size, 1);
     await read(env, { limit: 7, before: head.next_before });
-    assert.equal(pageSql, firstSql, "bare and continuation pages use the same range statement");
-    const plan = db.prepare(`EXPLAIN QUERY PLAN ${pageSql}`).all().map(r => String(r.detail));
-    assert.ok(plan.some(line => /SEARCH s USING INDEX idx_screen_notices_page/.test(line)), plan.join("\n"));
-    assert.ok(plan.every(line => !/USE TEMP B-TREE|SCAN s\b/.test(line)), plan.join("\n"));
+    assert.equal(pageSql.size, 2, "the continuation adds a same-timestamp range");
+    for (const sql of pageSql) {
+      const plan = db.prepare(`EXPLAIN QUERY PLAN ${sql}`).all().map(r => String(r.detail));
+      if (sql.includes("WHERE s.created_at = ?")) {
+        // At one timestamp the old index's implicit rowid also supplies an
+        // id seek. Accept that equivalent plan, not an index-name monopoly.
+        assert.ok(plan.some(line => /SEARCH s USING INDEX idx_screen_notices_(?:page|created) \(created_at=\? AND (?:id|rowid)<\?\)/.test(line)), plan.join("\n"));
+      } else {
+        assert.ok(plan.some(line => /SEARCH s USING INDEX idx_screen_notices_page/.test(line)), plan.join("\n"));
+      }
+      assert.ok(plan.every(line => !/USE TEMP B-TREE|SCAN s\b/.test(line)), plan.join("\n"));
+    }
   } finally { db.close(); }
 });
