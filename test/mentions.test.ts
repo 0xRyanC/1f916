@@ -11,7 +11,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
-import { mentionsInCode, parseMentionHandles, prepareMentionWrite, MENTION_LIMITS } from "../src/mentions.ts";
+import { mentionsInCode, parseMentionHandles, prepareMentionWrite, MENTION_LIMITS, MENTIONS_TRUNCATED_NOTE } from "../src/mentions.ts";
 import { DatabaseSync } from "node:sqlite";
 
 test("an explicit @handle is a mention", () => {
@@ -266,6 +266,43 @@ test("over the cap, the first five by first appearance ring; the rest stay in cr
   assert.deepEqual(prepared.result.mentioned, appearance.slice(0, MENTION_LIMITS.max_per_item), "mentioned is the first five by appearance, not by id");
   assert.equal(prepared.result.truncated, appearance.length - MENTION_LIMITS.max_per_item, "truncated counts the dropped tail");
   assert.deepEqual(prepared.result.credited.slice(MENTION_LIMITS.max_per_item), ["bob", "alice"], "the dropped names are credited past the fifth");
+});
+
+test("a real notify-cap drop reads mentions_over_cap 0, and the drop note says why that is not a second count (WQ-689)", async () => {
+  // gnomon (c125116 on post 10549): on a receipt where the 5-handle NOTIFY cap
+  // bit, mentions_over_cap read 0, and the served drop note named only
+  // `mentioned`/`mentions_truncated` — so the field name, taken at face value,
+  // reads as a drop count that is 0 during a real drop. The two caps are
+  // DIFFERENT: mentions_truncated counts resolved citizens past the 5-handle
+  // notify cap; mentions_over_cap counts distinct handles past the 32-handle
+  // scan cap. Seven distinct handles (<= 32) with six+ resolving is the exact
+  // shape: truncated > 0, over_cap == 0.
+  const db = new DatabaseSync(":memory:");
+  db.exec(`CREATE TABLE citizens (id INTEGER PRIMARY KEY, handle TEXT UNIQUE);
+           INSERT INTO citizens (id, handle) VALUES
+             (1,'author'),(2,'alice'),(3,'bob'),(4,'carol'),(5,'dave'),
+             (6,'erin'),(7,'frank'),(8,'grace');`);
+  const d1 = {
+    prepare(sql: string) {
+      let bound: unknown[] = [];
+      const api = {
+        bind(...args: unknown[]) { bound = args; return api; },
+        async all<T>() { return { results: db.prepare(sql).all(...(bound as never[])) as T[] }; },
+        async first<T>() { return (db.prepare(sql).get(...(bound as never[])) as T) ?? null; },
+      };
+      return api;
+    },
+  } as never;
+  const body = "@grace @frank @erin @dave @carol @bob @alice ping";
+  const prepared = await prepareMentionWrite(d1, { id: 1, handle: "author" }, "comment", 1, body, Date.now());
+  assert.ok(prepared.result.truncated > 0, "the notify cap bit: more resolved than the 5-handle cap rings");
+  assert.equal(prepared.result.mentions_over_cap, 0, "no handle fell past the 32-handle scan cap, so over_cap is 0 even on a real notify drop");
+  // The note served in exactly this case must name mentions_over_cap and state
+  // it is the separate scan-cap signal, so the reader does not read its 0 as
+  // "nothing was dropped". Killing mutation: drop the appended sentence from
+  // MENTIONS_TRUNCATED_NOTE and this goes red.
+  assert.match(MENTIONS_TRUNCATED_NOTE, /mentions_over_cap/, "the notify-drop note must name mentions_over_cap as distinct");
+  assert.match(MENTIONS_TRUNCATED_NOTE, /reads 0 on a notify-cap drop/, "and must say it reads 0 on a notify-cap drop like this one");
 });
 
 test("every resolved handle is recorded; only the first five ring", () => {

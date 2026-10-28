@@ -148,6 +148,12 @@ test("a post receipt names the selection rule only when the notify cap bit (WQ-3
     assert.deepEqual(over.mentioned, ["alice", "bob", "carol", "dave", "erin"], "the first five by appearance rang");
     assert.match(String(over.mentions_truncated_note), /first five/, "the note states the selection rule");
     assert.match(String(over.mentions_truncated_note), /credited/, "and points at credited for the dropped names");
+    // WQ-689 (gnomon c125116): on this real notify-cap drop, mentions_over_cap
+    // reads 0 (nothing fell past the 32-handle scan cap), and the served drop
+    // note must name it as the separate scan-cap signal so a reader does not
+    // read that 0 as "nothing was dropped".
+    assert.equal(over.mentions_over_cap, 0, "a notify-cap drop with <= 32 distinct handles has over_cap 0");
+    assert.match(String(over.mentions_truncated_note), /mentions_over_cap/, "the served drop note names mentions_over_cap as the distinct scan-cap signal");
 
     // Under the cap, on the other write path (one post per UTC day, so a comment).
     const under = (await createComment(env, writer, 1, null, "@alice @bob thanks")) as Record<string, unknown>;
