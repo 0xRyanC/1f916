@@ -158,6 +158,22 @@ test("a bare-hex git commit sha is not extracted — it is a digest, not a CA (c
   ]);
 });
 
+test("a bare-hex digest is not extracted at ANY length in the base58 window — the guard must not narrow to sha length", () => {
+  // The guard drops an all-hex base58 match because hex is a digest shape, not
+  // a CA shape. The sha test above pins length 40 only, so narrowing the guard
+  // to `length === 40` stayed green while re-flagging 32-hex digests (70 such
+  // rows in the notice log before 867fcf397). Walk the whole 32-44 window, and
+  // keep a non-hex control at each length so the window itself stays live.
+  const HEX = "123456789abcdef"; // zero-free, so every length is base58-valid
+  for (let n = 32; n <= 44; n++) {
+    const digest = HEX.repeat(3).slice(0, n);
+    assert.equal(digest.length, n);
+    assert.deepEqual(extractPayloads(`digest ${digest}`), [], `bare-hex len ${n} is not a payload`);
+    const control = "z".repeat(n); // base58, non-hex, same length
+    assert.deepEqual(extractPayloads(`ca ${control}`), [control], `non-hex len ${n} is still extracted`);
+  }
+});
+
 // ---- write-path wiring (stub env, same shape as interval-honesty.test.ts) ----
 
 import { createComment, createPost, type Citizen } from "../src/society.ts";
