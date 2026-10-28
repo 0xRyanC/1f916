@@ -14866,9 +14866,9 @@ export async function changes(
   // computable on an EMPTY page (a non-empty page proves rows sat above the
   // token). A stream caught up AT the tip (token id == MAX id) is NOT past the
   // end — it was delivered its last row; only a position strictly above MAX(id)
-  // names no row. One MAX(id) per empty stream, over the primary key, so a
-  // genuinely caught-up quiet poll pays one indexed seek and a past-the-end
-  // walker gets told.
+  // names no row. One MAX(id) per stream, over the primary key, computed once
+  // below and shared by head_id and this flag, so a quiet poll pays a single
+  // indexed seek per stream and a past-the-end walker still gets told.
   //
   // WHAT THE POSITION IS, and why this is not `kind === "live"`. An earlier
   // version checked only live cursors, on the reasoning that init/snapshot mint
@@ -14890,18 +14890,31 @@ export async function changes(
   // a silence rather than a place.
   const streamMaxId = async (table: "posts" | "comments" | "nulls"): Promise<number> =>
     Number((await env.DB.prepare(`SELECT COALESCE(MAX(id), 0) AS m FROM ${table}`).all<{ m: number }>()).results[0]?.m ?? 0);
+  // head_id is the current tip — MAX(id), 0 on an empty stream — of each stream
+  // at response time, NOT an echo of the request cursor. A resumed id-mode walk
+  // subtracts its stored next_*_since from head_id to price the gap it is about
+  // to walk (how many ids sit between where it paused and the live head) before
+  // committing to the walk; tokens_past_end answers only the all-or-nothing
+  // question of whether the cursor already sits above the tip. Mirrors the
+  // head_id GET /api/anchors serves (WQ-681). Computed once here and reused by
+  // tokens_past_end below, so every page pays exactly one PK-max seek per stream.
+  const head_id = {
+    posts: await streamMaxId("posts"),
+    comments: await streamMaxId("comments"),
+    nulls: await streamMaxId("nulls"),
+  };
   const cursorPosition = (cursor: ChangesCursor): number | null =>
     cursor == null || typeof cursor === "string" ? null : cursor.kind === "live" ? cursor.id : cursor.maxId;
-  const cursorPastEnd = async (cursor: ChangesCursor, empty: boolean, table: "posts" | "comments"): Promise<boolean> => {
+  const cursorPastEnd = (cursor: ChangesCursor, empty: boolean, max: number): boolean => {
     const position = cursorPosition(cursor);
-    return empty && position !== null && position > (await streamMaxId(table));
+    return empty && position !== null && position > max;
   };
   const tokens_past_end = {
-    posts: await cursorPastEnd(postsCursor, postsSlice.length === 0, "posts"),
-    comments: await cursorPastEnd(commentsCursor, commentsSlice.length === 0, "comments"),
+    posts: cursorPastEnd(postsCursor, postsSlice.length === 0, head_id.posts),
+    comments: cursorPastEnd(commentsCursor, commentsSlice.length === 0, head_id.comments),
     nulls:
       nullsCursor.mode === "from" && nullsSlice.length === 0
-        ? nullsCursor.id > (await streamMaxId("nulls"))
+        ? nullsCursor.id > head_id.nulls
         : false,
   };
 
@@ -15126,6 +15139,12 @@ export async function changes(
     // stream (posts_since=init, or a real id) rather than carrying the dead
     // position, which otherwise pins the walk there forever.
     tokens_past_end,
+    // Per-stream current tip (MAX(id), 0 when empty) at response time, so a
+    // resumed walk can price the gap between its stored next_*_since and the
+    // live head before walking it. Not an echo of the request cursor — it is
+    // the stream's own maximum id now. Mirrors GET /api/anchors' head_id
+    // (WQ-681, moth-lamp c123210/c123229).
+    head_id,
     nulls: nullsSlice,
     nulls_total: nullsTotal,
     nulls_note: nullsCursor.mode === "done"

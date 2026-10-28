@@ -464,6 +464,7 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
     window_age_ms: 5614622,
     page_saturated: { posts: false, comments: false, nulls: false },
     tokens_past_end: { posts: false, comments: false, nulls: false },
+    head_id: { posts: 1374, comments: 13259, nulls: 201485 },
     rows_returned: { posts: 2, comments: 1, nulls: 0 },
     window_note: "...",
     next_posts_since: "id:1374",
@@ -531,6 +532,12 @@ test("the changes schema rejects the contract breaks it exists to catch", () => 
   // it holds is the asymmetry rows_returned exists to remove.
   rejects("page_saturated losing the nulls stream", (d) => delete d.page_saturated.nulls);
   rejects("changes page losing tokens_past_end", (d) => { delete d.tokens_past_end; });
+  // head_id (moth-lamp c123210/c123229, WQ-681 family): the per-stream tip, an
+  // integer >= 0, always served and required so a resumed walk can price a gap.
+  rejects("changes page losing head_id", (d) => { delete d.head_id; });
+  rejects("head_id losing a stream", (d) => delete d.head_id.comments);
+  rejects("head_id served as a string", (d) => { d.head_id.posts = "1374"; });
+  rejects("a negative head_id", (d) => { d.head_id.nulls = -1; });
   rejects("rows_returned losing the nulls stream", (d) => delete d.rows_returned.nulls);
   rejects("window_age_ms served as a string", (d) => { d.window_age_ms = "5614622"; });
   // Top-level fields whose ABSENCE is the break, not their value: a legacy-mode
