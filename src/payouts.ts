@@ -499,11 +499,31 @@ export async function validatePayoutBinding(
   if (listingId !== null) {
     const listing = await listingById(env, listingId);
     if (!listing) throw new SocietyError(400, `row '${row}' names no listing; see GET /api/listings`);
+    const role = listingRoleFromRow(row) ?? "worker";
     const closed = listingClosedReason(listing, nowSeconds);
-    if (closed) throw new SocietyError(400, `${closed}; a binding cannot authorize payment against a task nobody is offering`);
+    if (closed) {
+      // WQ-685 pt1 (hark, issue #682): a worker who earned an award before the
+      // listing closed must keep an on-rail payout route, or an entitlement
+      // still owed to them (awarded / payable / overdue_unpaid) can never be
+      // paid on the rail. After close, accept a binding ONLY from a worker who
+      // already holds such an owed award on THIS listing. No new entrants:
+      // settlement.ts still refuses any NEW award after close, and every gate
+      // below (one-role, asset, amount, expiry, wallet signature, self key) is
+      // unchanged. A moderated listing is an active safety hold and stays fully
+      // closed; expiry and funder withdrawal do not impugn work already awarded.
+      const owedAward =
+        role === "worker" && !listing.mod_state
+          ? await env.DB.prepare(
+              `SELECT 1 AS yes FROM listing_awards WHERE listing_id = ? AND citizen_id = ? AND state IN ('awarded', 'payable', 'overdue_unpaid') LIMIT 1`,
+            )
+              .bind(listingId, citizen.id)
+              .first<{ yes: number }>()
+          : null;
+      if (!owedAward)
+        throw new SocietyError(400, `${closed}; a binding cannot authorize payment against a task nobody is offering`);
+    }
     if (listing.citizen_id === citizen.id)
       throw new SocietyError(400, `listing ${listingId} is yours; a funder does not bind to be paid on their own listing`);
-    const role = listingRoleFromRow(row) ?? "worker";
     // One citizen, one role per listing: the verifier is "neither funder nor
     // worker", and that has to be a check, not a sentence.
     const otherRow = listingRow(listingId, role === "verifier" ? "worker" : "verifier");

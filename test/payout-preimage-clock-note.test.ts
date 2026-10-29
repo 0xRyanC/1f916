@@ -50,7 +50,7 @@ function makeEnv() {
 
 const CONDITION = "Publish a comment on this registry containing the exact string DONE-WQ685 and the result you computed.";
 
-async function noteFor(opts: Record<string, unknown>) {
+async function noteFor(opts: Record<string, unknown>, rowSuffix = "") {
   const { env } = makeEnv();
   const listing = (await createListing(env, AS(1, "funder"), {
     title: "short listing", condition: CONDITION, amount_atomic: DOLLAR,
@@ -59,7 +59,7 @@ async function noteFor(opts: Record<string, unknown>) {
     ...opts,
   })) as unknown as { id: number };
   const pre = (await payoutPreimageFor(env, {
-    handle: "worker", row: `listing-${listing.id}`, amount_atomic: null,
+    handle: "worker", row: `listing-${listing.id}${rowSuffix}`, amount_atomic: null,
     address: "0x" + "ab".repeat(20),
     expiry: String(NOW + 20 * 24 * 3600), // binding lives 20 days: well past the listing
   })) as unknown as { expiry_exceeds_listing: boolean; listing_clock_note: string };
@@ -77,6 +77,41 @@ test("preimage note: a requester-settled worker binding outliving its listing is
     pre.listing_clock_note,
     /pays only if the funder settles before the listing's clock/i,
     "the old, code-contradicting clause must not be served",
+  );
+  // WQ-685 pt1: after close a worker who already holds an owed award on this
+  // listing CAN still bind, so the worker-row note says so rather than the flat
+  // "no new binding can be recorded on it".
+  // KILLING MUTATION: revert `rebindAfterCloseNote` for the worker branch in
+  // src/society.ts to the flat sentence -> this assertion goes red.
+  assert.match(
+    pre.listing_clock_note,
+    /a new binding can be recorded on it only by a worker who already holds an award owed on this listing/i,
+    "the worker-row note states the post-close owed-award rebind exception",
+  );
+  assert.doesNotMatch(
+    pre.listing_clock_note,
+    /Once the listing closes no new binding can be recorded on it, so this binding cannot be replaced/i,
+    "the flat no-rebind sentence is wrong on a worker row and must not be served there",
+  );
+});
+
+test("preimage note: a VERIFIER row keeps the flat no-rebind-after-close sentence (the owed-award exception is worker-only)", async () => {
+  // A verifier holds no award (awards are worker entitlements), so the post-close
+  // rebind exception does not apply and the note must not imply it does.
+  // KILLING MUTATION: drop the `role === "worker"` guard on rebindAfterCloseNote
+  // in src/society.ts -> the worker sentence leaks onto the verifier row and this
+  // doesNotMatch goes red.
+  const pre = await noteFor({ settlement_mode: "verifier", verifier_price_atomic: DOLLAR, max_verifiers: 1 }, "-verifier");
+  assert.equal(pre.expiry_exceeds_listing, true);
+  assert.match(
+    pre.listing_clock_note,
+    /Once the listing closes no new binding can be recorded on it, so this binding cannot be replaced if it lapses unpaid/i,
+    "a verifier row keeps the flat sentence",
+  );
+  assert.doesNotMatch(
+    pre.listing_clock_note,
+    /a worker who already holds an award owed on this listing/i,
+    "the worker-only exception must not appear on a verifier row",
   );
 });
 

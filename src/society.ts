@@ -5637,7 +5637,8 @@ export async function payoutPreimageFor(env: Env, q: { handle: string | null; ro
   // one page a payee reads before signing and it knew the price to the atomic
   // unit while knowing nothing about when the listing dies. A binding whose
   // expiry outlives its listing is "born listing-first": the listing closes,
-  // no new binding can be recorded on it, and the worker's authorization sits
+  // no new binding can be recorded on it (except by a worker who already holds
+  // an owed award on it, WQ-685 pt1), and the worker's authorization sits
   // live against a row that can no longer pay. The rail carried 29 of those
   // at the 2026-09-03 census and not one was a choice anyone made, because no
   // surface showed the counterparty clock at bind time (workbuddy-hardwin,
@@ -5653,6 +5654,11 @@ export async function payoutPreimageFor(env: Env, q: { handle: string | null; ro
   // claim is scoped to this flag so it does not promise a verifier-fee binding
   // or a verifier/automatic listing something the settler never does.
   let observerSettlesByPayment = false;
+  // What happens to the rebind route once the listing closes, told from the
+  // same branch as the role it depends on (WQ-685 pt1). Default (verifier row,
+  // docket row): no new binding after close. Set to the worker variant below.
+  let rebindAfterCloseNote =
+    "Once the listing closes no new binding can be recorded on it, so this binding cannot be replaced if it lapses unpaid.";
   if (listingId !== null) {
     const listing = await listingById(env, listingId);
     if (!listing) throw new SocietyError(404, `row ${row} names no listing`);
@@ -5664,6 +5670,9 @@ export async function payoutPreimageFor(env: Env, q: { handle: string | null; ro
     chainId = listing.chain_id; token = listing.token.toLowerCase(); asset_filled_from = row;
     listing_expiry = listing.expiry;
     observerSettlesByPayment = role === "worker" && listing.settlement_mode === "requester";
+    if (role === "worker")
+      rebindAfterCloseNote =
+        "Once the listing closes, a new binding can be recorded on it only by a worker who already holds an award owed on this listing (awarded, payable or overdue_unpaid), unless the listing was stopped by moderation, which stays closed to everyone; so an entitlement earned before an ordinary close keeps its payout route, but without such an award no new binding can be recorded and this one cannot be replaced if it lapses unpaid.";
     // A listing whose asset this rail does not settle must not be handed
     // signable bytes at all. Refusing here is the same refusal the recorder
     // makes, so no payee spends a hardware-wallet signature on a binding that
@@ -5694,7 +5703,7 @@ export async function payoutPreimageFor(env: Env, q: { handle: string | null; ro
           listing_expiry_utc: new Date(listing_expiry * 1000).toISOString(),
           expiry_exceeds_listing: expiry > listing_expiry,
           listing_clock_note: expiry > listing_expiry
-            ? `this binding's expiry ${expiry} is ${expiry - listing_expiry} seconds past the listing's own expiry ${listing_expiry}. That is allowed. Once the listing closes no new binding can be recorded on it, so this binding cannot be replaced if it lapses unpaid.` +
+            ? `this binding's expiry ${expiry} is ${expiry - listing_expiry} seconds past the listing's own expiry ${listing_expiry}. That is allowed. ${rebindAfterCloseNote}` +
               (observerSettlesByPayment
                 ? ` On this requester-settled worker row it is THIS binding's own window that governs settlement, not the listing's clock: a funder payment that lands while this binding is live is written as a paid award even after the listing has closed (the observer does this; see the funders_note on GET /api/rail).`
                 : ` The observer settles a funder payment into a paid award only on a requester-settled worker row; this row is not one, so do not count on a post-close funder payment here.`) +
