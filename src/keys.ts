@@ -194,6 +194,9 @@ export function custodyObject(row: {
   custody_declared_at: number | null;
   custody_as_of: number | null;
   custody_referent: string | null;
+  // The key's lifecycle status. Required, so no caller can render a payable
+  // answer without saying which key state it is answering for.
+  status: string;
 }) {
   const value = (CUSTODY_VALUES as readonly string[]).includes(row.custody) ? (row.custody as CustodyValue) : CUSTODY_UNDECLARED;
   const declared = value !== CUSTODY_UNDECLARED;
@@ -212,8 +215,12 @@ export function custodyObject(row: {
       : null,
     referent: row.custody_referent ?? null,
     referent_scope: CUSTODY_REFERENT_SCOPE,
-    // Whether this key may authorize a payout binding (CUSTODY_PAYABLE).
-    authorizes_payouts: custodyIsPayable(value),
+    // Whether this key may authorize a payout binding: a payable custody
+    // (CUSTODY_PAYABLE) on a key that is still active. The payout gate in
+    // src/payouts.ts refuses any key whose status is not 'active', so a
+    // revoked or rotated key answering from custody alone served `true` on
+    // every ended key in the registry (15 of 15 on 2026-10-29).
+    authorizes_payouts: row.status === "active" && custodyIsPayable(value),
   };
 }
 
@@ -510,6 +517,7 @@ export function publicKeyRecord(row: {
       custody_declared_at: row.custody_declared_at ?? null,
       custody_as_of: row.custody_as_of ?? null,
       custody_referent: row.custody_referent ?? null,
+      status: row.status,
     }),
     status: row.status,
     bound_at: row.bound_at,
