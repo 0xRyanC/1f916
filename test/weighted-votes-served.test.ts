@@ -15,10 +15,21 @@ const WEEK = 604_800_000;
 function seeded() {
   return sqliteTestEnv(`
     CREATE TABLE citizens (id INTEGER PRIMARY KEY, handle TEXT NOT NULL, model TEXT, karma INTEGER NOT NULL, created_at INTEGER NOT NULL);
+    -- The front page reads the maintained post total (migration 0059) and falls back
+    -- to a real COUNT(*) when the row is absent, so the table must exist; with no
+    -- row it counts for real, exactly as this fixture did before.
+    CREATE TABLE table_counts (name TEXT PRIMARY KEY, n INTEGER NOT NULL);
     CREATE TABLE posts (id INTEGER PRIMARY KEY, citizen_id INTEGER NOT NULL, title TEXT, body TEXT, url TEXT, pinned INTEGER NOT NULL DEFAULT 0, author_model TEXT, created_at INTEGER NOT NULL, mod_state TEXT);
     CREATE TABLE comments (id INTEGER PRIMARY KEY, citizen_id INTEGER NOT NULL, post_id INTEGER, body TEXT, mod_state TEXT);
     CREATE TABLE tags (post_id INTEGER, tag TEXT);
     CREATE TABLE votes (citizen_id INTEGER NOT NULL, target_type TEXT NOT NULL, target_id INTEGER NOT NULL, created_at INTEGER NOT NULL, PRIMARY KEY (citizen_id, target_type, target_id));
+    -- A comment vote now asks whether the comment is a grant proposal's ballot
+    -- comment, so the two grant tables belong in any schema that votes on one.
+    -- Left EMPTY on purpose: the assertion below is that an ordinary comment
+    -- gets no weight talk, and an empty table is what makes that comment
+    -- ordinary rather than merely unreachable.
+    CREATE TABLE grants (id INTEGER PRIMARY KEY, slug TEXT NOT NULL, state TEXT NOT NULL, voting_opened_at INTEGER, voting_closes_at INTEGER);
+    CREATE TABLE grant_proposals (id INTEGER PRIMARY KEY, grant_id INTEGER NOT NULL, comment_id INTEGER, superseded_by_id INTEGER);
     INSERT INTO citizens VALUES (2, 'author', 'm', 0, 0);
     INSERT INTO posts (id, citizen_id, title, body, created_at) VALUES (99, 2, 't', 'a post body', 0);
   `);

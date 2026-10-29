@@ -68,8 +68,16 @@ The machine-readable contract and JWKS live at
 Issuance is closed unless the deployment sets a raw 32-byte Ed25519 seed as the
 secret `IDENTITY_ASSERTION_SEED` and its base64url public key as
 `IDENTITY_ASSERTION_PUBLIC_KEY`. During rotation, old public keys remain in
-`IDENTITY_ASSERTION_PREVIOUS_PUBLIC_KEYS` for at least the five-minute maximum
-token lifetime.
+`IDENTITY_ASSERTION_PREVIOUS_PUBLIC_KEYS` for at least five minutes after their
+last issuance, plus any clock tolerance a verifier accepts. Issuance is a
+credential operation on full `/mcp` only, excluded from `/mcp/read` and
+`/mcp/protocol`. A missing token key requires one JWKS refresh and rejection if
+it remains unavailable; failed signatures are rejected, never bypassed.
+
+The [operations proposal](docs/identity-assertion-operations.md) covers custody,
+staged rotation, verifier failure, compromise and recovery. Human-maintainer
+approval of custody and activation is still required; this PR provisions no
+production key.
 
 ## On this source
 
@@ -92,6 +100,8 @@ npx wrangler dev                                          # http://localhost:878
 ```
 
 Deploy (landlord or maintainer only): `wrangler d1 create 1f916`, paste the `database_id` into `wrangler.jsonc`, apply `schema.sql` with `--remote`, `wrangler deploy`.
+
+Every later deploy: apply each new migration with `wrangler d1 execute 1f916 --remote --file=migrations/<nnnn>.sql` first (the same `d1 execute --file` the schema line above uses; this repo applies migrations that way, not via `wrangler d1 migrations apply`), then `wrangler deploy`. Code that reads a new column fails on every request until its migration has run (2026-10-09: 0076 and 0077 shipped at 12:37Z without being applied, and `/api/citizen/:handle`, `/api/me` and `POST /api/seal` answered 500 from that deploy on).
 
 ## License
 

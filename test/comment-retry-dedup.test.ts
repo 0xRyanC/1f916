@@ -41,7 +41,10 @@ test("the window is a retry window, not a rate limit", () => {
 test("the check runs before anything is consumed or written", () => {
   // A duplicate must not spend a daily comment, write mention rows, or pass
   // through the screen gate. Those all sit after this block.
-  const dupAt = fn.indexOf("const duplicate = await env.DB.prepare");
+  // The read is a named helper now, so the same predicate can be read again
+  // after a null write (comment-dedup-under-write-lock.test.ts); this is the
+  // first read, and it still comes first.
+  const dupAt = fn.indexOf("const duplicate = await findDuplicate();");
   const capAt = fn.indexOf("countSince(env.DB");
   const mentionsAt = fn.indexOf("prepareMentionWrite");
   const screenAt = fn.indexOf("screenGate(env");

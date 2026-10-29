@@ -3,6 +3,9 @@ import assert from "node:assert/strict";
 import worker from "../src/index.ts";
 import { identityAssertionJwks, identityAssertionMetadata, issueIdentityAssertion } from "../src/identity-assertion.ts";
 import type { Citizen, Env } from "../src/society.ts";
+import { mcpManifest, openApi } from "../src/connect.ts";
+import { TOOLS } from "../src/mcp.ts";
+import { SURFACE } from "../src/surface.ts";
 
 const ORIGIN = "https://1f916.ai";
 const AUDIENCE = "https://world.example/mcp";
@@ -110,7 +113,7 @@ test("HTTP and MCP issue the same externally verifiable identity-only credential
   const httpBody = await http.json() as { assertion: string };
   assert.equal((await verify(httpBody.assertion, env)).valid, true);
 
-  for (const path of ["/mcp", "/mcp/read"]) {
+  for (const path of ["/mcp"]) {
     const response = await worker.fetch(new Request(`${ORIGIN}${path}`, {
       method: "POST",
       headers,
@@ -126,4 +129,66 @@ test("HTTP and MCP issue the same externally verifiable identity-only credential
   const jwks = await worker.fetch(new Request(`${ORIGIN}/.well-known/1f916-identity-jwks.json`), env);
   assert.equal(metadata.status, 200);
   assert.equal(jwks.status, 200);
+  assert.equal(jwks.headers.get("Cache-Control"), "no-store");
+  const contract = await metadata.json() as { key_continuity: { unknown_kid: string; recovery: string; emergency: string }; mcp_endpoint: string };
+  assert.match(contract.key_continuity.unknown_kid, /reject the assertion/);
+  assert.match(contract.key_continuity.recovery, /fresh nonce/);
+  assert.match(contract.key_continuity.emergency, /no immediate global revocation/);
+  assert.equal(contract.mcp_endpoint, `${ORIGIN}/mcp`);
+});
+
+test("restricted MCP endpoints hide and refuse credential issuance before accessing the database or signer", async () => {
+  const env = Object.defineProperty({}, "DB", { get() { throw new Error("database must not be accessed"); } }) as Env;
+  for (const path of ["/mcp/read", "/mcp/protocol"]) {
+    for (const method of ["tools/list", "tools/call"]) {
+      const response = await worker.fetch(new Request(`${ORIGIN}${path}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: "Bearer a-square-secret" },
+        body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params: { name: "identity_assertion", arguments: { audience: AUDIENCE, nonce: NONCE } } }),
+      }), env);
+      const body = await response.json() as { result: { tools?: Array<{ name: string }>; isError?: boolean; content?: Array<{ text: string }> } };
+      if (method === "tools/list") {
+        assert.ok(body.result.tools);
+        assert.equal(body.result.tools.some((tool) => tool.name === "identity_assertion"), false);
+      } else {
+        assert.equal(body.result.isError, true);
+        assert.match(body.result.content?.[0]?.text || "", /not available/);
+        assert.doesNotMatch(body.result.content?.[0]?.text || "", /database must not/);
+      }
+    }
+  }
+});
+
+test("discovery classifies issuance as a credential operation rather than a read", () => {
+  assert.equal(SURFACE.find((route) => route.path === "/api/identity-assertion")?.writes, true);
+  assert.equal(mcpManifest(ORIGIN).tools.find((tool) => tool.name === "identity_assertion")?.read_only, false);
+  assert.equal(TOOLS.find((tool) => tool.name === "identity_assertion")?.annotations.readOnlyHint, false);
+  const api = openApi(ORIGIN) as { paths: Record<string, { post: Record<string, unknown> }> };
+  assert.equal(api.paths["/api/identity-assertion"].post["x-writes"], true);
+});
+
+test("staged rotation verifies both live generations and fails closed during a mismatched deployment", async () => {
+  const old = await configuredEnv();
+  const next = await configuredEnv();
+  const input = { audience: AUDIENCE, nonce: NONCE };
+  const oldToken = await issueIdentityAssertion(old, CITIZEN, input, ORIGIN, 1_800_000);
+  old.IDENTITY_ASSERTION_PREVIOUS_PUBLIC_KEYS = next.IDENTITY_ASSERTION_PUBLIC_KEY;
+  const prepublished = await identityAssertionJwks(old);
+  assert.equal(prepublished.keys.length, 2);
+  assert.equal((await verify(oldToken.assertion, old)).valid, true);
+
+  const rotated = { ...next, IDENTITY_ASSERTION_PREVIOUS_PUBLIC_KEYS: old.IDENTITY_ASSERTION_PUBLIC_KEY };
+  await assert.rejects(() => issueIdentityAssertion({ ...rotated, IDENTITY_ASSERTION_SEED: old.IDENTITY_ASSERTION_SEED }, CITIZEN, input, ORIGIN), /does not match/);
+  await assert.rejects(() => issueIdentityAssertion({ ...rotated, IDENTITY_ASSERTION_SEED: undefined }, CITIZEN, input, ORIGIN), /not configured/);
+  const nextToken = await issueIdentityAssertion(rotated, CITIZEN, input, ORIGIN, 1_800_001);
+  assert.equal((await verify(nextToken.assertion, rotated)).valid, true);
+  assert.equal((await verify(oldToken.assertion, rotated)).valid, true);
+  assert.notEqual(oldToken.verification.key_id, nextToken.verification.key_id);
+  assert.ok(prepublished.keys.some((key) => key.kid === nextToken.verification.key_id));
+
+  // Retirement/emergency removal really makes old tokens unverifiable.
+  await assert.rejects(() => verify(oldToken.assertion, next), /kid must resolve/);
+  const parts = nextToken.assertion.split(".");
+  parts[1] = Buffer.from(JSON.stringify({ ...nextToken.claims, sub: "citizen:999" })).toString("base64url");
+  assert.equal((await verify(parts.join("."), next)).valid, false);
 });

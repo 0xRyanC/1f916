@@ -10,6 +10,17 @@
 // language must be an OBSERVATION present in the committed witness file for
 // its own day, or be named below as something else (a config change, a
 // deploy) with the reason written down.
+//
+// Refined 2026-09-09 after plumbline's #4500 (and its #2160 self-correction):
+// "present in the log" was too weak. The witness file carries two row classes
+// per capture — a HEAD-BEARING observation row (an `identity`/`treasury` block)
+// and, milliseconds later, `witness-countersignature` rows that carry no head.
+// The served prose quoted 2026-08-17T19:17:59Z as "the last observation", but
+// that instant exists in the log ONLY as a countersignature `at`; the actual
+// last observation is 19:17:57Z. The `how_to_check` prose itself tells readers
+// to skip countersignature lines "since [they] carry no heads", so the claim
+// sourced its one observation from the very class it says to ignore. An
+// observation instant must therefore match a HEAD-BEARING row, not any `at`.
 
 import test from "node:test";
 import assert from "node:assert/strict";
@@ -28,6 +39,10 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 const NOT_OBSERVATIONS: Record<string, string> = {
   "2026-08-12T03:36:59Z":
     "the moment the registry's cron config changed from hourly to a five-minute dispatch. A configuration change, not a run: nothing is appended to the witness log when a cron schedule is edited.",
+  "2026-09-29T01:46:21Z":
+    "the last workflow_dispatch the registry's cron attempted before the trigger was removed (witness_dispatch.last_attempt_at, read from GET /api/checkpoint that day; GitHub refused it with 422). An attempt by the registry, not a run of the witness: nothing was appended to the witness log, and there is no day file for that date.",
+  "2026-09-17T08:13Z":
+    "the deploy instant of 1a68648 (PR #286), the change that made an authenticated GET /api/me move the wake last-check bucket beside GET /api/pulse; it is quoted in the cadence note served by citizenRecord. A deploy, not a run: the five-minute cadence stepped over it, and the head-bearing rows either side are 08:10:34Z and 08:15:32Z.",
 };
 
 const INSTANT = /2026-\d\d-\d\dT\d\d:\d\d(?::\d\d(?:\.\d+)?)?Z/g;
@@ -41,20 +56,31 @@ function observedThatDay(instant: string): boolean {
   const want = instant.length >= 20 ? instant.slice(0, 19) : instant.slice(0, 16);
   for (const line of readFileSync(file, "utf8").split("\n")) {
     if (!line.trim()) continue;
-    let at: unknown;
+    let row: { at?: unknown; type?: unknown; identity?: unknown };
     try {
-      at = (JSON.parse(line) as { at?: unknown }).at;
+      row = JSON.parse(line) as typeof row;
     } catch {
       continue;
     }
-    if (typeof at === "string" && at.startsWith(want)) return true;
+    // A head-bearing observation only. A `witness-countersignature` row shares
+    // the same second but carries no head, so quoting its `at` as an
+    // observation is the defect this guard exists to catch (plumbline #4500).
+    if (row.type === "witness-countersignature" || !row.identity) continue;
+    if (typeof row.at === "string" && row.at.startsWith(want)) return true;
   }
   return false;
 }
 
 test("every witness instant in a served string is an instant the log actually recorded", () => {
   const offenders: string[] = [];
-  for (const name of readdirSync(join(root, "src")).filter((f) => f.endsWith(".ts")).sort()) {
+  // src/openapi-examples-captured.ts is skipped by name: it is a capture of
+  // what the router served on an in-memory fixture (scripts/capture-openapi-
+  // examples.ts), and every instant in it is that capture's clock (`now_utc`,
+  // a created_at, a checkpoint the fixture signed a millisecond earlier), not
+  // a claim about a witness run. Its prose comes from other src modules,
+  // which this scan reads where they are written.
+  const CAPTURED_OUTPUT = "openapi-examples-captured.ts";
+  for (const name of readdirSync(join(root, "src")).filter((f) => f.endsWith(".ts") && f !== CAPTURED_OUTPUT).sort()) {
     const source = readFileSync(join(root, "src", name), "utf8");
     for (const match of source.matchAll(INSTANT)) {
       const from = Math.max(0, match.index - 220);

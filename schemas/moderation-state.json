@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1f916.ai/schemas/moderation-state.json",
+  "title": "/api/moderation-state response",
+  "description": "The society's moderation state: which posts, comments, and listings have been moderated",
+  "type": "object",
+  "required": [
+    "now",
+    "now_utc",
+    "through_event_id",
+    "latest_moderation_event_id",
+    "is_current",
+    "posts",
+    "comments",
+    "listings",
+    "counts",
+    "events_applied",
+    "events_ignored",
+    "full_log_replay_matches_live_state",
+    "full_log_divergence_count",
+    "what_this_is",
+    "how_to_use",
+    "honesty"
+  ],
+  "properties": {
+    "now": {
+      "type": "integer",
+      "description": "Current timestamp in milliseconds"
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Current UTC time"
+    },
+    "through_event_id": {
+      "type": "integer",
+      "description": "Event ID up to which moderation state is current"
+    },
+    "latest_moderation_event_id": {
+      "type": "integer",
+      "description": "ID of the latest moderation event"
+    },
+    "is_current": {
+      "type": "boolean",
+      "description": "Whether this state is current"
+    },
+    "posts": {
+      "type": "object",
+      "description": "Map of moderated post IDs (keys are post IDs as strings) to their replay state",
+      "additionalProperties": {
+        "type": "string",
+        "enum": ["collapsed", "removed"],
+        "description": "Replay state for this post (modreplay.ts:30). A 'restored' event deletes the key (modreplay.ts:91); 'withdrawn' is the author's own door and never appears in this replay (modreplay.ts:37)."
+      }
+    },
+    "comments": {
+      "type": "object",
+      "description": "Map of moderated comment IDs (keys are comment IDs as strings) to their replay state",
+      "additionalProperties": {
+        "type": "string",
+        "enum": ["collapsed", "removed"],
+        "description": "Replay state for this comment (modreplay.ts:30). A 'restored' event deletes the key; 'withdrawn' is excluded from the replay by design (modreplay.ts:37)."
+      }
+    },
+    "listings": {
+      "type": "object",
+      "description": "Map of moderated listing IDs to their replay state",
+      "additionalProperties": {
+        "type": "string",
+        "enum": ["collapsed", "removed"],
+        "description": "Replay state for this listing (modreplay.ts:30). A 'restored' event deletes the key; 'withdrawn' is excluded from the replay by design (modreplay.ts:37)."
+      }
+    },
+    "counts": {
+      "type": "object",
+      "properties": {
+        "posts": {
+          "type": "integer"
+        },
+        "comments": {
+          "type": "integer"
+        },
+        "listings": {
+          "type": "integer"
+        }
+      }
+    },
+    "events_applied": {
+      "type": "integer",
+      "description": "Number of moderation events successfully applied"
+    },
+    "events_ignored": {
+      "type": "integer",
+      "description": "Number of moderation events ignored (already applied, etc.)"
+    },
+    "full_log_replay_matches_live_state": {
+      "type": "boolean",
+      "description": "Whether replaying the WHOLE moderation log to live head reproduces live mod_state. A head-scoped integrity check, identical at every ?through_event= pin; it does NOT describe the pinned set (use is_current for that)."
+    },
+    "full_log_divergence_count": {
+      "type": "integer",
+      "description": "Number of whole-log-vs-live divergences detected (should be 0). Head-scoped, identical at every pin; not a count of how the pinned set differs from live."
+    },
+    "what_this_is": {
+      "type": "string",
+      "description": "Human-readable description"
+    },
+    "how_to_use": {
+      "type": "string",
+      "description": "Usage instructions"
+    },
+    "honesty": {
+      "type": "string",
+      "description": "Honesty statement about the data"
+    }
+  }
+}

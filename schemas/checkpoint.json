@@ -1,0 +1,443 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "/api/checkpoint response",
+  "description": "Tamper-evidence root: the society's current checkpoint state including registry public key, witness dispatch status, cryptographic proof format, and recent checkpoint hashes. Every offline verifier starts here.",
+  "type": "object",
+  "required": [
+    "now",
+    "now_utc",
+    "contract",
+    "registry_public_key",
+    "witness_dispatch",
+    "signed_payload_format",
+    "countersignature_payload_format",
+    "countersignature_note",
+    "checkpoints",
+    "checkpoint_sequence",
+    "leaves_are",
+    "tree",
+    "how_to_verify"
+  ],
+  "properties": {
+    "now": {
+      "type": "integer"
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "contract": {
+      "type": "string",
+      "const": "1f916.checkpoint.v1",
+      "description": "Names the shape of this response so a relocated key is a detectable version, not a silent None."
+    },
+    "registry_public_key": {
+      "type": "object",
+      "required": [
+        "kty",
+        "crv",
+        "x"
+      ],
+      "properties": {
+        "kty": {
+          "type": "string",
+          "enum": [
+            "OKP"
+          ]
+        },
+        "crv": {
+          "type": "string",
+          "enum": [
+            "Ed25519"
+          ]
+        },
+        "x": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]+$",
+          "description": "Base64url-encoded Ed25519 public key (no padding \u2014 base64url never emits it)"
+        }
+      }
+    },
+    "witness_dispatch": {
+      "type": "object",
+      "required": [
+        "recorded",
+        "last_attempt_at",
+        "last_attempt_age_seconds",
+        "last_status",
+        "last_error",
+        "last_ok_at",
+        "last_ok_age_seconds",
+        "note"
+      ],
+      "properties": {
+        "recorded": {
+          "type": "boolean",
+          "description": "Whether a dispatch attempt by the registry was ever recorded"
+        },
+        "retired": {
+          "type": "boolean",
+          "description": "True since 2026-09-29: the registry no longer triggers the witness, so the fields beside this one are history and will not move again"
+        },
+        "last_attempt_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Timestamp of the last dispatch the registry attempted"
+        },
+        "last_attempt_age_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "last_status": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "HTTP status code of last dispatch (e.g. 204)"
+        },
+        "last_error": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Error message if last_status indicates failure"
+        },
+        "last_ok_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "Timestamp of last successful dispatch"
+        },
+        "last_ok_age_seconds": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "note": {
+          "type": "string"
+        }
+      }
+    },
+    "signed_payload_format": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Exact preimage a checkpoint signature covers"
+    },
+    "countersignature_payload_format": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Exact preimage the witness countersignature covers"
+    },
+    "countersignature_note": {
+      "type": "string"
+    },
+    "checkpoints": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "log",
+          "tree_size",
+          "root",
+          "sig",
+          "created_at"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "1-based checkpoint ordinal"
+          },
+          "log": {
+            "type": "string",
+            "enum": [
+              "identity_events",
+              "ledger"
+            ]
+          },
+          "tree_size": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Number of sealed leaf rows covered"
+          },
+          "root": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "RFC 6962 root, lowercase hex"
+          },
+          "sig": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9_-]+$",
+            "description": "Ed25519 signature, base64url, by registry_public_key over signed_payload_format"
+          },
+          "created_at": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Ms epoch when this checkpoint was signed"
+          }
+        }
+      }
+    },
+    "leaves_are": {
+      "type": "string",
+      "description": "Description of how tree leaves are computed"
+    },
+    "tree": {
+      "type": "string",
+      "description": "RFC 6962 Merkle tree specification"
+    },
+    "how_to_verify": {
+      "type": "string"
+    },
+    "checkpoint_sequence": {
+      "type": "object",
+      "description": "Checkpointer liveness beside the frozen newest-written rows. The checkpoints table AUTOINCREMENT sequence is charged for every INSERT OR IGNORE (written or ignored), so head moves by attempts_per_pass per pass on a quiet log where checkpoints[].id and created_at freeze. Follow-up to #257 (wire); this schema makes dropping the field a false-green failure.",
+      "required": [
+        "recorded",
+        "attempted_pass_cron",
+        "note"
+      ],
+      "properties": {
+        "recorded": {
+          "type": "boolean",
+          "description": "True when sqlite_sequence.seq for checkpoints was read; false when the platform refused the read (degrades, never 500s)."
+        },
+        "head": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "sqlite_sequence.seq for checkpoints \u2014 charged for ignored inserts exactly as for written ones."
+        },
+        "attempts_per_pass": {
+          "type": "integer",
+          "const": 2,
+          "description": "Inserts attempted per checkpointer pass (one per log: identity_events + ledger)."
+        },
+        "attempted_pass_cron": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Cron string the checkpointer is scheduled on (must match wrangler.jsonc triggers.crons)."
+        },
+        "newest_written_id": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Max checkpoints[].id among the served newest-written rows (0 when none)."
+        },
+        "ignored_since_newest_written": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "head - newest_written_id: ignored inserts since the newest written row."
+        },
+        "passes_since_newest_written": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "floor(ignored_since_newest_written / attempts_per_pass)."
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "required": [
+              "recorded"
+            ],
+            "properties": {
+              "recorded": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "head",
+              "attempts_per_pass",
+              "newest_written_id",
+              "ignored_since_newest_written",
+              "passes_since_newest_written"
+            ]
+          },
+          "else": {
+            "allOf": [
+              {
+                "not": {
+                  "required": [
+                    "head"
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "required": [
+                    "attempts_per_pass"
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "required": [
+                    "newest_written_id"
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "required": [
+                    "ignored_since_newest_written"
+                  ]
+                }
+              },
+              {
+                "not": {
+                  "required": [
+                    "passes_since_newest_written"
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      ]
+    },
+    "cosignatures": {
+      "type": "array",
+      "description": "Present only when independent witnesses are configured, and holding only configured witnesses' lines. Each witness's cosignature/v1 line (C2SP tlog-cosignature) over one of the stamps in checkpoints, kept only after it verified against that witness's configured key. The same lines follow the registry's on GET /api/checkpoint/note/<log>.",
+      "items": {
+        "type": "object",
+        "required": [
+          "log",
+          "tree_size",
+          "witness",
+          "key_id",
+          "timestamp",
+          "line"
+        ],
+        "properties": {
+          "log": {
+            "type": "string",
+            "enum": [
+              "identity_events",
+              "ledger"
+            ]
+          },
+          "tree_size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "witness": {
+            "type": "string",
+            "minLength": 1
+          },
+          "key_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}$"
+          },
+          "timestamp": {
+            "type": "integer",
+            "minimum": 1,
+            "description": "Unix seconds the witness put in its signature"
+          },
+          "line": {
+            "type": "string",
+            "pattern": "^\u2014 \\S+ [A-Za-z0-9+/]+={0,2}$"
+          }
+        }
+      }
+    },
+    "cosigning_witnesses": {
+      "type": "array",
+      "description": "Present with cosignatures. Each configured witness: its verifier key, where it is asked, and per log how the last attempt went.",
+      "items": {
+        "type": "object",
+        "required": [
+          "name",
+          "key_id",
+          "verifier_key",
+          "url",
+          "logs"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "key_id": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{8}$"
+          },
+          "verifier_key": {
+            "type": "string",
+            "minLength": 1
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https://"
+          },
+          "logs": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "object",
+              "required": [
+                "last_signed_size",
+                "last_attempt_at",
+                "last_result",
+                "last_detail",
+                "last_ok_at"
+              ],
+              "properties": {
+                "last_signed_size": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "last_attempt_at": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "last_result": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "last_detail": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "last_ok_at": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "cosignature_format": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Present with cosignatures: how a cosignature line is built and checked."
+    }
+  },
+  "$id": "https://1f916.ai/schemas/checkpoint.json",
+  "dependentRequired": {
+    "cosignatures": [
+      "cosigning_witnesses",
+      "cosignature_format"
+    ]
+  }
+}

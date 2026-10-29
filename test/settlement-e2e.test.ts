@@ -199,6 +199,10 @@ test("the fixture: $1 x 3 funded, three reproductions paid, the fourth cannot cr
   assert.equal(exhausted.economics.amount_paid_atomic, "3000000");
   assert.equal(exhausted.economics.outstanding_awarded_atomic, "0");
   assert.equal(exhausted.economics.maximum_remaining_liability_atomic, "0", "an exhausted, fully paid listing owes nothing and can owe nothing more");
+  const census = await railCensus(env) as Record<string, any>;
+  const reconciled = census.listings.find((r: Record<string, unknown>) => r.listing_id === listingId);
+  assert.equal(reconciled.award_receipt_reconciliation.state, "aligned", "every verified receipt is joined to the award it settled");
+  assert.equal(reconciled.award_receipt_reconciliation.receipts_outside_award_ledger, 0);
   assert.equal(await adapter.fundedBalance(listingId), "0");
 
   // Citizen D arrives after exhaustion. Their submission is accepted, because
@@ -1728,4 +1732,79 @@ test("treasury-funded work is never counted as outside demand", async () => {
   assert.match(census.demand_note, /token-related fees/);
   assert.match(census.demand_note, /is NOT external economic demand/);
   void db;
+});
+
+test("a receipt on a pre-v2 outside listing counts as outside money that moved, even though no award ledger can record it", async () => {
+  const { env, db } = makeEnv();
+  // Listing 11 in production: posted by an outsider before settlement v2,
+  // paid on chain, receipt filed and verified, award ledger empty because
+  // v1 listings have none. demand.external.paid_atomic_by_asset read 0 for
+  // it, and the public page turned that 0 into "outside-funded payments $0".
+  db.prepare(
+    `INSERT INTO listings (citizen_id, title, condition, amount_atomic, chain_id, token, expiry, payload_hash, commit_nonce, created_at, settlement_version)
+     VALUES (2, 'Outside bounty', ?, '500000', 8453, '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', ?, 'h-out', 'n-out', 0, 1)`,
+  ).run(CONDITION, NOW + 86400);
+  // And a treasury one beside it, so the sides are told apart.
+  db.prepare(
+    `INSERT INTO listings (citizen_id, title, condition, amount_atomic, chain_id, token, expiry, payload_hash, commit_nonce, created_at, settlement_version)
+     VALUES (1, 'Treasury bounty', ?, '1000000', 8453, '0x833589fcd6edb6e08f4c7c32d4f71b54bda02913', ?, 'h-tre', 'n-tre', 0, 1)`,
+  ).run(CONDITION, NOW + 86400);
+  db.prepare("INSERT INTO payout_bindings (citizen_id, docket_id, amount_atomic, payout_address, expiry, created_at) VALUES (3, 'listing-1', '500000', '0xa', ?, 0)").run(NOW + 86400);
+  db.prepare("INSERT INTO payout_bindings (citizen_id, docket_id, amount_atomic, payout_address, expiry, created_at) VALUES (4, 'listing-1', '500000', '0xb', ?, 0)").run(NOW + 86400);
+  db.prepare("INSERT INTO payout_bindings (citizen_id, docket_id, amount_atomic, payout_address, expiry, created_at) VALUES (3, 'listing-2', '1000000', '0xa', ?, 0)").run(NOW + 86400);
+  // Two of the three bindings are receipted: one outside, one treasury. The
+  // unreceipted outside binding is a routing record and must add nothing.
+  db.prepare("INSERT INTO payout_receipts (funding_relationship, binding_id, submitter_id, tx_hash, source_address, created_at) VALUES ('independent', 1, 3, '0xout', '0xoutsider', 0)").run();
+  db.prepare("INSERT INTO payout_receipts (funding_relationship, binding_id, submitter_id, tx_hash, source_address, created_at) VALUES ('self', 3, 3, '0xtre', '0xtreasury', 0)").run();
+
+  const census = await railCensus(env) as Record<string, any>;
+  const USDC = "8453:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+  const outside = census.listings.find((r: Record<string, unknown>) => r.listing_id === 1);
+  // The ledger figure stays honest about its own scope: it sees no award.
+  assert.equal(outside.economics.amount_paid_atomic, "0", "no award ledger on a v1 listing, so the ledger-derived figure is 0");
+  assert.equal(census.demand.external.paid_atomic_by_asset[USDC], "0");
+  // KILLING MUTATION: in railCensus change the receipted query's
+  // `JOIN payout_receipts pr ON pr.binding_id = pb.id` to a LEFT JOIN. Then
+  // the unreceipted binding is summed too, the row reads 1000000 instead of
+  // 500000, and the rail once again reports a routing record as money that
+  // moved. A second mutation, deleting the query entirely, drops the field
+  // and every assertion below fails on undefined.
+  assert.equal(outside.receipted_paid_atomic_by_asset[USDC], "500000", "one receipt on the outside listing, and only the receipted binding is counted");
+  assert.equal(census.demand.external.receipts, 1);
+  assert.equal(census.demand.external.receipted_paid_atomic_by_asset[USDC], "500000", "outside money that demonstrably moved");
+  assert.equal(census.demand.treasury_funded.receipts, 1);
+  assert.equal(census.demand.treasury_funded.receipted_paid_atomic_by_asset[USDC], "1000000", "and the treasury's receipt lands on the treasury side, never added to it");
+  // The disclosure travels with the figures.
+  assert.match(census.demand_note, /receipted_paid_atomic_by_asset/);
+  assert.match(census.demand_note, /BLIND to every payment on a pre-v2 listing/);
+  assert.match(census.derivations.demand, /joined to payout_receipts/);
+  void db;
+});
+
+test("a receipt outside a v2 award ledger is an explicit reconciliation state, not a zero a reader must diagnose", async () => {
+  const { env, db } = makeEnv();
+  await createListing(env, AS(1, "funder"), {
+    title: "Independent receipt reconciliation",
+    condition: CONDITION,
+    amount_atomic: DOLLAR,
+    expiry: NOW + 86400,
+    max_awards: 1,
+    funding_mode: "promise",
+    settlement_mode: "requester",
+  });
+  db.prepare("INSERT INTO payout_bindings (citizen_id, docket_id, amount_atomic, payout_address, expiry, created_at) VALUES (2, 'listing-1', ?, '0xpayee', ?, 0)")
+    .run(DOLLAR, NOW + 86400);
+  db.prepare("INSERT INTO payout_receipts (funding_relationship, binding_id, submitter_id, tx_hash, source_address, created_at) VALUES ('independent', 1, 2, '0xtx', '0xfunder', 0)")
+    .run();
+
+  const census = await railCensus(env) as Record<string, any>;
+  const row = census.listings.find((r: Record<string, unknown>) => r.listing_id === 1);
+  const USDC = "8453:0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
+
+  assert.equal(row.economics.amount_paid_atomic, "0", "the award ledger still correctly reports no paid award");
+  assert.equal(row.receipted_paid_atomic_by_asset[USDC], DOLLAR, "the verified payment remains visible as money moved");
+  assert.equal(row.award_receipt_reconciliation.state, "receipts-outside-award-ledger");
+  assert.equal(row.award_receipt_reconciliation.receipts_outside_award_ledger, 1);
+  assert.match(row.award_receipt_reconciliation.note, /receipt proves money moved, not that work was accepted/i);
+  assert.match(row.award_receipt_reconciliation.note, /absent from award-ledger economics/i);
 });

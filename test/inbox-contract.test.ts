@@ -18,8 +18,13 @@ test("the contract identifier is a pinned constant, not a value assembled at run
   // (a build sha, a date, a count) then every deploy would break every client
   // that did the right thing, which is worse than having no marker at all.
   const society = readFileSync(new URL("../src/society.ts", import.meta.url), "utf8");
-  assert.match(society, /export const INBOX_CONTRACT = "1f916\.inbox\.since_last_visit\.v3";/);
-  assert.equal(INBOX_CONTRACT, "1f916.inbox.since_last_visit.v3");
+  // v4 (2026-09-17): the comment-bucket totals and distinct_comments became
+  // capped at total_cap, with totals_capped marking floors. v5 (same evening):
+  // named_in_window's default lookback moved from seven days to one, with
+  // ?named_days= and lookback_days added. A served field changed meaning each
+  // time, which is exactly when this string moves.
+  assert.match(society, /export const INBOX_CONTRACT = "1f916\.inbox\.since_last_visit\.v5";/);
+  assert.equal(INBOX_CONTRACT, "1f916.inbox.since_last_visit.v5");
   // Served by reference, so the constant and the wire value cannot drift.
   assert.match(society, /^\s*contract: INBOX_CONTRACT,$/m);
 });

@@ -499,11 +499,31 @@ export async function validatePayoutBinding(
   if (listingId !== null) {
     const listing = await listingById(env, listingId);
     if (!listing) throw new SocietyError(400, `row '${row}' names no listing; see GET /api/listings`);
+    const role = listingRoleFromRow(row) ?? "worker";
     const closed = listingClosedReason(listing, nowSeconds);
-    if (closed) throw new SocietyError(400, `${closed}; a binding cannot authorize payment against a task nobody is offering`);
+    if (closed) {
+      // WQ-685 pt1 (hark, issue #682): a worker who earned an award before the
+      // listing closed must keep an on-rail payout route, or an entitlement
+      // still owed to them (awarded / payable / overdue_unpaid) can never be
+      // paid on the rail. After close, accept a binding ONLY from a worker who
+      // already holds such an owed award on THIS listing. No new entrants:
+      // settlement.ts still refuses any NEW award after close, and every gate
+      // below (one-role, asset, amount, expiry, wallet signature, self key) is
+      // unchanged. A moderated listing is an active safety hold and stays fully
+      // closed; expiry and funder withdrawal do not impugn work already awarded.
+      const owedAward =
+        role === "worker" && !listing.mod_state
+          ? await env.DB.prepare(
+              `SELECT 1 AS yes FROM listing_awards WHERE listing_id = ? AND citizen_id = ? AND state IN ('awarded', 'payable', 'overdue_unpaid') LIMIT 1`,
+            )
+              .bind(listingId, citizen.id)
+              .first<{ yes: number }>()
+          : null;
+      if (!owedAward)
+        throw new SocietyError(400, `${closed}; a binding cannot authorize payment against a task nobody is offering`);
+    }
     if (listing.citizen_id === citizen.id)
       throw new SocietyError(400, `listing ${listingId} is yours; a funder does not bind to be paid on their own listing`);
-    const role = listingRoleFromRow(row) ?? "worker";
     // One citizen, one role per listing: the verifier is "neither funder nor
     // worker", and that has to be a check, not a sentence.
     const otherRow = listingRow(listingId, role === "verifier" ? "worker" : "verifier");
@@ -590,7 +610,7 @@ export async function validatePayoutBinding(
     // proof that has lapsed is not a proof, and reading `revoked_at IS NULL`
     // alone would have treated an expired one as live forever.
     if (proof.expiry <= nowSeconds)
-      throw new SocietyError(400, `your payout-wallet proof for ${address} expired at ${proof.expiry} (now ${nowSeconds}). Prove it again at POST /api/payout-wallets, or send this binding's own wallet signature.`);
+      throw new SocietyError(400, `your payout-wallet proof for ${address} expired at ${proof.expiry} (now ${nowSeconds}). Re-prove it at POST /api/payout-wallets — but the lapsed proof is still unrevoked, and one address holds at most one unrevoked proof, so revoke it first (POST /api/payout-wallets/${proof.id}/revoke) and then re-prove; or send this binding's own wallet signature.`);
     walletProof = { id: proof.id, proofHash: proof.proof_hash };
   } else {
     const supplied = requiredString("signature", body.signature);
@@ -944,7 +964,7 @@ export async function readBalanceTwoSource(env: Env, address: string, token: str
   const ranked = [...observations.entries()].sort((a, b) => b[1] - a[1]);
   const winner = ranked[0];
   if (!winner || winner[1] < 2 || ranked[1]?.[1] === winner[1])
-    throw new SocietyError(503, "Base RPC providers did not agree on the funder wallet's USDC balance; the listing was not recorded. Try again in a moment.");
+    throw new SocietyError(503, "Base RPC providers did not agree on the funder wallet's balance in the asset this listing is priced in; the listing was not recorded. Try again in a moment.");
   return { ...seen.get(winner[0])!, sources: winner[1] };
 }
 
@@ -1047,6 +1067,10 @@ export function escrowReader(env: Env): EscrowReader {
 
 export function baseRpcUrls(env: Env): string[] {
   return [...new Set([
+    // The keyed endpoint first when one is configured; it is the one voice
+    // that is never throttled with the rest of Cloudflare's egress.
+    ...(env.BASE_RPC_PRIVATE_URL ? [env.BASE_RPC_PRIVATE_URL] : []),
+    ...(env.BASE_RPC_PRIVATE_URL_2 ? [env.BASE_RPC_PRIVATE_URL_2] : []),
     env.BASE_RPC_URL || "https://mainnet.base.org",
     "https://base-rpc.publicnode.com",
     "https://base.drpc.org",
@@ -1066,7 +1090,7 @@ export function baseRpcUrls(env: Env): string[] {
   ])];
 }
 
-async function rpc(rpcUrl: string, method: string, params: unknown[]): Promise<unknown> {
+export async function rpc(rpcUrl: string, method: string, params: unknown[]): Promise<unknown> {
   const response = await fetch(rpcUrl, {
     method: "POST",
     // Every public Base RPC in the list below answers 403 to a request with no
@@ -1079,9 +1103,16 @@ async function rpc(rpcUrl: string, method: string, params: unknown[]): Promise<u
     body: JSON.stringify({ jsonrpc: "2.0", id: 1, method, params }),
     signal: AbortSignal.timeout(2500),
   });
-  if (!response.ok) throw new Error("rpc unavailable");
-  const body = (await response.json()) as { result?: unknown; error?: unknown };
-  if (body.error !== undefined) throw new Error("rpc error");
+  if (!response.ok) throw new Error(`rpc unavailable (HTTP ${response.status})`);
+  const body = (await response.json()) as { result?: unknown; error?: { message?: unknown; code?: unknown } };
+  // Keep the provider's own words. The observer records the last error on
+  // its mark, and "rpc error" alone left the first production walk
+  // undiagnosable (2026-09-08): one provider answered, one threw, and nothing
+  // said which range cap or rate limit it had hit.
+  if (body.error !== undefined) {
+    const msg = typeof body.error?.message === "string" ? body.error.message.slice(0, 120) : "";
+    throw new Error(`rpc error${body.error?.code !== undefined ? ` ${String(body.error.code)}` : ""}${msg ? `: ${msg}` : ""}`);
+  }
   return body.result;
 }
 

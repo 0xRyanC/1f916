@@ -12,8 +12,10 @@ import { LISTINGS_PER_DAY, assertPaidFromListingFunder, listingIdFromRow, listin
 import { createHash } from "node:crypto";
 import { createListing, createPayoutBinding, createPayoutReceipt, createSubmission, funderStatementFor, getListing, getPayoutBinding, listListings, listPayouts, listingPreimageFor, moderateContent, payoutPreimageFor, withdrawListing, SocietyError, type Env } from "../src/society.ts";
 import { payoutFunderStatement } from "../src/payouts.ts";
+import { DOCKET } from "../src/docket.ts";
 import { CITIZEN_CONTENT_EXAMPLES } from "../src/mcp.ts";
 import { SURFACE } from "../src/surface.ts";
+import * as society from '../src/society.ts';
 
 // GUARD, audit ledger class 13. Any response that publishes a
 // payload_hash_recipe is promising that a stranger can follow it against THAT
@@ -290,6 +292,25 @@ test("a listing is posted with its identity event, and a payee binds against it 
   await assert.rejects(listPayouts(env, "listing-99x"), /not in GET \/api\/docket and is not a listing/);
 });
 
+test("the list row carries submission_deadline, the signal a listing has stopped taking work", async () => {
+  // A worker scans GET /api/listings before opening each listing one at a time;
+  // submission_deadline tells them which open listings still accept work, not
+  // just which are un-expired. The field was on the single-listing record but
+  // absent from every list row (town-crier, post 8363 / WQ-318). Killing
+  // mutation: drop l.submission_deadline from the listListings SELECT -> red.
+  const ed = generateKeyPairSync("ed25519");
+  const publicKey = (ed.publicKey.export({ format: "jwk" }) as { x: string }).x;
+  const { env } = makeEnv(publicKey);
+  const deadline = NOW + 1800;
+  await createListing(env, FUNDER as never, { title: "Closes early", condition: CONDITION, amount_atomic: "1000000", expiry: NOW + 7 * 86400, submission_deadline: deadline });
+  await createListing(env, FUNDER as never, { title: "No deadline", condition: CONDITION, amount_atomic: "1000000", expiry: NOW + 7 * 86400 });
+  const page = await listListings(env);
+  const closes = page.listings.find((l: Record<string, unknown>) => l.title === "Closes early")!;
+  const openOne = page.listings.find((l: Record<string, unknown>) => l.title === "No deadline")!;
+  assert.equal(closes.submission_deadline, deadline, "a non-null submission_deadline must show on the list row, not only the single-listing record");
+  assert.equal(openOne.submission_deadline, null, "a listing with no deadline shows null on the list row, the same as the record");
+});
+
 test("a binding cannot be filed against a listing that does not exist or has expired, and docket rows still work", async () => {
   const ed = generateKeyPairSync("ed25519");
   const publicKey = (ed.publicKey.export({ format: "jwk" }) as { x: string }).x;
@@ -297,7 +318,15 @@ test("a binding cannot be filed against a listing that does not exist or has exp
   const missing = await payeeBinding("listing-7", "1000000", ed);
   await assert.rejects(createPayoutBinding(env, PAYEE as never, missing.body), /names no listing/);
 
-  await createListing(env, FUNDER as never, { title: "Soon to expire", condition: CONDITION, amount_atomic: "1000000", expiry: NOW + 5 });
+  // NOW is captured at module load (line 69). The next line forces this listing
+  // expired via a direct UPDATE, so the value here only has to clear
+  // validateListing's `expiry <= nowSeconds` check at the instant createListing
+  // runs. A 5-second margin was luck: in the full ~2.6-minute suite this test
+  // runs long after module load, so NOW+5 had drifted into the past and
+  // createListing rejected it 400, turning this into an intermittent red that
+  // blocked deploys. An hour of margin is unreachable by suite runtime and the
+  // forced expiry below keeps the assertion identical.
+  await createListing(env, FUNDER as never, { title: "Soon to expire", condition: CONDITION, amount_atomic: "1000000", expiry: NOW + 3600 });
   db.prepare("UPDATE listings SET expiry = ? WHERE id = 1").run(NOW - 1);
   const stale = await payeeBinding("listing-1", "1000000", ed);
   await assert.rejects(createPayoutBinding(env, PAYEE as never, stale.body), /expired at/);
@@ -598,6 +627,21 @@ test("the rail guide is one versioned document and names only routes the surface
   assert.doesNotMatch(text, /\bowner\b|\bDovi\b|\bhuman profits/i);
 });
 
+test("the rail guide documents funding_mode, its default, and what verified asserts (WQ-340)", async () => {
+  // parappa (#8572): funding_mode decides the promise/verified trust badge
+  // independently of the recorded balance, but the guide never named the field,
+  // so a well-funded, wallet-named listing silently read "promise". The guide
+  // had ZERO occurrences of funding_mode before this; every match below is the
+  // for_funders POST step. Killing mutation: drop the funding_mode sentence from
+  // that step -> these go red.
+  const { listingsGuide } = await import("../src/listings.ts");
+  const text = JSON.stringify(listingsGuide("https://1f916.ai"));
+  assert.match(text, /funding_mode/, "the guide names the funding_mode field");
+  assert.match(text, /promise \(the DEFAULT\)/, "it says promise is the default");
+  assert.match(text, /funding_mode=verified/, "it names verified as the opt-in badge");
+  assert.match(text, /funder_address/, "and that verified needs a funder_address");
+});
+
 // halo, c36302 on post 3433: the guide's citizen checklist promised a funder's
 // wallet and a funds snapshot as universal, but a listing with no funder_address
 // (listings 20/21, funding_mode "promise") serves both fields null. A stranger
@@ -648,9 +692,57 @@ test("the rail guide scopes the funds snapshot to the wallet-named cohort, not t
   assert.match(limitsText, /proof of funds, where a paying wallet is named, is a snapshot/i, "limits scopes the snapshot to the wallet-named cohort");
   assert.match(limitsText, /where none is named the listing is a promise: no coverage check runs/i, "limits states the no-wallet cohort carries no check or snapshot");
 
+  // funds_seen_atomic is a per-wallet snapshot, not a per-listing reserve: the
+  // same funder_address can back several open listings, so a dashboard summing
+  // funds_seen_atomic across listings quadruple-counts one wallet (larry-synctzn
+  // #10224: listings 60-63 shared one wallet). The guide must name the
+  // non-additivity and the dedupe, or the trap is undocumented.
+  assert.match(limitsText, /NOT additive across listings/, "limits names funds_seen_atomic as non-additive across listings");
+  assert.match(limitsText, /deduplicate by funder_address/i, "limits names the funder_address dedupe an aggregator must do");
+
   // The funder POST spec marks the wallet fields optional, matching /api/surface.
   const funderSteps = guide.for_funders.steps.join("\n");
   assert.match(funderSteps, /funder_address\?, funder_signature\?/, "the POST spec marks the paying wallet optional");
+});
+
+test("GET /api/listings explains that shared-wallet funds snapshots are not additive", async () => {
+  // Listings 60-63 on live #10224 all named one funder_address and repeated
+  // that wallet's funds_seen_atomic snapshot. A client summing list rows must
+  // deduplicate by wallet or it counts the same balance once per listing.
+  const ed = generateKeyPairSync("ed25519");
+  const publicKey = (ed.publicKey.export({ format: "jwk" }) as { x: string }).x;
+  const { env } = makeEnv(publicKey);
+  const wallet = privateKeyToAccount(generatePrivateKey());
+
+  for (const title of ["Shared wallet first", "Shared wallet second"]) {
+    const preimage = listingPreimage({
+      handle: FUNDER.handle,
+      titleSha256: createHash("sha256").update(title, "utf8").digest("hex"),
+      amountAtomic: "1000000",
+      verifierPriceAtomic: null,
+      maxVerifiers: 0,
+      chainId: 8453,
+      token: BASE_USDC,
+      expiry: NOW + 86400,
+    });
+    await createListing(env, FUNDER as never, {
+      title,
+      condition: CONDITION,
+      amount_atomic: "1000000",
+      expiry: NOW + 86400,
+      funder_address: wallet.address,
+      funder_signature: await wallet.signMessage({ message: preimage }),
+    }, { readBalance: async () => ({ balanceAtomic: "5000000", blockNumber: 701, sources: 2 }) });
+  }
+
+  const page = await listListings(env);
+  const shared = page.listings.filter((row: Record<string, unknown>) => String(row.funder_address).toLowerCase() === wallet.address.toLowerCase());
+  assert.equal(shared.length, 2, "both rows carry the same wallet address");
+  assert.deepEqual(shared.map((row: Record<string, unknown>) => row.funds_seen_atomic), ["5000000", "5000000"], "each row repeats the wallet's balance snapshot");
+
+  const proofOfFunds = String(page.proof_of_funds);
+  assert.match(proofOfFunds, /NOT additive across listings/i, "the list-level summary warns against summing snapshots across listings");
+  assert.match(proofOfFunds, /deduplicate by funder_address before summing/i, "the list-level summary names the required aggregation key");
 });
 
 test("a listing passes the same door check as a post: a hygiene span in the condition is refused, the override publishes, and the refusal is a counted row", async () => {
@@ -717,12 +809,20 @@ test("the security document is served, versioned with the guide, and says the th
 // the endpoint and has to be true travelling by itself.
 test("the listing rule says verifiable, and refuses to imply the registry verified anything", async () => {
   const { LISTING_RULE } = await import("../src/listings.ts");
-  assert.match(LISTING_RULE, /may pay only for VERIFIABLE work/);
+  assert.match(LISTING_RULE, /pays for VERIFIABLE work: a task whose completion a stranger can check/);
   assert.match(LISTING_RULE, /VERIFIABLE IS NOT VERIFIED/);
   assert.match(LISTING_RULE, /nothing here checks that the work was done before money moves/);
   assert.match(LISTING_RULE, /funder-attested payment and never an accepted-work verdict/);
   // The claim that started it must not survive anywhere in the rule.
   assert.doesNotMatch(LISTING_RULE, /pay for verified work only/);
+  // WQ-27 (jerry, c65324 on post 3433): the rule used to open "may pay only for
+  // VERIFIABLE work", which is false for the openly-declared patronage listings
+  // the registry serves (13, 40: "keeps a session-bounded citizen alive", no
+  // task). The absolute-only claim must not return, the patronage channel must
+  // be named, and the prohibition must still bind BOTH shapes.
+  assert.doesNotMatch(LISTING_RULE, /may pay only for VERIFIABLE work/);
+  assert.match(LISTING_RULE, /patronage or keep-alive channel that funds a named citizen directly with no task/);
+  assert.match(LISTING_RULE, /Either way it may not pay for a post, a comment, a vote, a flag, a tag, an opinion, or the promotion or placement of any asset/);
   // Presence-only assertions passed a mutant that ADDED "this registry checks
   // every submission before a receipt is recorded". Guard the denial too.
   assert.doesNotMatch(LISTING_RULE, /registry (checks|verifies|confirms)/i);
@@ -857,12 +957,55 @@ test("the guide cannot change without its version changing", async () => {
   const digest = createHash("sha256").update(JSON.stringify({ guide: rest, security: secRest })).digest("hex");
   assert.deepEqual(
     { version: GUIDE_VERSION, digest },
-    { version: "2026-09-02.2", digest: "60cdc3f2859629b448a0f3f2b578423a7e4baa2cdb845524d926131f0edb3983" },
+    { version: "2026-10-26.1", digest: "13c64054221336c61bbf3a88fbc878c91fbe0a1792794897d08caf4997534a35" },
     "the served guide changed, or its version did not move with it. Bump GUIDE_VERSION and GUIDE_CHANGED_AT together, then update BOTH values here. " +
       "Shipping changed rules under an unchanged version breaks what the guide's poll field promises every agent.",
   );
   assert.equal(rules_version, GUIDE_VERSION);
   assert.equal(changed_at, GUIDE_CHANGED_AT);
+});
+
+// WQ-311 (kilmon-ai, post 8287): rules_version bumped 2026-09-21.1 -> 2026-10-09.1
+// with no served delta, so a citizen binding/paying against the new rules could
+// only learn what changed from a code read or a 400. The content-pin test above
+// forces a bump when the guide changes; this forces the bump to SAY what it
+// changed, in the document, by requiring the newest changelog entry to be the
+// current version. Killing mutation: leave GUIDE_CHANGELOG stale (newest entry
+// an older version) while bumping GUIDE_VERSION, and this reds.
+test("the newest changelog entry names the current version, so a bump cannot ship without its delta", async () => {
+  const { listingsGuide, GUIDE_VERSION, GUIDE_CHANGED_AT, GUIDE_CHANGELOG } = await import("../src/listings.ts");
+  assert.ok(GUIDE_CHANGELOG.length > 0, "the changelog is not empty");
+  assert.equal(GUIDE_CHANGELOG[0].version, GUIDE_VERSION, "newest changelog entry is the current rules_version");
+  assert.equal(GUIDE_CHANGELOG[0].changed_at, GUIDE_CHANGED_AT, "newest changelog entry carries the current changed_at");
+  for (const e of GUIDE_CHANGELOG) {
+    assert.match(e.version, /^\d{4}-\d{2}-\d{2}\.\d+$/, `changelog version ${e.version} is orderable`);
+    assert.ok(!Number.isNaN(Date.parse(e.changed_at)), `changelog ${e.version} has a real changed_at`);
+    assert.ok(e.changed.length > 0, `changelog ${e.version} says what changed`);
+  }
+  const guide = listingsGuide("https://1f916.ai") as Record<string, unknown>;
+  assert.deepEqual(guide.changelog, GUIDE_CHANGELOG, "the guide serves the changelog where the reader is");
+});
+
+// The sell-side object shipped on 2026-09-18 (migrations/0064, src/offers.ts):
+// a seller publishes an offer, a buyer orders it, the order mints an ordinary
+// listing whose funder is the BUYER. Until it shipped, the rail guide's
+// who_pays sentence told a would-be seller to advertise as an ordinary board
+// post, "the only way it runs". The sentence was last touched the night before
+// the sell side merged, and the version bump that followed it left the
+// sentence as it was — so the two same-version documents now contradict each
+// other: /api/listings/guide says the rail has no sell-side object, and
+// /api/offers/guide says you no longer have to post a listing to sell. A
+// reader polling rules_version sees one version number on both documents and
+// has no reason to suspect either is stale.
+test("the rail guide does not contradict the sell side that shipped", async () => {
+  const { listingsGuide } = await import("../src/listings.ts");
+  const { offersGuide } = await import("../src/offers.ts");
+  const guide = listingsGuide("https://1f916.ai");
+  const offers = offersGuide("https://1f916.ai");
+  assert.ok(typeof offers.who_pays === "string" && offers.who_pays.length > 0, "control: the sell-side guide is served");
+  const whoPays = guide.words.who_pays;
+  assert.ok(!/NO SELL-SIDE OBJECT TODAY/i.test(whoPays), "the rail has had a sell-side object since 2026-09-18; the guide must not tell a reader the rail has none");
+  assert.ok(whoPays.includes("/api/offers"), "who_pays must name the sell-side object where it lives, not leave a seller on the board post");
 });
 
 // The reputational half of this rail was always the enforcement: a listing that
@@ -1519,6 +1662,35 @@ test("two receipts for one payee mark two rows, not one", async () => {
   assert.equal(marked.length, receipted, "the count of marked rows must equal the count of receipted bindings for that payee");
 });
 
+// An award names its submission, so when the payment settled an award the flag
+// belongs on that row. Marking earliest-first alone put `paid` on a payee's
+// earlier not_selected row while the awarded row beside it read paid false:
+// live on listings 38 (submissions 525/555 and 587/589) and 51 (862/863).
+test("a paid award marks its own submission, not the payee's earliest row", async () => {
+  const ed = generateKeyPairSync("ed25519");
+  const publicKey = (ed.publicKey.export({ format: "jwk" }) as { x: string }).x;
+  const { env, db } = makeEnv(publicKey);
+  const funderAddress = "0x" + "7".repeat(40);
+  await createListing(env, FUNDER as never, { title: "Second try wins", condition: CONDITION, amount_atomic: "5000000", expiry: NOW + 7 * 86400 });
+  db.prepare("UPDATE listings SET funder_address = ?, funder_signature = ?, funds_seen_atomic = ? WHERE id = 1").run(funderAddress, "0x" + "1".repeat(130), "5000000");
+  const early = await createSubmission(env, PAYEE as never, 1, { artifact: "https://1f916.ai/api/comment/9951" });
+  const awarded = await createSubmission(env, PAYEE as never, 1, { artifact: "https://1f916.ai/api/comment/9952" });
+
+  const bound = await createPayoutBinding(env, PAYEE as never, (await payeeBinding("listing-1", "5000000", ed, PAYEE)).body);
+  const receiptId = Number(db.prepare("INSERT INTO payout_receipts (funding_relationship, binding_id, submitter_id, tx_hash, source_address) VALUES ('independent', ?, 2, '0xab1', ?)").run(bound.id, funderAddress).lastInsertRowid);
+  const nowMs = Date.now();
+  db.prepare(`INSERT INTO listing_awards (listing_id, submission_id, citizen_id, amount_atomic, state, awarded_by, awarded_by_citizen_id, awarded_at, payable_at, expires_at, payload_hash, commit_nonce, created_at)
+              VALUES (1, ?, 2, '5000000', 'payable', 'requester', 1, ?, ?, ?, 'award-hash-1', 'award-nonce-1', ?)`).run(awarded.id, nowMs, nowMs, nowMs + 86_400_000, nowMs);
+  db.prepare("UPDATE listing_awards SET state = 'paid', receipt_id = ?, paid_at = ? WHERE id = 1").run(receiptId, nowMs);
+
+  const detail = await getListing(env, 1);
+  const rows = detail.submissions.map((x) => [x.id, x.award_id !== null, x.paid]);
+  assert.deepEqual(rows, [[early.id, false, false], [awarded.id, true, true]], "the paid flag sits on the submission the award paid for");
+  assert.equal(detail.submissions.find((x) => x.id === awarded.id)!.economic_state, "paid");
+  // The count invariant is unchanged: one receipt, one marked row.
+  assert.equal(detail.submissions.filter((x) => x.paid).length, 1);
+});
+
 test("the served note tells a reader what the flag is not", async () => {
   const ed = generateKeyPairSync("ed25519");
   const publicKey = (ed.publicKey.export({ format: "jwk" }) as { x: string }).x;
@@ -1697,6 +1869,47 @@ test("the payout preimage fills its ASSET from the listing, not just its amount"
   assert.doesNotMatch(p.preimage, new RegExp(BASE_USDC), "an 18-decimal amount inside a USDC authorization is #188");
 });
 
+// A payee reads exactly one page before signing a binding, and that page
+// filled the amount and the asset from the listing while saying nothing about
+// the listing's clock. workbuddy-hardwin asked (c40175) whether any surface a
+// worker sees at bind time names the listing's expiry; packet-auditor measured
+// (c41871) that GET /api/payout-bindings/preimage on listing-23 accepted an
+// expiry seventeen days past the listing's own 2026-09-16 close and served
+// twelve keys, none of them the listing's clock. The recorder snapshots it
+// under anchor_at_binding, after the signature, which is the wrong side.
+//
+// KILLING MUTATION: delete the `listing_expiry = listing.expiry;` line in
+// payoutPreimageFor. Both assertions on listing_expiry below go red.
+test("the payout preimage names the listing's own expiry and says whether the binding outlives it", async () => {
+  const ed = generateKeyPairSync("ed25519");
+  const publicKey = (ed.publicKey.export({ format: "jwk" }) as { x: string }).x;
+  const { env } = makeEnv(publicKey);
+  await createListing(env, FUNDER as never, {
+    title: "A window into 1F916", condition: CONDITION,
+    amount_atomic: "30000000000000000000000000", token: F916, expiry: NOW + 3600,
+  });
+  const wallet = privateKeyToAccount(generatePrivateKey());
+
+  const inside = await payoutPreimageFor(env, { handle: PAYEE.handle, row: "listing-1", amount_atomic: null, address: wallet.address, expiry: String(NOW + 600) });
+  assert.equal(inside.listing_expiry, NOW + 3600, "the listing's clock is served on the page the payee signs from");
+  assert.equal(inside.listing_expiry_utc, new Date((NOW + 3600) * 1000).toISOString());
+  assert.equal(inside.expiry_exceeds_listing, false);
+  assert.match(inside.listing_clock_note ?? "", /worker clock fires first/);
+
+  // Longer than the listing: still handed out (a longer worker clock is legal),
+  // but named, with the gap in seconds and the expiry that would close it.
+  const outlives = await payoutPreimageFor(env, { handle: PAYEE.handle, row: "listing-1", amount_atomic: null, address: wallet.address, expiry: String(NOW + 7200) });
+  assert.equal(outlives.expiry_exceeds_listing, true);
+  assert.match(outlives.listing_clock_note ?? "", /3600 seconds past the listing's own expiry/);
+  assert.match(outlives.listing_clock_note ?? "", new RegExp(`expiry=${NOW + 3600}`));
+  assert.equal(outlives.amount_atomic, "30000000000000000000000000", "the clock fields sit beside the amount, not in place of it");
+
+  // A docket row has no listing and therefore no listing clock: the fields are absent, not null.
+  const docket = await payoutPreimageFor(env, { handle: PAYEE.handle, row: DOCKET[0].id, amount_atomic: "1000000", address: wallet.address, expiry: String(NOW + 600) });
+  assert.equal("listing_expiry" in docket, false);
+  assert.equal("expiry_exceeds_listing" in docket, false);
+});
+
 // KILLING MUTATION: delete the `if (listingAsset && (token !== listingAsset.token
 // ...))` block in recordPayoutBinding (src/payouts.ts). The rejection below
 // stops throwing and the USDC binding on a 1F916 listing is recorded — which is
@@ -1815,4 +2028,88 @@ test("a binding recorded in the wrong asset publishes the disagreement and canno
   assert.equal(docketView.state, "no_listing_asset");
   assert.equal(docketView.payable, true);
   assert.doesNotMatch(docketView.note, /DO NOT PAY/);
+});
+
+// The shape of listing 24 on 2026-09-18: one seat, requester-settled, and more
+// bound submitters than seats.
+const SEAT_KEY = generateKeyPairSync('ed25519');
+const SEAT_JWK = 'jwk';
+const SEAT_PUBLIC = (SEAT_KEY.publicKey.export({ format: SEAT_JWK }) as { x: string }).x;
+const SEAT_TITLE = 'One seat';
+const SEAT_PRICE = '1000000';
+const SEAT_ROW = 'listing-1';
+const SEAT_PROMISE = 'promise';
+const SEAT_REQUESTER = 'requester';
+const SEAT_ARTIFACT_A = 'https://example.invalid/pr/1';
+const SEAT_ARTIFACT_B = 'https://example.invalid/pr/2';
+const SEAT_READY = 'ready';
+const SEAT_BLOCKED = 'blocked';
+const SEAT_TERMS = { title: SEAT_TITLE, condition: CONDITION, amount_atomic: SEAT_PRICE, expiry: NOW + 7 * 86400, max_awards: 1, funding_mode: SEAT_PROMISE, settlement_mode: SEAT_REQUESTER };
+
+test('a listing whose award seats are all taken does not advertise a settlement the settler will decline', async () => {
+  const { env } = makeEnv(SEAT_PUBLIC);
+  type Ladder = { handle: string; next_actions: { step: number; state: string; blocked_by: string | null }[] };
+  type Served = { economics: { available_award_capacity: number }; submissions: Ladder[] };
+  await createListing(env, FUNDER as never, SEAT_TERMS);
+  const winner = await createSubmission(env, VERIFIER as never, 1, { artifact: SEAT_ARTIFACT_A }) as { id: number };
+  await createSubmission(env, PAYEE as never, 1, { artifact: SEAT_ARTIFACT_B });
+  await createPayoutBinding(env, VERIFIER as never, (await payeeBinding(SEAT_ROW, SEAT_PRICE, SEAT_KEY, VERIFIER)).body);
+  await createPayoutBinding(env, PAYEE as never, (await payeeBinding(SEAT_ROW, SEAT_PRICE, SEAT_KEY, PAYEE)).body);
+
+  // With a seat free, a bound row reads ready.
+  const before = (await getListing(env, 1)) as unknown as Served;
+  const bound = before.submissions.find((s) => s.handle === PAYEE.handle)!;
+  assert.equal(bound.next_actions.find((a) => a.step === 4)!.state, SEAT_READY);
+
+  // The funder accepts the other submission: the only seat is consumed.
+  await society.createAward(env, FUNDER as never, 1, { submission_id: winner.id });
+
+  const after = (await getListing(env, 1)) as unknown as Served;
+  assert.equal(after.economics.available_award_capacity, 0);
+  const unseated = after.submissions.find((s) => s.handle === PAYEE.handle)!;
+  // src/society.ts settleObservedPayments declines the transfer as paid, not
+  // awarded once the seat guard in its INSERT fails, and createAward refuses
+  // it as exhausted, so ready here tells a funder a payment will settle when
+  // this same response already prints the capacity that says it will not.
+  assert.equal(unseated.next_actions.find((a) => a.step === 4)!.state, SEAT_BLOCKED);
+  assert.equal(unseated.next_actions.find((a) => a.step === 5)!.state, SEAT_BLOCKED);
+  assert.match(String(unseated.next_actions.find((a) => a.step === 4)!.blocked_by), /seat/i);
+  assert.match(String(unseated.next_actions.find((a) => a.step === 5)!.blocked_by), /paid, not awarded/);
+
+  // The citizen holding the seat keeps their ladder: a payment to them closes
+  // their own award rather than opening a new one.
+  const seated = after.submissions.find((s) => s.handle === VERIFIER.handle)!;
+  assert.equal(seated.next_actions.find((a) => a.step === 4)!.state, SEAT_READY);
+});
+
+// The twin of the paid-award case above, for the settlement path listings 38
+// and 51 actually took: the chain observer read the funder's transfer and
+// wrote the award paid against it (migration 0063), so the award carries
+// observed_transfer_id and no receipt exists. The award still names its
+// submission, so the flag still belongs on that row; marking earliest-first
+// put it on submission 525 while award 12 paid 555.
+test("an award settled by an observed transfer marks its own submission, not the payee's earliest row", async () => {
+  const ed = generateKeyPairSync("ed25519");
+  const publicKey = (ed.publicKey.export({ format: "jwk" }) as { x: string }).x;
+  const { env, db } = makeEnv(publicKey);
+  const funderAddress = "0x" + "7".repeat(40);
+  await createListing(env, FUNDER as never, { title: "Second try wins", condition: CONDITION, amount_atomic: "5000000", expiry: NOW + 7 * 86400 });
+  db.prepare("UPDATE listings SET funder_address = ?, funder_signature = ?, funds_seen_atomic = ? WHERE id = 1").run(funderAddress, "0x" + "1".repeat(130), "5000000");
+  const early = await createSubmission(env, PAYEE as never, 1, { artifact: "https://1f916.ai/api/comment/9951" });
+  const awarded = await createSubmission(env, PAYEE as never, 1, { artifact: "https://1f916.ai/api/comment/9952" });
+
+  const bound = await createPayoutBinding(env, PAYEE as never, (await payeeBinding("listing-1", "5000000", ed, PAYEE)).body);
+  const nowMs = Date.now();
+  db.prepare(`INSERT INTO listing_awards (listing_id, submission_id, citizen_id, amount_atomic, state, awarded_by, awarded_by_citizen_id, awarded_at, payable_at, expires_at, payload_hash, commit_nonce, created_at)
+              VALUES (1, ?, 2, '5000000', 'payable', 'requester', 1, ?, ?, ?, 'award-hash-1', 'award-nonce-1', ?)`).run(awarded.id, nowMs, nowMs, nowMs + 86_400_000, nowMs);
+  const transferId = Number(db.prepare(`INSERT INTO observed_transfers (funder_address, to_address, token, amount_atomic, tx_hash, log_index, block_number, kind, binding_id, listing_id, citizen_id, sources, observed_at, settled_award_id, settlement_checked_at, block_timestamp)
+              VALUES (?, ?, ?, '5000000', '0xob1', 0, 1, 'payment', ?, 1, 2, 2, ?, 1, ?, ?)`).run(funderAddress, "0x" + "2".repeat(40), BASE_USDC, bound.id, nowMs, nowMs, Math.floor(nowMs / 1000)).lastInsertRowid);
+  db.prepare("UPDATE listing_awards SET state = 'paid', observed_transfer_id = ?, paid_at = ? WHERE id = 1").run(transferId, nowMs);
+
+  const detail = await getListing(env, 1);
+  const rows = detail.submissions.map((x) => [x.id, x.award_id !== null, x.paid]);
+  assert.deepEqual(rows, [[early.id, false, false], [awarded.id, true, true]], "the paid flag sits on the submission the award paid for, however the award settled");
+  assert.equal(detail.submissions.find((x) => x.id === awarded.id)!.economic_state, "paid");
+  // No receipt exists, so the one settlement counted is the observed transfer.
+  assert.equal(detail.submissions.filter((x) => x.paid).length, 1);
 });

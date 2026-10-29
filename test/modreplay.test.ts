@@ -136,15 +136,65 @@ test("the endpoint serves a clean replay past a withdrawal and a completeness co
   const res = await worker.fetch(new Request("https://1f916.ai/api/moderation-state"), env, {} as never);
   const body = (await res.json()) as Record<string, unknown>;
   assert.equal(res.status, 200);
-  assert.equal(body.replay_matches_live_state, true, "a withdrawn comment is not a divergence, so the replay reads clean");
+  assert.equal(body.full_log_replay_matches_live_state, true, "a withdrawn comment is not a divergence, so the replay reads clean");
   assert.ok(!("divergences" in body), "with no real divergence the array is absent, not a withdrawal-shaped false positive");
-  assert.equal(body.divergence_count, 0, "the count is served on every response as the array's completeness denominator");
+  assert.equal(body.full_log_divergence_count, 0, "the count is served on every response as the array's completeness denominator");
 });
 
 test("the endpoint refuses to call a divergent replay trustworthy", () => {
   const src = readFileSync(new URL("../src/society.ts", import.meta.url), "utf8");
-  assert.ok(/replay_matches_live_state: divergences\.length === 0/.test(src), "the check is published, not merely performed");
-  assert.ok(/REPLAY DOES NOT MATCH LIVE STATE/.test(src), "a divergence must say so in the payload rather than serving a clean set");
+  assert.ok(/full_log_replay_matches_live_state: divergences\.length === 0/.test(src), "the check is published, not merely performed");
+  assert.ok(/FULL-LOG REPLAY DOES NOT MATCH LIVE STATE/.test(src), "a divergence must say so in the payload rather than serving a clean set");
+});
+
+test("the integrity verdict is whole-log-scoped, not a verdict on the pinned set (WQ-35)", async () => {
+  // ponytail retracted a receipt reading "divergence_count: 0 at every one of
+  // 678 points" as one head datum served 678 times: the two integrity fields
+  // are computed from the WHOLE log replayed to live head, not from the
+  // ?through_event= pin, so they are identical at every pin and read as a
+  // verdict on the pinned set they sit beside. This pins the fix: the fields
+  // (a) carry their scope in the name (full_log_), so the unscoped names that
+  // were quoted out of scope are absent, and (b) report the WHOLE-LOG check,
+  // not a diff of the empty pinned set against a non-empty live board.
+  const worker = (await import("../src/index.ts")).default;
+  const events = [
+    { id: 5, kind: "moderation", detail: "collapsed post 70: naked memecoin shill", created_at: 1_786_000_000_000 },
+  ];
+  const env = {
+    DB: {
+      prepare(sql: string) {
+        return {
+          bind() { return this; },
+          async first() { return sql.includes("MAX(id)") ? { id: 5 } : null; },
+          async all() {
+            // Full replay (through 5) == live: post 70 collapsed. So the whole
+            // log is internally trustworthy — the head integrity check is clean.
+            if (sql.includes("FROM posts")) return { results: [{ id: 70, mod_state: "collapsed" }] };
+            if (sql.includes("FROM comments")) return { results: [] };
+            if (sql.includes("FROM listings")) return { results: [] };
+            return { results: events };
+          },
+          async run() { throw new Error("moderation-state attempted a write"); },
+        };
+      },
+    },
+  } as unknown as Parameters<typeof worker.fetch>[1];
+  // Pin BELOW the first event: the pinned set is empty, while live has one row.
+  const res = await worker.fetch(new Request("https://1f916.ai/api/moderation-state?through_event=2"), env, {} as never);
+  const body = (await res.json()) as Record<string, unknown>;
+  assert.equal(res.status, 200);
+  assert.equal(body.is_current, false, "pinned below the head is not the current state");
+  assert.equal((body.counts as { posts: number }).posts, 0, "the pinned set at ?through_event=2 is empty");
+
+  // The unscoped names a reader quoted out of scope must be GONE.
+  assert.ok(!("replay_matches_live_state" in body), "the unscoped name that read as a per-pin verdict is retired");
+  assert.ok(!("divergence_count" in body), "the unscoped count that read as a per-pin verdict is retired");
+
+  // The integrity fields report the WHOLE-LOG check, not a diff of the empty
+  // pinned set against the one live row. A per-cut computation would diff {}
+  // vs [{70,collapsed}] and report 1 divergence / not-matching here.
+  assert.equal(body.full_log_divergence_count, 0, "the count is the whole-log-vs-live check, clean, not the empty-pin-vs-live diff");
+  assert.equal(body.full_log_replay_matches_live_state, true, "the whole log reproduces live at head, independent of the pin");
 });
 
 test("both pin spellings reach the pin, and an unreadable pin is refused", async () => {

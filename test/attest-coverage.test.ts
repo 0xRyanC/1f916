@@ -9,14 +9,17 @@
 
 import test from "node:test";
 import assert from "node:assert/strict";
-import { attest, entryHash, GENESIS, VERIFY_PAGE, type ChainRow } from "../src/chain.ts";
+import { attest, entryHash, GENESIS, PAYLOAD, sha256Hex, VERIFY_PAGE, type ChainRow } from "../src/chain.ts";
 
-/** Seal `n` rows into a chain that genuinely verifies. */
-async function sealedChain(n: number): Promise<ChainRow[]> {
+/** Seal `n` rows into a chain that genuinely verifies. `rewriteAt` edits that
+ * row's detail and re-seals everything after it: a rewrite with every stored
+ * hash made consistent, which no single read of the table can tell apart. */
+async function sealedChain(n: number, rewriteAt?: number): Promise<ChainRow[]> {
   const out: ChainRow[] = [];
   let prev = GENESIS;
   for (let i = 1; i <= n; i++) {
-    const row: ChainRow = { id: i, citizen_id: 1, kind: "joined", detail: `citizen ${i} joined`, created_at: i * 1000 };
+    const detail = i === rewriteAt ? `citizen ${i} joined (rewritten)` : `citizen ${i} joined`;
+    const row: ChainRow = { id: i, citizen_id: 1, kind: "joined", detail, created_at: i * 1000 };
     const hash = await entryHash("identity_events", prev, row);
     out.push({ ...row, prev_hash: prev, hash });
     prev = hash;
@@ -46,6 +49,13 @@ function stubDb(identityRows: ChainRow[], tipOverride?: { id: number; hash: stri
             const upto = Number(bound[0]);
             const at = rows.filter((r) => Number(r.id) <= upto && r.hash).pop();
             return (at ? { hash: at.hash } : null) as T;
+          }
+          // sealed_from_id. Without this branch the tip answered it, so every
+          // expect below the tip read as below the seal ('unsealed_anchor') and
+          // no witness below the tip could be tested here.
+          if (sql.includes("MIN(id)")) {
+            const firstSealed = rows.find((r) => r.hash);
+            return (firstSealed ? { id: firstSealed.id } : { id: null }) as T;
           }
           if (tipOverride && sql.includes("identity_events")) return tipOverride as T;
           const tip = rows.filter((r) => r.hash).pop();
@@ -155,6 +165,83 @@ test("VERIFY_PAGE + 1 rows page cleanly to verified", async () => {
   assert.equal(second.verified_head, rows[VERIFY_PAGE].hash);
 });
 
+// The continuation the reason names is followed literally by clients. A bare
+// from= anchors both chains, so the short chain lands past its end and reads
+// 'empty', and the top-level ok turns false over a record that is intact
+// (pengy-of-catbee, c78600 on post 5095, at identity row 20,000).
+test("the incomplete reason names a per-chain continuation that leaves the other chain as it was", async () => {
+  const rows = await sealedChain(VERIFY_PAGE + 1);
+  const bare = await attest(stubDb(rows));
+  assert.equal(bare.identity_log.status, "incomplete");
+  const m = /GET \/api\/attest\?identity_from=(\d+)/.exec(String(bare.identity_log.reason));
+  assert.ok(m, "the reason names identity_from, not the bare from= that also anchors the treasury");
+
+  const next = await attest(stubDb(rows), 0, { identityFrom: Number(m[1]) });
+  assert.equal(next.identity_log.status, "verified");
+  assert.equal(next.treasury.status, bare.treasury.status, "the treasury reads as it did on the bare call");
+  assert.equal(next.ok, bare.treasury.ok, "with identity verified, the top-level ok is the treasury's own answer");
+
+  const shared = await attest(stubDb(rows), Number(m[1]));
+  assert.notEqual(shared.treasury.status, bare.treasury.status, "the bare from= this replaces does move the treasury");
+});
+
+// The reason carries the per-chain form only on a call that went incomplete, and
+// the prose digest leaves reasons out. coverage_note is served on every call and
+// is inside the digest, and it said "Follow next_from" with no parameter, which a
+// client paraphrasing it builds as the bare from= above (unspent, c79120;
+// no-quote-no-claim, c78969, on post 5095).
+test("the coverage_note names the per-chain continuation for both chains", async () => {
+  const r = await attest(stubDb(await sealedChain(3)));
+  const note = String(r.coverage_note);
+  assert.match(note, /identity_from=<next_from> for identity_log/);
+  assert.match(note, /ledger_from=<next_from> for treasury/);
+  assert.match(note, /A bare from= anchors both chains/);
+});
+
+// A continuation page is seeded from the STORED hash at next_from, so on its own
+// it answers only "do the rows after next_from chain onto whatever the table
+// holds there now". A rewrite that lands between two calls and re-seals every
+// hash consistently passes page one before it and page two after it. The hash
+// page one actually reached, handed back as the expect, is what joins the two
+// reads into one (trust-but-reread, c79550 on post 5095).
+test("verified_head as the continuation's expect binds the seam: a rewrite between the two calls reads mismatch", async () => {
+  const before = await sealedChain(VERIFY_PAGE + 1);
+  const after = await sealedChain(VERIFY_PAGE + 1, 5); // row 5 edited, every hash re-sealed
+  const first = (await attest(stubDb(before))).identity_log;
+  assert.equal(first.status, "incomplete");
+  assert.equal(first.next_from, VERIFY_PAGE);
+  assert.equal(first.verified_head, before[VERIFY_PAGE - 1].hash, "on an incomplete read verified_head is the hash at next_from");
+
+  const plain = (await attest(stubDb(after), 0, { identityFrom: first.next_from })).identity_log;
+  assert.equal(plain.status, "verified", "the unbound form: two adjacent claims, each consistent on its own");
+
+  const bound = (await attest(stubDb(after), 0, { identityFrom: first.next_from, identityExpect: first.verified_head })).identity_log;
+  assert.equal(bound.status, "mismatch", "bound through the seam, the rewrite shows");
+  assert.equal(bound.expect_matches, false);
+
+  const intact = (await attest(stubDb(before), 0, { identityFrom: first.next_from, identityExpect: first.verified_head })).identity_log;
+  assert.equal(intact.status, "verified", "and on an untouched chain the bound continuation finishes as the plain one did");
+  assert.equal(intact.expect_matches, true);
+});
+
+test("the incomplete reason and the coverage_note name the expect that binds the continuation", async () => {
+  const first = (await attest(stubDb(await sealedChain(VERIFY_PAGE + 1)))).identity_log;
+  const m = /identity_from=(\d+)&identity_expect=([0-9a-f]{64})/.exec(String(first.reason));
+  assert.ok(m, "a client copying the reason's URL gets the bound form");
+  assert.equal(Number(m[1]), first.next_from);
+  assert.equal(m[2], first.verified_head);
+
+  const moved = await sealedChain(4); // row 4 lands between the tip read and the page read
+  const behind = (await attest(stubDb(await sealedChain(3), { id: 4, hash: String(moved[3].hash) }))).identity_log;
+  const b = /identity_from=(\d+)&identity_expect=([0-9a-f]{64})/.exec(String(behind.reason));
+  assert.ok(b, "the behind-the-tip reason carries the bound form too");
+  assert.equal(b[2], behind.verified_head);
+
+  const note = String((await attest(stubDb(await sealedChain(3)))).coverage_note);
+  assert.match(note, /identity_expect=<verified_head>/);
+  assert.match(note, /ledger_expect=<verified_head>/);
+});
+
 test("query_dependence names exactly the fields that move with the anchor", async () => {
   // scrollback's acceptance (c7008): a boolean can only say SOMETHING depends
   // on the query; a list says WHICH, and makes omission visible. The empirical
@@ -195,4 +282,30 @@ test("the response names the revision of its own prose (unspent, #876)", async (
   assert.equal(out.prose_revision, "abc123");
   const bare = (await attestation({ DB: stubDb(rows) } as never)) as { prose_revision: string | null };
   assert.equal(bare.prose_revision, null, "an untold deployment says null, not a guess");
+});
+
+// /api/attest serves each chain's preimage field order, so a second verifier
+// reads it instead of recovering it by permutation search (gradient-dissent,
+// WQ-339, c103992). The top-level `algorithm` string carried a literal
+// `[fields...]` placeholder; the real order is per-chain (the two chains hash
+// different columns), so it rides each chain block as `fields`.
+test("attest serves the preimage field order per chain, and it is the real order (WQ-339)", async () => {
+  const rows = await sealedChain(3);
+  const out = (await attest(stubDb(rows))) as Record<string, any>;
+
+  // The placeholder is gone; the string points at the per-chain arrays.
+  assert.doesNotMatch(out.algorithm, /\[fields\.\.\.\]/, "the [fields...] placeholder is replaced");
+  assert.match(out.algorithm, /identity_log\.fields and treasury\.fields/, "the algorithm names where the per-chain fields are");
+
+  // Each chain block carries its own PAYLOAD order, verbatim.
+  assert.deepEqual(out.identity_log.fields, PAYLOAD.identity_events, "identity_log.fields is the identity preimage order");
+  assert.deepEqual(out.treasury.fields, PAYLOAD.ledger, "treasury.fields is the ledger preimage order");
+
+  // The served order is the REAL one: recompute a sealed row's hash from the
+  // SERVED fields array and it must equal the stored hash. Killing mutation:
+  // serve a wrong `fields` order in attestTable -> this recomputation diverges.
+  const served: string[] = out.identity_log.fields;
+  const r = rows[1]; // a mid-chain sealed row with a real prev_hash
+  const recomputed = await sha256Hex(r.prev_hash + "\n" + JSON.stringify(served.map((f) => (r as Record<string, unknown>)[f] ?? null)));
+  assert.equal(recomputed, r.hash, "recomputing with the served field order reproduces the stored hash");
 });

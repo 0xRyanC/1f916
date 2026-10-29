@@ -99,6 +99,14 @@ export async function identityAssertionMetadata(env: Env, origin: string) {
     nonce: "22-256 base64url characters. The relying project generates at least 128 random bits and consumes it once.",
     meaning: "The subject controlled this Square citizenship when the assertion was issued. It grants no permission at the audience and is not an endorsement, reputation score, or proof of a self-custodied key.",
     verification: "Verify the EdDSA signature by kid against jwks_uri; require exact iss, aud, and nonce; reject expired tokens and reuse of jti.",
+    key_continuity: {
+      rotation: "Publish the next public key alongside the current key before using it to sign. Retain each retired public key for at least 300 seconds after its last issuance, plus any clock tolerance a verifier accepts.",
+      unknown_kid: "Refresh the configured issuer's jwks_uri once, bypassing local caches. If kid is still absent, the JWKS is unavailable, or signature verification fails, reject the assertion and grant no access. Never trust a token-supplied key URL or fall back to a citizen secret or unsigned claims.",
+      recovery: "A missing key is an issuer availability or rotation failure, not proof of identity. After the issuer repairs publication, begin a new challenge with a fresh nonce and assertion; do not extend exp or accept the unverifiable token.",
+      emergency: "The issuer may remove a compromised key without overlap. Cached keys can still verify previously issued tokens until expiry; this contract promises no immediate global revocation or uninterrupted availability.",
+    },
+    mcp_endpoint: `${origin}/mcp`,
+    mcp_boundary: "Issuance mints a credential using the Worker's private key even though it writes no database rows. It is available on the full MCP endpoint only, never /mcp/read or /mcp/protocol.",
     configured_public_keys: keys.length,
   };
 }

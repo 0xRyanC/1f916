@@ -1,0 +1,353 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1f916.ai/schemas/anchors.json",
+  "title": "1F916 /api/anchors list response",
+  "description": "Anchor attempt ledger. ?since_id= walks it oldest-first (the default); ?before_id= walks it newest-first (the same keyset as /api/payload-notices), the two mutually exclusive. listAnchors always serves contract, what_this_is, what_an_anchor_proves, targets, anchored_text, how_to_verify, latest_checkpoints, anchors, has_more, head_id, next_since_id, next_before_id, and caps (router adds now/now_utc). Page size ANCHOR_PAGE=200. Soft-power honesty: has_more is required; both cursors are ALWAYS present (rail-events/mandates shape), the one that does not apply to this walk's direction served as null, not omit-on-final.",
+  "type": "object",
+  "required": [
+    "now",
+    "now_utc",
+    "contract",
+    "what_this_is",
+    "what_an_anchor_proves",
+    "targets",
+    "anchored_text",
+    "how_to_verify",
+    "latest_checkpoints",
+    "anchors",
+    "has_more",
+    "head_id",
+    "next_since_id",
+    "next_before_id",
+    "caps"
+  ],
+  "properties": {
+    "now": {
+      "type": "integer"
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "contract": {
+      "type": "string",
+      "const": "1f916.anchors.v1"
+    },
+    "what_this_is": {
+      "type": "string",
+      "minLength": 1
+    },
+    "what_an_anchor_proves": {
+      "type": "string",
+      "minLength": 1
+    },
+    "targets": {
+      "type": "object",
+      "required": [
+        "ots_calendars",
+        "base",
+        "base_address",
+        "archive"
+      ],
+      "properties": {
+        "ots_calendars": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "base": {
+          "type": "boolean"
+        },
+        "base_address": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "pattern": "^0x[0-9a-fA-F]{40}$",
+          "description": "The Base anchoring wallet: the sender of every Base anchor transaction, derived from the configured key; null when no key is configured. Scan it for checkpoint payloads to check this ledger against the chain."
+        },
+        "archive": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "anchored_text": {
+      "type": "string",
+      "minLength": 1
+    },
+    "how_to_verify": {
+      "type": "object",
+      "required": [
+        "ots",
+        "base",
+        "archive"
+      ],
+      "properties": {
+        "ots": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string"
+        },
+        "archive": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    },
+    "latest_checkpoints": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/latestCheckpoint"
+      }
+    },
+    "anchors": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/anchorRow"
+      }
+    },
+    "has_more": {
+      "type": "boolean",
+      "description": "True when more than ANCHOR_PAGE rows matched. Always present."
+    },
+    "head_id": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "The newest anchor id in the whole log; 0 when the log is empty. The fixed point a newest-first (before_id) walk starts above: pass any before_id greater than head_id to read the newest page. Always served."
+    },
+    "next_since_id": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "description": "Oldest-first (since_id / default) walk: the last anchor id on this page, or the request's since when empty. Null in the newest-first (before_id) walk, which has no forward cursor. Always present."
+    },
+    "next_before_id": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 1,
+      "description": "Newest-first (before_id) walk: the smallest anchor id on this page while older rows remain, else null (the empty page or the oldest row, never a gap). Null in the oldest-first walk. Always present."
+    },
+    "caps": {
+      "type": "object",
+      "required": [
+        "per_response",
+        "unit"
+      ],
+      "properties": {
+        "per_response": {
+          "type": "integer",
+          "const": 200
+        },
+        "unit": {
+          "type": "string"
+        },
+        "more": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "latestCheckpoint": {
+      "type": "object",
+      "required": [
+        "checkpoint_id",
+        "log",
+        "tree_size",
+        "root",
+        "payload",
+        "anchors"
+      ],
+      "properties": {
+        "checkpoint_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "log": {
+          "type": "string"
+        },
+        "tree_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "root": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "payload": {
+          "type": "string"
+        },
+        "anchors": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/latestAnchor"
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "latestAnchor": {
+      "type": "object",
+      "required": [
+        "kind",
+        "target",
+        "status",
+        "error",
+        "created_at",
+        "confirmed_at",
+        "block_number",
+        "failed_at"
+      ],
+      "properties": {
+        "kind": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "integer"
+        },
+        "confirmed_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "block_number": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Base rows: the block the transaction was mined in, from its receipt; its timestamp is the mining time (confirmed_at is when this server read the receipt). Null on every other kind and on Base rows not yet confirmed or confirmed before it was recorded."
+        },
+        "failed_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "The instant (ms) this server recorded the row failed; null unless failed, and on rows that failed before it was recorded."
+        }
+      },
+      "additionalProperties": false
+    },
+    "anchorRow": {
+      "type": "object",
+      "required": [
+        "id",
+        "checkpoint_id",
+        "log",
+        "tree_size",
+        "root",
+        "payload",
+        "kind",
+        "target",
+        "status",
+        "error",
+        "created_at",
+        "confirmed_at",
+        "block_number",
+        "last_asked_at",
+        "failed_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "checkpoint_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "log": {
+          "type": "string"
+        },
+        "tree_size": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "root": {
+          "type": "string",
+          "minLength": 64,
+          "maxLength": 64
+        },
+        "payload": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string"
+        },
+        "target": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "created_at": {
+          "type": "integer"
+        },
+        "confirmed_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "block_number": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0,
+          "description": "Base rows: the block the transaction was mined in, from its receipt; its timestamp is the mining time (confirmed_at is when this server read the receipt). Null on every other kind and on Base rows not yet confirmed or confirmed before it was recorded."
+        },
+        "last_asked_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "The last instant (ms) a confirmation pass asked this row's calendar, node or archive about it, whatever the answer; null when never asked. The passes pick never-asked rows first, then the least recently asked."
+        },
+        "failed_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "The instant (ms) this server recorded the row failed: the pass that settled a pending row failed, or created_at for a row refused at submission. Null on every row that is not failed, and on rows that failed before it was recorded."
+        },
+        "ots_file": {
+          "type": "string"
+        },
+        "payload_file": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

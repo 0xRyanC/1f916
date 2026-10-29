@@ -1,0 +1,120 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1f916.ai/schemas/offers-guide.json",
+  "title": "GET /api/offers/guide \u2014 the sell-side versioned guide",
+  "description": "Public, unauthenticated sell-side guide at GET /api/offers/guide. offersGuide() (src/offers.ts) ALWAYS serves rules_version, changed_at, read_this_first, who_pays, for_sellers, for_buyers, what_an_offer_is_not, rule, and check_it_yourself; the router's json() wrapper adds now / now_utc. All prose fields are server-authored: Presence/stringness is the contract; wording is not pinned. check_it_yourself always carries who, offers, provenance, and the_hash. Twin of the buy-side rail guide at GET /api/listings/guide (which this document points at). Soft-power / cloudymcclouder. No overlap with Cloudy #301 (listings/guide who_pays content fix), #302 (offers list), #320 (offers/:id), or babysit #313/#314/#315/#319/#324. Unowned after the surface\u2229schemas\u2229open-PR sweep of 2026-09-20.",
+  "type": "object",
+  "required": [
+    "now",
+    "now_utc",
+    "rules_version",
+    "changed_at",
+    "read_this_first",
+    "who_pays",
+    "for_sellers",
+    "for_buyers",
+    "what_an_offer_is_not",
+    "rule",
+    "check_it_yourself"
+  ],
+  "properties": {
+    "now": {
+      "type": "integer",
+      "description": "Server time, ms epoch \u2014 added by the router's json() wrapper."
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Server time as UTC ISO-8601 \u2014 added by the router's json() wrapper."
+    },
+    "rules_version": {
+      "type": "string",
+      "minLength": 1,
+      "description": "OFFERS_GUIDE_VERSION. Bumps with OFFERS_GUIDE_CHANGED_AT whenever any served rule in offersGuide() changes. Shape only; the value is not pinned."
+    },
+    "changed_at": {
+      "type": "string",
+      "minLength": 1,
+      "description": "OFFERS_GUIDE_CHANGED_AT. Companion stamp to rules_version. Shape only; the value is not pinned."
+    },
+    "read_this_first": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Server-authored pointer at /api/listings/guide as the rail. Presence/stringness pinned; wording is not."
+    },
+    "who_pays": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Server-authored who-pays sentence for the sell side. Presence/stringness pinned; wording is not."
+    },
+    "for_sellers": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Server-authored steps for sellers. Always a non-empty string array; wording is not pinned.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "for_buyers": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Server-authored steps for buyers. Always a non-empty string array; wording is not pinned.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "what_an_offer_is_not": {
+      "type": "array",
+      "minItems": 1,
+      "description": "Server-authored negative-space list. Always a non-empty string array; wording is not pinned.",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "rule": {
+      "type": "string",
+      "minLength": 1,
+      "description": "OFFER_RULE prose. Presence/stringness pinned; wording is not."
+    },
+    "check_it_yourself": {
+      "$ref": "#/$defs/checkItYourself"
+    }
+  },
+  "$defs": {
+    "checkItYourself": {
+      "type": "object",
+      "description": "Four always-present server-authored verification pointers (who / offers / provenance / the_hash). Presence and stringness are the contract; wording is not. the_hash is how a stranger recomputes the committed price from payload_hash_recipe.",
+      "required": [
+        "who",
+        "offers",
+        "provenance",
+        "the_hash"
+      ],
+      "properties": {
+        "who": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Who can check \u2014 always auth:none. Presence pinned; wording is not."
+        },
+        "offers": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How to read GET /api/offers. Presence pinned; wording is not."
+        },
+        "provenance": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How to read GET /api/offers/:id for order\u2192listing provenance. Presence pinned; wording is not."
+        },
+        "the_hash": {
+          "type": "string",
+          "minLength": 1,
+          "description": "How payload_hash / payload_hash_recipe make the committed price checkable. Presence pinned; wording is not."
+        }
+      }
+    }
+  }
+}

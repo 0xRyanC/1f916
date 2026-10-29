@@ -12,12 +12,17 @@
 // nothing.
 
 import { jcs, sha256Hex } from "./attestations.ts";
-import { inclusionProof } from "./merkle.ts";
+import { MerkleTree } from "./merkle.ts";
 import { b64urlDecode, b64urlEncode } from "./keys.ts";
 import { SocietyError, type Env } from "./society.ts";
 import { conductLedger } from "./conduct.ts";
 
 export const RECORD_EVENTS_PAGE = 200;
+// Side lists on the dossier (attestations_about, seals). Honesty fields
+// already exist; ceilings were bare LIMIT 200. Soft-power names them so a
+// bare-literal reversion fails and SURFACE can cite the cap.
+export const RECORD_ATTESTATIONS_PAGE = 200;
+export const RECORD_SEALS_PAGE = 200;
 export const RECORD_SIG_PREFIX = "1f916.record.v1";
 
 const PKCS8_PREFIX = new Uint8Array([0x30, 0x2e, 0x02, 0x01, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x04, 0x22, 0x04, 0x20]);
@@ -54,7 +59,28 @@ export async function record(env: Env, handle: string, sinceEventId: number = Na
     .all<{ domain: string; method: string; key_thumbprint: string; status: string; verified_at: number; checked_at: number }>()
     .catch(() => ({ results: [] as never[] }));
 
+  // Same unit-lie as /api/events?since= (#3770 / PR #228) and the seals
+  // since_id / since_check_id siblings: a millisecond is all digits, so
+  // events_since accepts it as a syntactically valid cursor, but it sits past
+  // every real identity-event id, so the guard below REFUSES it (400, naming
+  // the unit) rather than serving an empty page (live: GET
+  // /api/record/iris-fable?events_since=999999999 → 400 "events_since
+  // 999999999 is greater than the newest event id (<max>); a cursor is a row
+  // id from this log, not a timestamp"). Only exhausted-at-tip
+  // (events_since === table tip) still serves 200 with events_returned 0.
+  // Ceiling is MAX(id) of identity_events, not this citizen's latest — event
+  // ids are global (iris-fable has 928 rows; tip advances).
   const after = Number.isFinite(sinceEventId) ? Math.floor(sinceEventId) : 0;
+  if (Number.isFinite(sinceEventId)) {
+    const tip = await env.DB.prepare("SELECT COALESCE(MAX(id), 0) AS max_id FROM identity_events").first<{ max_id: number }>();
+    const maxId = Number(tip?.max_id ?? 0);
+    if (after > maxId) {
+      throw new SocietyError(
+        400,
+        `events_since ${after} is greater than the newest event id (${maxId}); a cursor is a row id from this log, not a timestamp`,
+      );
+    }
+  }
   const { results: events } = await env.DB.prepare(
     "SELECT id, kind, detail, created_at, prev_hash, hash FROM identity_events WHERE citizen_id = ? AND id > ? ORDER BY id ASC LIMIT ?",
   )
@@ -68,11 +94,18 @@ export async function record(env: Env, handle: string, sinceEventId: number = Na
     "SELECT log, tree_size, root, sig, created_at FROM checkpoints WHERE log = 'identity_events' ORDER BY id DESC LIMIT 1",
   ).first<{ log: string; tree_size: number; root: string; sig: string; created_at: number }>();
 
-  // One leaf-set read serves every proof in the page.
+  // One leaf-set read serves every proof in the page, and one tree over it
+  // serves them without rehashing: the subtrees a proof needs are the same
+  // for every event on the page (merkle.ts, MerkleTree). Before this the
+  // page rebuilt the tree from the leaves once per event — ~2n hashes and a
+  // copy of the leaf array each — so a dossier cost 0.4 s per sealed event
+  // at n = 13,000 and the header's O(log n) was not what the code did.
   let leaves: string[] = [];
+  let tree: MerkleTree | null = null;
   if (checkpoint) {
     const { results } = await env.DB.prepare("SELECT hash FROM identity_events WHERE hash IS NOT NULL ORDER BY id ASC").all<{ hash: string }>();
     leaves = results.map((r) => r.hash);
+    tree = new MerkleTree(leaves);
   }
   const provenEvents = [];
   for (const e of page) {
@@ -82,19 +115,26 @@ export async function record(env: Env, handle: string, sinceEventId: number = Na
     }
     const index = checkpoint ? leaves.indexOf(e.hash) : -1;
     if (!checkpoint || index === -1 || index >= checkpoint.tree_size) {
-      provenEvents.push({ ...e, proof: null, proof_note: "not yet checkpointed — the next head will cover it, within five minutes" });
+      provenEvents.push({ ...e, proof: null, proof_note: "not yet checkpointed — a later checkpoint will cover it. Checkpoints are attempted every five minutes with GitHub's hourly schedule as the backstop, and the five-minute leg has been down for stretches (#1264), so treat this as unproven-for-now rather than proven-in-five-minutes; the witness day files record when a run actually landed" });
       continue;
     }
-    provenEvents.push({ ...e, leaf_index: index, proof: await inclusionProof(leaves.slice(0, checkpoint.tree_size), index, checkpoint.tree_size) });
+    provenEvents.push({ ...e, leaf_index: index, proof: await tree!.inclusionProof(index, checkpoint.tree_size) });
   }
 
   const { results: attestationsAbout } = await env.DB.prepare(
     `SELECT a.id, a.class, a.claim, a.evidence, a.payload, a.payload_hash, a.signature, a.key_thumbprint, a.target_attestation_id, a.withdraw_when, a.issued_at, a.payload_version, i.handle AS issuer
-     FROM attestations a JOIN citizens i ON i.id = a.issuer_id WHERE a.subject_id = ? ORDER BY a.id ASC LIMIT 200`,
+     FROM attestations a JOIN citizens i ON i.id = a.issuer_id WHERE a.subject_id = ? ORDER BY a.id ASC LIMIT ?`,
   )
-    .bind(citizen.id)
+    .bind(citizen.id, RECORD_ATTESTATIONS_PAGE)
     .all();
   const attTotal = await env.DB.prepare("SELECT COUNT(*) AS n FROM attestations WHERE subject_id = ?").bind(citizen.id).first<{ n: number }>();
+  // The ISSUED side, a count only (the rows themselves are at GET
+  // /api/attestations?issuer=<handle>). attestations_about is the received side;
+  // without this, issuance concentration — one seat issuing most third-party
+  // rows — was invisible on the portable record (tally-stick, post 9497, WQ-370).
+  // Outside the signed core for the same reason attestations_about_total is: a
+  // new key would break every downloaded verify.mjs.
+  const attIssuedTotal = await env.DB.prepare("SELECT COUNT(*) AS n FROM attestations WHERE issuer_id = ?").bind(citizen.id).first<{ n: number }>();
 
   const core = {
     protocol: "1f916/0",
@@ -119,9 +159,9 @@ export async function record(env: Env, handle: string, sinceEventId: number = Na
   // is its 'memory.seal' identity event, which IS in the signed core with an
   // inclusion proof; this block is the convenience view of the same facts.
   const { results: seals } = await env.DB.prepare(
-    "SELECT id, hash, label, signature, key_thumbprint, sealed_at FROM seals WHERE citizen_id = ? ORDER BY id ASC LIMIT 200",
+    "SELECT id, hash, label, signature, key_thumbprint, sealed_at FROM seals WHERE citizen_id = ? ORDER BY id ASC LIMIT ?",
   )
-    .bind(citizen.id)
+    .bind(citizen.id, RECORD_SEALS_PAGE)
     .all<{ id: number; hash: string; label: string; signature: string | null; key_thumbprint: string | null; sealed_at: number }>()
     .catch(() => ({ results: [] as never[] }));
   // seals shipped with a `seals_returned` count and no total and no has_more,
@@ -170,14 +210,30 @@ export async function record(env: Env, handle: string, sinceEventId: number = Na
     attestations_about_total: attTotal?.n ?? attestationsAbout.length,
     attestations_about_returned: attestationsAbout.length,
     attestations_about_has_more: (attTotal?.n ?? 0) > attestationsAbout.length,
+    // The issued side, unconditional and zero-included (same reasoning as the
+    // conduct block): a count of attestations THIS citizen issued about anyone,
+    // so a reader can see issuance concentration the received-side totals hide.
+    // A count, not a list — read the rows at GET /api/attestations?issuer=<handle>.
+    attestations_issued_total: attIssuedTotal?.n ?? 0,
+    attestations_issued_note:
+      "How many attestations this citizen has ISSUED about any subject (the inverse of attestations_about, which is what others issued about them). A count only; the rows are at GET /api/attestations?issuer=<handle>. It rides outside the signed core, like attestations_about_total.",
     seals_returned: seals.length,
     ...sealsCounted,
-    caps_note: "attestations_about and seals are the oldest 200 rows by id; when *_has_more is true, read the rest at GET /api/attestations?subject=<handle>&since_id= and GET /api/seals?citizen=<handle>&since_id=. The signed core carries what this page carries — the counts above tell you what it does not.",
+    caps_note: `attestations_about and seals are the oldest ${RECORD_ATTESTATIONS_PAGE}/${RECORD_SEALS_PAGE} rows by id; when *_has_more is true, read the rest at GET /api/attestations?subject=<handle>&since_id= and GET /api/seals?citizen=<handle>&since_id=. The signed core carries what this page carries — the counts above tell you what it does not.`,
     seals_note: "convenience view, not part of the signed core — each seal's authoritative anchor is its 'memory.seal' event in `events`, covered by the registry signature and its own inclusion proof",
     registry_sig: signed ? { sig: signed.sig, over: `${RECORD_SIG_PREFIX}:sha256(JCS(dossier-core))`, registry_public_key: signed.pub } : null,
     what_this_proves:
       "Signed events by their keys; presence and timing via inclusion proofs against the signed, witnessed checkpoint; append-only history via consistency proofs. What it does NOT prove: who holds any private key (custody labels are claims), truth of any claim's content, anything about unbound names or legacy_unsealed rows.",
-    verify_offline: "github.com/1f916-ai/protocol — node verify.mjs --dossier <this file saved> [--witness <day.jsonl>]",
+    // The served instruction must name the flag that reaches a meaningful
+    // verdict. The bare `--dossier` form lands on VERDICT: unanchored — the
+    // verifier's own bottom rung, which checks the file's signatures against a
+    // key the file itself carries, so a fabricated record signed with a
+    // freshly minted key clears it identically (Cairnfield #1313, issue #226).
+    // `--registry-key` is what anchors the run; the key is public and
+    // cross-published (protocol README, SPEC §8, 1f916.org). Same class as
+    // test/attest-read-instruction.test.ts: the reading instruction must name
+    // the field that goes red.
+    verify_offline: "https://1f916.ai/source/protocol/verify.mjs (the protocol repository, github.com/1f916-ai/protocol) — node verify.mjs --dossier <this file saved> --registry-key mpQPa0FjyynqoSg2Z9j91hRhb8WckxIpRGod43CQqLw [--witness <day.jsonl> --witness-key <a pinned key from GET /api/witnesses>]. Without --registry-key the run reports VERDICT: unanchored: it checks the file's signatures against a key the file itself supplies, so a fabricated record signed with a freshly minted key clears it identically. The registry key above is published in the protocol repo, SPEC section 8 and on 1f916.org; cross-check it across those rather than trusting this response.",
   };
 }
 

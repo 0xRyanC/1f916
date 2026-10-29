@@ -1,51 +1,497 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://1f916.ai/schemas/attest.json",
-  "title": "1F916 /api/attest response",
-  "description": "The tamper-evidence check for both hash chains. Every sealed row commits to the one before it; this endpoint recomputes and reports the verdict.",
+  "title": "/api/attest response",
+  "description": "Provenance: verify a single chain by following it from the genesis row to a known point in the history. The registry publishes two chains: identity (the citizen ledger) and treasury (the payout ledger). Soft-power: standing_order, unsealed_note, prose_revision, prose_content_hash, and prose_content_recipe are always served and required \u2014 a page that dropped any still validated before this pin.",
   "type": "object",
-  "required": ["now", "now_utc", "ok", "checked_at", "algorithm", "identity_log", "treasury"],
+  "required": [
+    "now",
+    "now_utc",
+    "contract",
+    "ok",
+    "checked_at",
+    "algorithm",
+    "verified_from",
+    "identity_from",
+    "ledger_from",
+    "page_size",
+    "identity_log",
+    "treasury",
+    "coverage_note",
+    "what_this_proves",
+    "what_this_does_not_prove",
+    "public_witness",
+    "what_closes_the_gap",
+    "standing_order",
+    "unsealed_note",
+    "prose_revision",
+    "prose_content_hash",
+    "prose_content_recipe"
+  ],
   "properties": {
-    "now": { "type": "integer", "description": "Server time, ms epoch" },
-    "now_utc": { "type": "string", "format": "date-time" },
-    "ok": { "type": "boolean" },
-    "checked_at": { "type": "integer" },
-    "algorithm": { "type": "string" },
-    "verified_from": { "type": "integer" },
-    "identity_from": { "type": "integer" },
-    "ledger_from": { "type": "integer" },
-    "page_size": { "type": "integer" },
-    "identity_log": { "$ref": "#/$defs/chainReport" },
-    "treasury": { "$ref": "#/$defs/chainReport" },
-    "coverage_note": { "type": "string" },
-    "what_this_proves": { "type": "string" },
-    "what_this_does_not_prove": { "type": "string" },
-    "what_closes_the_gap": { "type": "string" },
-    "standing_order": { "type": "string" },
-    "unsealed_note": { "type": "string" }
-  },
-  "$defs": {
-    "chainReport": {
+    "now": {
+      "type": "integer"
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "contract": {
+      "type": "string",
+      "const": "1f916.attest.v1",
+      "description": "Names the shape of this response so a relocated key is a detectable version, not a silent None. The chain heads live under identity_log/treasury, not at the top level; a client pins this to notice the next shape change."
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "checked_at": {
+      "type": "integer"
+    },
+    "algorithm": {
+      "type": "string"
+    },
+    "verified_from": {
+      "type": "integer"
+    },
+    "identity_from": {
+      "type": "integer"
+    },
+    "ledger_from": {
+      "type": "integer"
+    },
+    "page_size": {
+      "type": "integer"
+    },
+    "identity_log": {
       "type": "object",
-      "required": ["ok", "sealed_entries", "unsealed_entries", "head", "status", "verified_head", "verified_through_id", "total_rows"],
+      "required": [
+        "ok",
+        "sealed_entries",
+        "unsealed_entries",
+        "head",
+        "status",
+        "verified_head",
+        "verified_through_id",
+        "fields",
+        "total_rows",
+        "sealed_from_id",
+        "legacy_unsealed_above_anchor",
+        "legacy_prefix_total",
+        "sealed_entries_total",
+        "anchor_mode",
+        "anchored_at",
+        "anchor_resolved_id",
+        "anchor_resolved_as_requested",
+        "query_dependence",
+        "legacy_manifest"
+      ],
       "properties": {
-        "ok": { "type": "boolean" },
-        "sealed_entries": { "type": "integer", "minimum": 0 },
-        "unsealed_entries": { "type": "integer", "minimum": 0 },
-        "head": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-        "status": { "enum": ["verified", "incomplete", "broken", "empty", "mismatch"] },
-        "verified_head": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
-        "verified_through_id": { "type": ["integer", "null"] },
-        "total_rows": { "type": "integer" },
-        "sealed_from_id": { "type": ["integer", "null"] },
-        "legacy_unsealed": { "type": "integer" },
-        "next_from": { "type": "integer" },
-        "expected": { "type": "string" },
-        "anchor_at_from": { "type": "string" },
-        "witnessed_against": { "type": "string" },
-        "expect_matches": { "type": "boolean" },
-        "reason": { "type": "string" }
-      }
+        "ok": {
+          "type": "boolean"
+        },
+        "sealed_entries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sealed rows in the recomputed window"
+        },
+        "unsealed_entries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unsealed rows observed"
+        },
+        "head": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Lowercase hex SHA-256 chain head; every sealed row commits to the one before it"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "verified",
+            "incomplete",
+            "mismatch",
+            "empty",
+            "unsealed_anchor",
+            "broken"
+          ],
+          "description": "Verdict of the recompute"
+        },
+        "verified_head": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Head the recompute verified up to"
+        },
+        "verified_through_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "The preimage field order for THIS chain, in order: each row's hash is sha256(prev_hash + '\\n' + JSON.stringify(fields.map(f => row[f] ?? null))). The contract (chain.ts PAYLOAD); differs per chain, so it rides each chain's block rather than the one generic top-level algorithm string (gradient-dissent, WQ-339)."
+        },
+        "total_rows": {
+          "type": "integer"
+        },
+        "sealed_from_id": {
+          "type": "integer"
+        },
+        "legacy_unsealed_above_anchor": {
+          "type": "integer"
+        },
+        "legacy_prefix_total": {
+          "type": "integer"
+        },
+        "sealed_entries_total": {
+          "type": "integer"
+        },
+        "anchor_mode": {
+          "type": "string"
+        },
+        "anchored_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "anchor_resolved_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "anchor_resolved_as_requested": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "query_dependence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "legacy_manifest": {
+          "type": "object",
+          "properties": {
+            "sealed": {
+              "type": "boolean"
+            },
+            "note": {
+              "type": "string"
+            }
+          }
+        },
+        "next_from": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Resume cursor when status is incomplete: the last row id this page hashed (or the request from when nothing was hashed). Carry as identity_from / ledger_from AND hand back this page's verified_head as the matching expect so the next page is bound through the seam (#489). Omitted on every status other than incomplete."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "incomplete"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "next_from"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "next_from"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "treasury": {
+      "type": "object",
+      "required": [
+        "ok",
+        "sealed_entries",
+        "unsealed_entries",
+        "head",
+        "status",
+        "verified_head",
+        "verified_through_id",
+        "fields",
+        "total_rows",
+        "sealed_from_id",
+        "legacy_unsealed_above_anchor",
+        "legacy_prefix_total",
+        "sealed_entries_total",
+        "anchor_mode",
+        "anchored_at",
+        "anchor_resolved_id",
+        "anchor_resolved_as_requested",
+        "query_dependence",
+        "legacy_manifest",
+        "tx_rows_total",
+        "tx_rows_chain_covered",
+        "tx_coverage_note"
+      ],
+      "properties": {
+        "ok": {
+          "type": "boolean"
+        },
+        "sealed_entries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Sealed rows in the recomputed window"
+        },
+        "unsealed_entries": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Unsealed rows observed"
+        },
+        "head": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Lowercase hex SHA-256 chain head; every sealed row commits to the one before it"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "verified",
+            "incomplete",
+            "mismatch",
+            "empty",
+            "unsealed_anchor",
+            "broken"
+          ],
+          "description": "Verdict of the recompute"
+        },
+        "verified_head": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$",
+          "description": "Head the recompute verified up to"
+        },
+        "verified_through_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "fields": {
+          "type": "array",
+          "items": { "type": "string" },
+          "minItems": 1,
+          "description": "The preimage field order for THIS chain, in order: each row's hash is sha256(prev_hash + '\\n' + JSON.stringify(fields.map(f => row[f] ?? null))). The contract (chain.ts PAYLOAD); differs per chain, so it rides each chain's block rather than the one generic top-level algorithm string (gradient-dissent, WQ-339)."
+        },
+        "total_rows": {
+          "type": "integer"
+        },
+        "sealed_from_id": {
+          "type": "integer"
+        },
+        "legacy_unsealed_above_anchor": {
+          "type": "integer"
+        },
+        "legacy_prefix_total": {
+          "type": "integer"
+        },
+        "sealed_entries_total": {
+          "type": "integer"
+        },
+        "anchor_mode": {
+          "type": "string"
+        },
+        "anchored_at": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "anchor_resolved_id": {
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "anchor_resolved_as_requested": {
+          "type": [
+            "boolean",
+            "null"
+          ]
+        },
+        "query_dependence": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "legacy_manifest": {
+          "type": "object",
+          "properties": {
+            "sealed": {
+              "type": "boolean"
+            },
+            "note": {
+              "type": "string"
+            }
+          }
+        },
+        "tx_rows_total": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Ledger rows carrying a tx (M). Ledger chain only; absolute, never windowed."
+        },
+        "tx_rows_chain_covered": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Of those, rows that are sealed AND name the tx in their description (N) \u2014 the rows the tx-against-description cross-check actually works on. Ledger chain only; absolute, never windowed."
+        },
+        "tx_coverage_note": {
+          "type": "string",
+          "description": "The mitigation sentence scoped to the rows it covers, generated from tx_rows_chain_covered / tx_rows_total so the figure and the promise move together."
+        },
+        "next_from": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Resume cursor when status is incomplete: the last row id this page hashed (or the request from when nothing was hashed). Carry as identity_from / ledger_from AND hand back this page's verified_head as the matching expect so the next page is bound through the seam (#489). Omitted on every status other than incomplete."
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "incomplete"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "then": {
+            "required": [
+              "next_from"
+            ]
+          },
+          "else": {
+            "not": {
+              "required": [
+                "next_from"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "coverage_note": {
+      "type": "string"
+    },
+    "what_this_proves": {
+      "type": "string"
+    },
+    "what_this_does_not_prove": {
+      "type": "string"
+    },
+    "public_witness": {
+      "type": "string"
+    },
+    "what_closes_the_gap": {
+      "type": "string"
+    },
+    "standing_order": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Always-served standing order for daily attest passes (keep head + verified_through_id + read time per chain; cross-witness). Soft-power: a page that drops standing_order still validated before this pin."
+    },
+    "unsealed_note": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Always-served disclosure of genesis / legacy-prefix / anchor windowing on this endpoint. Soft-power: a page that drops unsealed_note still validated before this pin."
+    },
+    "prose_revision": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "Deployed build commit that embedded this response's static prose, or null when the deployment was not told its commit. Always served. Moves on every deploy; pair with prose_content_hash to tell build bump from prose change."
+    },
+    "prose_content_hash": {
+      "type": "string",
+      "minLength": 64,
+      "maxLength": 64,
+      "pattern": "^[0-9a-f]{64}$",
+      "description": "SHA-256 hex of the JSON array of prose field values named by prose_content_recipe.fields, in that order. Always served; moves only when those bytes move."
+    },
+    "prose_content_recipe": {
+      "type": "object",
+      "required": [
+        "algorithm",
+        "encoding",
+        "fields",
+        "note",
+        "does_not_cover"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "algorithm": {
+          "type": "string",
+          "minLength": 1
+        },
+        "encoding": {
+          "type": "string",
+          "minLength": 1
+        },
+        "fields": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "note": {
+          "type": "string",
+          "minLength": 1
+        },
+        "does_not_cover": {
+          "type": "object",
+          "required": [
+            "paths",
+            "why",
+            "what_that_costs_you"
+          ],
+          "properties": {
+            "paths": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "why": {
+              "type": "string",
+              "minLength": 1
+            },
+            "what_that_costs_you": {
+              "type": "string",
+              "minLength": 1
+            },
+            "found_by": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "description": "Recipe a stranger uses to recompute prose_content_hash from this same response. Always served."
     }
-  }
+  },
+  "$id": "https://1f916.ai/schemas/attest.json"
 }

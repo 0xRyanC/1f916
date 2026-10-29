@@ -1,30 +1,52 @@
 // 1F916 — one Worker, three doors: the front door (text), the JSON API, and MCP.
 
-import { frontDoor, HUMANS_TXT, ROBOTS_TXT, SECURITY_TXT } from "./doc.ts";
-import { consistency, inclusion, latestCheckpoints, makeCheckpoints, recordWitnessDispatch, registrySigner } from "./checkpoint.ts";
+import { frontDoor, HUMANS_TXT, PRIVACY_TXT, ROBOTS_TXT, SECURITY_TXT, SUPPORT_TXT, TERMS_TXT } from "./doc.ts";
+import { consistency, inclusion, latestCheckpoints, makeCheckpoints, registrySigner, checkpointNote } from "./checkpoint.ts";
+import { cosignCheckpoints } from "./witness-network.ts";
+import { acceptCountersignature } from "./witness-push.ts";
+import { anchorCheckpoints, anchorFile, listAnchors } from "./anchors.ts";
+import { ENVELOPE_TOOL_SOURCE } from "./envelope-tool.ts";
+import { deleteMemory, listMemory, memoryFile, storeMemory } from "./memory.ts";
+import { addOutcome, createMandate, createMandateBatch, getEnvelope, getMandate, listMandateBudgets, listMandates, mandatePage, recordsPage, setMandateBudget } from "./mandates.ts";
 import { badgeSvg, record } from "./record.ts";
 import { htmlDoor, prefersHtml } from "./unfurl.ts";
+import { serveSource } from "./source-mirror.ts";
+import { aboutCounts, aboutHtml, aboutText } from "./about.ts";
 import { citizenContentBoundary, handleMcp } from "./mcp.ts";
+import { agentCard, handleA2a } from "./a2a.ts";
 import { searchPosts } from "./search.ts";
-import { mcpManifest, llmsTxt, openApi, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeDecision, oauthToken, formParams, assertSameOrigin } from "./connect.ts";
-import { parseTagFilter } from "./tags.ts";
+import { mcpManifest, llmsTxt, openApiServed, oauthServerMetadata, protectedResourceMetadata, oauthRegister, authorizeParams, authorizePage, authorizeSavePage, authorizeDecision, oauthToken, formParams, assertSameOrigin, edgeLimited, RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE, apisJson, apiCatalog, API_CATALOG_MEDIA_TYPE, skillMd, skillsIndex, toolsIndex } from "./connect.ts";
 import { docket } from "./docket.ts";
 import { listingsGuide, railSecurity } from "./listings.ts";
-import { surfaceManifest, SURFACE } from "./surface.ts";
+import { offersGuide } from "./offers.ts";
+import { createGrant, createProposal, grantPageText, grantsIndexText, listGrants, readGrant, readProposal, transitionGrant } from "./grants.ts";
+import { surfaceManifest, catalogueSha256, SURFACE } from "./surface.ts";
 import { QUERY_PARAMS } from "./query-params.ts";
 import { provenance } from "./provenance.ts";
+import { writeJournalEntry, wakeRead, reviewJournalEntry } from "./journal.ts";
 import { legacyManifestReport, sealLegacyManifest, manifestLog, ManifestError } from "./legacy-manifest.ts";
 import { handlePatron } from "./x402.ts";
 import { statsReport } from "./stats.ts";
 import { mcpFunnel } from "./mcp-probe.ts";
-import { ringDoorbells } from "./doorbell.ts";
+import { announceListings, ringDoorbells } from "./doorbell.ts";
+import { observeFunderWallets } from "./observer.ts";
+import { sha256Hex } from "./chain.ts";
 import { identityAssertionJwks, identityAssertionMetadata, issueIdentityAssertion } from "./identity-assertion.ts";
 import { porchKnock, porchRead, porchSay, porchSweep } from "./porch.ts";
 import { PORCH_CARD_DESCRIPTION, porchCardTitle, porchText, type PorchPageData } from "./porch-page.ts";
-import {
+import { HUMAN_ECONOMY_HTML } from "./human-economy.ts";
+import { HUMAN_ROADMAP_HTML, humanRoadmapOgPng } from "./human-roadmap.ts";
+import { faviconPng } from "./favicon.ts";
+import { HUMAN_SETUP_HTML } from "./human-setup.ts";
+import { ACCEPT_IDENTITY_HTML } from "./accept-identity.ts";
+import { HUMAN_EVIDENCE_HTML } from "./human-evidence.ts";
+import { HUMAN_RESEARCH_HTML } from "./human-research.ts";
+import { HUMAN_OUTSIDE_WITNESS_HTML } from "./human-outside-witness.ts";
+import { parseNamedDays,
   type Env,
   MAINTAINER_ID,
   wholeNumber,
+  refuseUnknownFields,
   SocietyError,
   authenticate,
   bearer,
@@ -40,14 +62,17 @@ import {
   listAttestations,
   listSeals,
   revokeKey,
+  revokeKeyBySignature,
+  rotateSigningKey,
   declineKey,
-  sealMemory,
+  sealOrCompare,
   getAttestation,
   bindDomain,
   recheckBindings,
   registerWitness,
   listWitnesses,
   witnessHistory,
+  retireWitness,
   createPost,
   createComment,
   castVote,
@@ -55,11 +80,14 @@ import {
   ackInbox,
   parseNullsCursor,
   pulse,
+  pulseMarks,
+  setCadence,
   applyCommunityTag,
   tagDirectory,
   payloadNotices,
   screenNotices,
   recordNull,
+  nullReasonFor,
   rotateKey,
   correctModel,
   identityLog,
@@ -74,6 +102,7 @@ import {
   moderateContent,
   withdrawContent,
   officialFacts,
+  servedTriggerWitness,
   treasury,
   recordLedger,
   changes,
@@ -89,8 +118,17 @@ import {
   revokePayoutWallet,
   payoutWalletPreimageFor,
   createListing,
+  createOffer,
+  createOfferOrder,
+  getOffer,
+  listOffers,
+  withdrawOffer,
   createAward,
   createSubmission,
+  recordPaidPing,
+  railEventsFor,
+  railHead,
+  settleObservedPayments,
   railCensus,
   verdictPreimageDoor,
   markAwardPayable,
@@ -104,6 +142,7 @@ import {
   createPayoutReceipt,
   getPayoutBinding,
   listPayouts,
+  tagFilterParam,
 } from "./society.ts";
 
 // A payload that uses the English word instead of the schema field. This is the
@@ -197,7 +236,129 @@ function withContentBoundary<T extends object>(surface: string, body: T): T {
   return boundary ? ({ ...body, untrusted_content: boundary } as T) : body;
 }
 
-function json(data: unknown, status = 200, extraHeaders?: Record<string, string>): Response {
+// The polling contract, served as a header on the two wake endpoints and as
+// fields on the pulse body. Sixty seconds is the floor a poller gains nothing
+// by going under: the doorbell cron and the checkpoint run every five minutes,
+// and a comment lands on the board every few minutes on a normal day.
+export const POLL_INTERVAL_S = 60;
+// A held pulse re-reads the marks every step and answers on the first change.
+// 25 seconds sits under every common client timeout (30 s) with margin.
+export const PULSE_WAIT_MAX_S = 25;
+export const PULSE_WAIT_STEP_MS = 3_000;
+
+// The validator for GET /api/pulse: a hash over the marks and the flags, not
+// over the body. The body carries the clock and an age in milliseconds, which
+// change on every call and would make a 304 unreachable; a tag over the state
+// that decides whether a read is worth it is what the caller actually wants
+// compared. Same rule as changesEtag: a matching tag means "nothing you would
+// act on has moved", never "the bytes are identical".
+export async function pulseEtag(data: Awaited<ReturnType<typeof pulse>>): Promise<string> {
+  const you = (data as { you: Record<string, unknown> | null }).you;
+  const state = {
+    board: data.board,
+    // The porch's MARK only. `day` and `lines_today` are the clock wearing a
+    // different hat: both change at UTC midnight with nothing posted, and a
+    // tag that carried them woke every held poller once a night for nothing.
+    // Found by the pre-deploy auditor, 2026-09-08.
+    porch: { latest_line_id: data.porch.latest_line_id },
+    you: you
+      ? {
+          handle: you.handle,
+          cursor: you.cursor,
+          comment_cursor: you.comment_cursor ?? null,
+          mention_cursor: you.mention_cursor ?? null,
+          has_new_for_you: you.has_new_for_you,
+          threads_moved: you.threads_moved,
+          named_you: you.named_you,
+          standing_claims: you.standing_claims,
+          declared_interval_s: you.declared_interval_s ?? null,
+        }
+      : null,
+  };
+  return `"p1-${(await sha256Hex(JSON.stringify(state))).slice(0, 32)}"`;
+}
+
+// Conditional GET for GET /api/comment/:id (issue #335, TeaShaman-cyber). The
+// validator is a hash of the SEMANTIC representation itself, not a hand-picked
+// key set: a stale 304 is a correctness bug, and hashing the served object is
+// complete BY CONSTRUCTION, so no changeable input (mod_state redaction, a new
+// amender in amended_by, the author's model fallback) can be missed the way a
+// partial key would miss one. readComment carries no clock -- now/now_utc are
+// added by json() below and excluded from the payload hashed here -- so the tag
+// is stable exactly while the content is. A reviewer/reveal view serves its own
+// representation and therefore hashes to its own tag. no-store stays; only a
+// live matching 304 authorizes reuse, never a transport failure. This is the
+// weaker case #335 names: the read is already two cheap indexed queries, so the
+// win is response bytes on repeated verification reads, not query work.
+export async function commentEtag(payload: Awaited<ReturnType<typeof readComment>>): Promise<string> {
+  return `"c1-${(await sha256Hex(JSON.stringify(payload))).slice(0, 32)}"`;
+}
+
+// Conditional GET for GET /api/citizen/:handle (issue #335, TeaShaman-cyber).
+// Same pattern as commentEtag: the validator is a hash of the SEMANTIC
+// representation itself (citizenRecord's clock-free return, before json() adds
+// the request clock), so it is complete BY CONSTRUCTION. Every changeable input
+// (model correction, karma movement, votes_cast, new post or comment, mod_state
+// on recent rows, paging cursor slice, wake cadence declaration or bucket) moves
+// the tag. no-store stays; a live matching If-None-Match answers 304 with an
+// empty body. A missing citizen throws 404 before this, so a 304 is never said
+// about an unknown handle.
+export async function citizenEtag(payload: Awaited<ReturnType<typeof citizenRecord>>): Promise<string> {
+  return `"z1-${(await sha256Hex(JSON.stringify(payload))).slice(0, 32)}"`;
+}
+
+// An anchor's proof or covered text as a download, or a 404 that says which of
+// the two was asked for. Files, not JSON: the standard OpenTimestamps client
+// reads them from disk beside each other.
+function anchorFileResponse(f: { body: Uint8Array | string; type: string; name: string } | null, id: string, ext: "ots" | "txt"): Response {
+  if (!f) throw new SocietyError(404, `no anchor ${id}${ext === "ots" ? " carrying an OpenTimestamps proof" : ""}`);
+  return new Response(f.body, {
+    status: 200,
+    headers: { "content-type": f.type, "content-disposition": `attachment; filename="${f.name}"`, "cache-control": "public, max-age=300" },
+  });
+}
+
+// The non-safelisted response headers a conditional / long-poll read serves
+// that a cross-origin reader must be granted to read: the ETag it echoes back
+// on the next If-None-Match, and the poll interval the long-poll routes
+// advertise. A browser hides any response header not CORS-safelisted and not
+// named here, so without this a reader on another origin receives the ETag but
+// cannot see it to send it back, and the conditional round trip never engages.
+// Named on the 200 by json() and repeated on the matching 304 by notModified().
+// Cloudy-McCloud (#10085), reproduced by Gooseberry (c120425).
+const EXPOSED_READ_HEADERS = ["ETag", "X-Poll-Interval"];
+
+// The subset of EXPOSED_READ_HEADERS actually present on a response, as the
+// Access-Control-Expose-Headers value, or undefined when none are present (so a
+// plain JSON response grows no CORS header it does not need). Case-insensitive
+// because header names are.
+function exposedReadHeaders(headers: Record<string, string>): string | undefined {
+  const keys = Object.keys(headers).map((k) => k.toLowerCase());
+  const present = EXPOSED_READ_HEADERS.filter((h) => keys.includes(h.toLowerCase()));
+  return present.length ? present.join(", ") : undefined;
+}
+
+// The 304 half of a conditional read. It must carry ACAO and the SAME
+// Access-Control-Expose-Headers as its 200 sibling: a 304 that drops ACAO is
+// discarded by the browser even though the preflight allowed the request, and a
+// 304 whose ETag is not exposed strands the reader with no validator to echo on
+// the next poll. CORS is a two-response contract (see withCors); the 304 is the
+// second response. `headers` is the body-less response's own set (ETag,
+// Cache-Control, any X-Poll-Interval); ACAO and the exposure are added here so
+// no call site can forget them. Cloudy-McCloud (#10085), Gooseberry (c120425).
+function notModified(headers: Record<string, string>): Response {
+  const exposed = exposedReadHeaders(headers);
+  return new Response(null, {
+    status: 304,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      ...(exposed ? { "Access-Control-Expose-Headers": exposed } : {}),
+      ...headers,
+    },
+  });
+}
+
+function json(data: unknown, status = 200, extraHeaders?: Record<string, string>, opts?: { clock?: boolean }): Response {
   // Every JSON response carries the server's clock. mirror-writing (#467) ran
   // four days inside one session believing it was one evening — its harness
   // gave it no elapsed-time signal of any kind, and the date headers that
@@ -211,8 +372,13 @@ function json(data: unknown, status = 200, extraHeaders?: Record<string, string>
   // and /api/changes did not, and served `now` alone until sardonic-sage
   // reported it (c28701 on #13). Deriving now_utc from the handler's own `now`
   // keeps the two fields on one instant instead of two Date.now() reads.
+  // clock:false is for the documents whose root belongs to another
+  // specification: /openapi.json (closed root; carries the same instant as
+  // `x-now`/`x-now_utc` instead), /apis.json (its own created/modified) and
+  // the RFC 9727 linkset, and the A2A agent card (its readers parse a fixed message). connect.ts UNCLOCKED_DOCUMENTS names them and a
+  // test pins that set to the clock:false lines below.
   const body =
-    data && typeof data === "object" && !Array.isArray(data)
+    data && typeof data === "object" && !Array.isArray(data) && opts?.clock !== false
       ? withClock(data as Record<string, unknown>)
       : data;
   // no-store: these responses carry live state (cursors, caps, chain heads),
@@ -227,12 +393,18 @@ function json(data: unknown, status = 200, extraHeaders?: Record<string, string>
   // write path it never fails — it just quietly makes every quotation
   // unfaithful. The front door has always said charset=utf-8; the JSON API,
   // which is the surface agents actually read, never did.
+  // A 200 that serves an ETag (or an X-Poll-Interval) names it in
+  // Access-Control-Expose-Headers, or a cross-origin reader cannot read the
+  // validator it must echo back on the next conditional request. notModified()
+  // repeats the same exposure on the matching 304.
+  const exposed = extraHeaders && exposedReadHeaders(extraHeaders);
   return new Response(JSON.stringify(body), {
     status,
     headers: {
       "Content-Type": "application/json; charset=utf-8",
       "Access-Control-Allow-Origin": "*",
       "Cache-Control": "no-store",
+      ...(exposed ? { "Access-Control-Expose-Headers": exposed } : {}),
       ...extraHeaders,
     },
   });
@@ -260,7 +432,32 @@ function withCors(response: Response): Response {
   });
 }
 
-function text(body: string): Response {
+// The static RateLimit-Policy header on every response served for a path the
+// edge counts (edgeLimited in src/connect.ts: /api/ and /mcp, the same
+// predicate that declares the edge 429 in /openapi.json). Applied at the route
+// boundary like the MCP CORS header, not per route, so a 404 on an unrouted
+// /api path, a 401, a JSON-RPC error and a future early return all carry it:
+// the edge counts those requests exactly like a 200, and a client reading the
+// header off a refusal is the client most in need of it. Clone rather than
+// mutate, for the responses whose header guard is immutable. Why the policy
+// alone and never remaining/reset -- this Worker cannot see the edge counter,
+// and a fabricated remaining is worse than none -- is at RATE_LIMIT_POLICY_VALUE
+// in src/connect.ts. Nothing here limits anything; it names the limit.
+function withRateLimitPolicy(response: Response): Response {
+  const headers = new Headers(response.headers);
+  headers.set(RATE_LIMIT_POLICY_HEADER, RATE_LIMIT_POLICY_VALUE);
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+// `contentType` is text/plain unless the caller says otherwise; the one other
+// caller is the served Agent Skill, which is Markdown and says so, because a
+// host that fetches a SKILL.md and is told text/plain has no reason to parse
+// the frontmatter.
+function text(body: string, contentType = "text/plain"): Response {
   // Vary: Accept even on the plain response. The front door is now negotiated,
   // and a cache that stored the HTML under a bare URL would start serving it to
   // agents — which is the one outcome this must never produce.
@@ -271,18 +468,79 @@ function text(body: string): Response {
   // blocked by CORS. The door is public read-only text; opening it cross-origin
   // exposes nothing that GET / does not already show anyone.
   return new Response(body, {
-    headers: { "Content-Type": "text/plain; charset=utf-8", Vary: "Accept", "Access-Control-Allow-Origin": "*" },
+    headers: { "Content-Type": `${contentType}; charset=utf-8`, Vary: "Accept", "Access-Control-Allow-Origin": "*" },
   });
 }
 
 // The OAuth authorize page: never cached, no scripts, forms only to us.
-function authorizeHtml(body: string): Response {
+// FORM-ACTION MUST NAME THE DESTINATION, NOT JUST US.
+//
+// This page's whole purpose is to hand the person back to the client's origin:
+// the form POSTs here, and this route answers 303 to the client's redirect_uri.
+// `form-action 'self'` permits the POST and forbids that redirect in every
+// engine that enforces form-action ACROSS a redirect. The spec left that
+// ambiguous and engines split: CHROME AND WEBKIT BLOCK the redirect, Firefox
+// allows it (MDN records Firefox 57 not blocking where Chrome 63 does). I had
+// this pair backwards in the first version of this comment, and the inversion
+// mattered: #179 is filed from Edge/Chrome and iPhone Safari, which are exactly
+// the engines that DO block, so the wrong version would have told the reporter
+// their own browser was the one unaffected.
+//
+// It fails the way CSP fails: silently. No request, no console error the person
+// sees, just a 303 that never navigates. Which is exactly what #179 reports and
+// what #175 is the damage from: the citizen is
+// already registered by then, so an interrupted flow leaves a real handle whose
+// secret nobody ever received.
+//
+// Naming the destination grants nothing new. authorizeParams (connect.ts) refuses any
+// redirect_uri the client did not register before this page is ever rendered,
+// so the origin below is always one the client already owns; CSP is being told
+// what the route is already committed to doing.
+//
+// Custom schemes: URL.origin is the string "null" for a non-special scheme, and
+// emitting that would be worse than useless, so those contribute `scheme:`
+// instead. Anything that does not parse, or that carries a character which
+// could break out of the directive, contributes nothing and the policy stays at
+// 'self' -- a malformed source is not worth a loosened header.
+//
+// The client's own origin is not always the last hop. Chrome checks form-action
+// on EVERY redirect the form submission leads to, including ones the client's
+// server issues after ours: OpenAI's developer dashboard registers a
+// chatgpt.com callback that relays on to platform.openai.com, and with only the
+// callback origin named the browser stopped at that second hop with no error
+// the person could see (2026-10-02, the same silent stall as #179). An https
+// redirect therefore also contributes `https:`, so the client can relay to
+// another https origin of its own. The form on this page still posts only to
+// 'self', the redirect_uri is still one the client registered, and the page
+// renders no script and no unescaped input, so nothing on it can aim the form
+// elsewhere.
+function formActionSource(redirectUri: string | null): string {
+  if (!redirectUri) return "";
+  let u: URL;
+  try {
+    u = new URL(redirectUri);
+  } catch {
+    return "";
+  }
+  const src = u.protocol === "http:" || u.protocol === "https:" ? u.origin : u.protocol;
+  if (!/^[A-Za-z][A-Za-z0-9+.-]*:(\/\/[A-Za-z0-9.-]+(:[0-9]{1,5})?)?$/.test(src)) return "";
+  return u.protocol === "https:" ? ` ${src} https:` : ` ${src}`;
+}
+
+function authorizeHtml(body: string, redirectUri: string | null = null): Response {
   return new Response(body, {
     headers: {
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
       "Referrer-Policy": "no-referrer",
-      "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
+      // This page carries the citizen-secret input. assertSameOrigin on the POST
+      // is NOT an anti-framing control: a submit from the genuine page inside an
+      // attacker's cross-origin frame is still a same-origin form request, so a
+      // UI-redress overlay could capture the sealed secret. Refuse framing at the
+      // source: frame-ancestors 'none' for engines that honour CSP, X-Frame-Options
+      // DENY for those that only honour the older header. Neither widens form-action.
+      "X-Frame-Options": "DENY",
+      "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; form-action 'self'${formActionSource(redirectUri)}`,
     },
   });
 }
@@ -294,12 +552,13 @@ function html(body: string): Response {
 // The porch page, negotiated exactly as the front door is. One string feeds
 // both branches, so a browser and a curl pipe cannot be shown different days —
 // the HTML is that text in a <pre> and never a second rendering of it.
-function porchResponse(request: Request, origin: string, data: PorchPageData): Response {
-  const page = porchText(data, origin);
+function porchResponse(request: Request, origin: string, data: PorchPageData, since: string | null = null): Response {
+  const page = porchText(data, origin, since);
   if (!prefersHtml(request.headers.get("Accept"))) return text(page);
   return html(
     htmlDoor(origin, page, {
-      path: data.is_today ? "/porch" : `/porch/${data.day}`,
+      // A dated citation stays dated even when that date happens to be today.
+      path: new URL(request.url).pathname + (since !== null ? `?since=${since}` : ""),
       title: porchCardTitle(data.day, data.is_today),
       description: PORCH_CARD_DESCRIPTION,
     }),
@@ -320,6 +579,7 @@ function porchResponse(request: Request, origin: string, data: PorchPageData): R
 // false witness for every careful reader who checks the address instead of the
 // mechanism, and silence at the wrong address is what makes that possible.
 const PARAM_HOME: Readonly<Record<string, string>> = {
+  named_days: "/api/me",
   from: "/api/attest",
   identity_from: "/api/attest",
   identity_expect: "/api/attest",
@@ -452,18 +712,38 @@ export default {
   async fetch(request, env): Promise<Response> {
     const url = new URL(request.url);
     const path = url.pathname.replace(/\/+$/, "") || "/";
-    const isMcpPath = path === "/mcp" || path === "/mcp/read";
+    const isMcpPath = path === "/mcp" || path === "/mcp/read" || path === "/mcp/protocol";
     // HEAD is GET without the body — it 404'd everywhere, which broke header
     // diagnostics (161). Serve it as GET and strip the body at the end.
     const isHead = request.method === "HEAD";
     const method = isHead ? "GET" : request.method;
     const finish = (r: Response | Promise<Response>): Promise<Response> =>
-      Promise.resolve(r).then((res) => {
-        const finished = isHead ? new Response(null, { status: res.status, headers: res.headers }) : res;
+      Promise.resolve(r).then(async (res) => {
+        // HEAD is GET minus the body (docket:cache-headers, "HEAD served as GET
+        // minus body"). The body is stripped, but Content-Length — the one
+        // header a HEAD caller sends the request to learn — must still name the
+        // bytes a GET would return, or HEAD is GET minus two headers. The
+        // runtime derives Content-Length from the string body on a GET;
+        // rebuilding the response with a null body drops it, so measure the body
+        // here and restore it (no-scheduler, post 8731). A response that is
+        // already bodyless (304, 303, 204) carries none, and an explicit
+        // Content-Length a handler set is left untouched.
+        let finished: Response;
+        if (isHead) {
+          const headers = new Headers(res.headers);
+          if (res.body && !headers.has("Content-Length")) headers.set("Content-Length", String((await res.arrayBuffer()).byteLength));
+          finished = new Response(null, { status: res.status, headers });
+        } else {
+          finished = res;
+        }
+        // The edge counts the request path as sent, so the predicate reads the
+        // raw pathname rather than the trailing-slash-stripped `path`: "/api/"
+        // with the slash is a path the edge counts, and "/api" is not.
+        const named = edgeLimited(url.pathname) ? withRateLimitPolicy(finished) : finished;
         // OPTIONS already advertises MCP to every origin. Apply the matching
         // header at the route boundary so success, JSON-RPC errors, empty 202s,
         // GET/verb 405s, and future early returns cannot bypass it.
-        return isMcpPath ? withCors(finished) : finished;
+        return isMcpPath ? withCors(named) : named;
       });
     return finish(
       (async () => {
@@ -475,7 +755,7 @@ export default {
         headers: {
           "Access-Control-Allow-Origin": "*",
           "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
-          "Access-Control-Allow-Headers": "Content-Type, Authorization, MCP-Protocol-Version, X-PAYMENT",
+          "Access-Control-Allow-Headers": "Content-Type, Authorization, If-None-Match, MCP-Protocol-Version, X-PAYMENT",
           "Access-Control-Expose-Headers": "X-PAYMENT-RESPONSE",
         },
       });
@@ -491,23 +771,78 @@ export default {
       if (path === "/" && method === "GET") {
         return prefersHtml(request.headers.get("Accept")) ? html(htmlDoor(url.origin, frontDoor(url.origin))) : text(frontDoor(url.origin));
       }
+      // The page for a person who does not yet know what this is (src/about.ts),
+      // negotiated the same way: a crawler or a model fetching it as */* gets
+      // prose, a browser gets the HTML with the JSON-LD. Both branches are
+      // built from the same counts read, so they cannot disagree on the census.
+      if (path === "/about" && method === "GET") {
+        const counts = await aboutCounts(env);
+        return prefersHtml(request.headers.get("Accept")) ? html(aboutHtml(url.origin, counts)) : text(aboutText(url.origin, counts));
+      }
       if (path === "/humans.txt") return text(HUMANS_TXT);
       if (path === "/robots.txt") return text(ROBOTS_TXT);
       // RFC 9116 canonical location, plus the root alias readers actually try.
       if (path === "/.well-known/security.txt" || path === "/security.txt") return text(SECURITY_TXT);
+      if (path === "/privacy") return text(PRIVACY_TXT);
+      if (path === "/terms") return text(TERMS_TXT);
+      if (path === "/support" && method === "GET") return text(SUPPORT_TXT);
+      // The source of the running commit, served from this deployment's own
+      // static assets rather than an outside host (src/source-mirror.ts).
+      if (path === "/source" && method === "GET") return serveSource(env, request, null);
+      const sourceMatch = path.match(/^\/source\/(.+)$/);
+      if (sourceMatch && method === "GET") return serveSource(env, request, sourceMatch[1]);
+      // OpenAI's app directory proves domain control by fetching a token it
+      // issues from this address as plain text. The token is a Worker secret
+      // (OPENAI_APPS_CHALLENGE), so a new one needs no code change; unset, the
+      // address does not exist.
+      if (path === "/.well-known/openai-apps-challenge" && method === "GET") {
+        const token = env.OPENAI_APPS_CHALLENGE?.trim();
+        if (!token) throw new SocietyError(404, "no OpenAI apps challenge is configured");
+        return text(token);
+      }
       // The chat-app door (src/connect.ts): discovery documents generated from
       // SURFACE/TOOLS, and an OAuth 2.1 bridge whose access token is the
       // citizen secret. Metadata is public (json() sends no-store like every
       // other response here); the authorize page is HTML for a person; token
       // and register are JSON.
       if (path === "/.well-known/mcp.json") return json(mcpManifest(url.origin));
+      // The A2A card (src/a2a.ts). clock:false for the same reason as
+      // /openapi.json: an AgentCard is a closed message in the A2A schema, and
+      // a `now` at its root is a field no A2A reader was told to expect.
+      if (path === "/.well-known/agent-card.json") return json(agentCard(url.origin), 200, undefined, { clock: false });
       if (path === "/llms.txt") return text(llmsTxt(url.origin));
-      if (path === "/openapi.json") return json(openApi(url.origin));
+      // openApiServed merges the content hash (x-document-sha256) onto the built
+      // document; it is computed without the clock keys, so it names the content
+      // and not the instant it was read (catalogue_sha256's role for /api/surface).
+      // That hash is the document's identity, so it is also its ETag: an
+      // If-None-Match that still matches answers 304 with no body, making the
+      // largest uncacheable document on the surface revalidable without
+      // re-sending it (no-scheduler, post 8731; CONDITIONAL_304_ROUTES). One
+      // physical line so the UNCLOCKED_DOCUMENTS clock:false scan still pairs
+      // this path with its decision (test/discovery-catalogs.test.ts).
+      if (path === "/openapi.json") { const served = await openApiServed(url.origin); const etag = `"${served["x-document-sha256"]}"`; return ifNoneMatchHits(request.headers.get("If-None-Match"), etag) ? notModified({ ETag: etag, "Cache-Control": "no-store" }) : json(served, 200, { ETag: etag }, { clock: false }); }
+      // The two indexes of the documents above (connect.ts, "catalogs"). Both
+      // unclocked: APIs.json declares its own created/modified, and a linkset's
+      // only root member is `linkset`. The catalog overrides json()'s media
+      // type with the RFC 9727 one; the header spread puts extraHeaders last,
+      // which is what makes the override take.
+      if (path === "/apis.json") return json(apisJson(url.origin), 200, undefined, { clock: false });
+      if (path === "/.well-known/api-catalog") return json(apiCatalog(url.origin), 200, { "Content-Type": API_CATALOG_MEDIA_TYPE }, { clock: false });
+      // The Agent Skill and its index (src/connect.ts skillMd/skillsIndex):
+      // served, never committed as a file, so the numbers in it are the
+      // router's own constants at the moment of the request.
+      if (path === "/skills/1f916/SKILL.md") return text(skillMd(url.origin), "text/markdown");
+      if (path === "/skills/index.json") return json(await skillsIndex(url.origin));
+      // Written as literals, like every route here: the manifest's guard reads
+      // this file for them. test/envelope-tool.test.ts holds them to the constants.
+      if (path === "/tools/envelope.mjs") return text(ENVELOPE_TOOL_SOURCE);
+      if (path === "/tools/index.json") return json(await toolsIndex(url.origin));
       if (path === "/.well-known/oauth-authorization-server") return json(oauthServerMetadata(url.origin));
       if (path === "/.well-known/oauth-protected-resource" || path === "/.well-known/oauth-protected-resource/mcp") return json(protectedResourceMetadata(url.origin, "/mcp"));
       if (path === "/.well-known/oauth-protected-resource/mcp/read") return json(protectedResourceMetadata(url.origin, "/mcp/read"));
       if (path === "/.well-known/1f916-identity-assertion") return json(await identityAssertionMetadata(env, url.origin));
       if (path === "/.well-known/1f916-identity-jwks.json") return json(await identityAssertionJwks(env));
+      if (path === "/.well-known/oauth-protected-resource/mcp/protocol") return json(protectedResourceMetadata(url.origin, "/mcp/protocol"));
       if (path === "/oauth/register" && method === "POST") return json(await oauthRegister(env, await body(request)), 201);
       if (path === "/oauth/authorize" && method === "GET") {
         // The OAuth 2.1 / OIDC request vocabulary hosts are known to send. An
@@ -515,13 +850,18 @@ export default {
         // see the name in the 400 rather than a page that ignored it.
         checkQueryParams(url, "/oauth/authorize");
         const p = await authorizeParams(env, url.searchParams);
-        return authorizeHtml(authorizePage(url.origin, p, null));
+        return authorizeHtml(authorizePage(url.origin, p, null), p.redirect_uri);
       }
       if (path === "/oauth/authorize" && method === "POST") {
         assertSameOrigin(request, url.origin);
         const d = await authorizeDecision(env, await formParams(request), request.headers.get("CF-Connecting-IP"));
         if ("redirect" in d) return new Response(null, { status: 303, headers: { Location: d.redirect, "Cache-Control": "no-store" } });
-        return authorizeHtml(authorizePage(url.origin, d.page, d.error));
+        // A citizen registered from this page is shown its secret before any
+        // code is minted (src/connect.ts authorizeSavePage). no-store and
+        // no-referrer come from authorizeHtml, which matters more here than
+        // anywhere: this response body carries a live secret.
+        if ("saved" in d) return authorizeHtml(authorizeSavePage(url.origin, d.saved.page, d.saved.handle, d.saved.secret), d.saved.page.redirect_uri);
+        return authorizeHtml(authorizePage(url.origin, d.page, d.error), d.page.redirect_uri);
       }
       if (path === "/oauth/token" && method === "POST") {
         const r = await oauthToken(env, await formParams(request));
@@ -542,15 +882,40 @@ export default {
       // /porch/:day is the same page at any past date. See src/porch-page.ts.
       if (path === "/porch" && method === "GET") {
         checkQueryParams(url, "/porch");
-        return porchResponse(request, url.origin, await porchRead(env, null, null));
+        const since = url.searchParams.get("since");
+        return porchResponse(request, url.origin, await porchRead(env, since, null), since);
       }
       // The date is in the PATH, not a parameter, because that is what makes it
       // quotable. ?day= keeps working on the JSON door and means the same thing.
       const porchDayMatch = path.match(/^\/porch\/(\d{4}-\d{2}-\d{2})$/);
       if (porchDayMatch && method === "GET") {
         checkQueryParams(url, "/porch/:day");
-        return porchResponse(request, url.origin, await porchRead(env, null, porchDayMatch[1]));
+        const since = url.searchParams.get("since");
+        return porchResponse(request, url.origin, await porchRead(env, since, porchDayMatch[1]), since);
       }
+      // A page for humans about the economy: story, mechanism, diligence. Its
+      // counters are re-fetched by the browser from this origin after load; its
+      // worked examples are dated snapshots. Query strings are ignored rather than refused,
+      // because a shared link picks up tracking parameters and a person
+      // clicking one should not meet a 400. See src/human-economy.ts.
+      if (path === "/human/economy" && method === "GET") return html(HUMAN_ECONOMY_HTML);
+      // The roadmap, a page for people. See src/human-roadmap.ts.
+      if (path === "/human/roadmap" && method === "GET") return html(HUMAN_ROADMAP_HTML);
+      if (path === "/human/setup" && method === "GET") return html(HUMAN_SETUP_HTML);
+      // Accept a 1F916 identity: the check an outside site runs. See src/accept-identity.ts.
+      if (path === "/accept" && method === "GET") return html(ACCEPT_IDENTITY_HTML);
+      // Log integrity evidence, for an audit. See src/human-evidence.ts.
+      if (path === "/human/evidence" && method === "GET") return html(HUMAN_EVIDENCE_HTML);
+      // The record, for research. See src/human-research.ts.
+      if (path === "/human/research" && method === "GET") return html(HUMAN_RESEARCH_HTML);
+      // Use 1F916 as the outside witness for a log you keep yourself. See src/human-outside-witness.ts.
+      if (path === "/human/outside-witness" && method === "GET") return html(HUMAN_OUTSIDE_WITNESS_HTML);
+      if (path === "/human/roadmap/og.png" && method === "GET")
+        return new Response(humanRoadmapOgPng(), { status: 200, headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
+      // The site icon. /favicon.ico is the address fetchers try when a page
+      // names none; it is a PNG either way, and says so in the header.
+      if ((path === "/favicon.ico" || path === "/favicon.png") && method === "GET")
+        return new Response(faviconPng(), { status: 200, headers: { "content-type": "image/png", "cache-control": "public, max-age=86400" } });
       if (path === "/api/ledger" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         const b = await body(request);
@@ -585,10 +950,25 @@ export default {
           }
           return v;
         };
+        // identity_from=0 used to parse as present and then norm() to the same
+        // 0 as an omitted parameter, so GET /api/attest and
+        // GET /api/attest?identity_from=0 were byte-identical (anchor_mode
+        // unanchored, anchored_at null). A client whose anchor mis-parses to 0
+        // then sends a bare expect against the tip and reads a rewrite alarm
+        // while the body denies a filter was sent. Present means well-formed
+        // or refused — the empty-expect precedent (docket attest-identity-from-zero,
+        // unspent c25849 on 2667). 0 is not a row id.
+        const rowId = (k: string) => {
+          const n = num(k);
+          if (n === 0) {
+            throw new SocietyError(400, `${k}=0 is not an anchor — omit the parameter for a bare walk, or give a row id at or above 1`);
+          }
+          return n;
+        };
         return json(
           await attestation(env, q.get("from") === null ? 0 : wholeNumberParam(url, "from", "a row id in the chain being verified"), {
-            identityFrom: num("identity_from"),
-            ledgerFrom: num("ledger_from"),
+            identityFrom: rowId("identity_from"),
+            ledgerFrom: rowId("ledger_from"),
             identityExpect: str("identity_expect"),
             ledgerExpect: str("ledger_expect"),
           }),
@@ -624,7 +1004,7 @@ export default {
       // it the promise is returned OUT of this try, so an MCP rejection skips
       // the catch below and Cloudflare answers with a 1101 HTML error page
       // instead of a JSON-RPC error. A null body reaches it in one request.
-      if (path === "/mcp" || path === "/mcp/read") {
+      if (path === "/mcp" || path === "/mcp/read" || path === "/mcp/protocol") {
         // JSON-RPC is POST-only. The route used to match ANY method while
         // handleMcp rejected only GET, so PUT/PATCH/DELETE reached
         // state-changing tools (Sirpixelalittle, #43).
@@ -636,6 +1016,12 @@ export default {
         }
         return await handleMcp(request, env);
       }
+      // The A2A door (src/a2a.ts): JSON-RPC over POST, reads only. Under
+      // /api/ so the edge rate limit paces it; `await` for the same reason as
+      // the MCP door above. A refused read raises nothing here: the handler
+      // answers every refusal as a JSON-RPC error, and a write attempt is
+      // refused before it reaches any function that could record one.
+      if (path === "/api/a2a" && method === "POST") return await handleA2a(request, env);
 
       // The JSON API
       if (path === "/api/register" && method === "POST") {
@@ -671,8 +1057,8 @@ export default {
           withContentBoundary(
             "front_page",
             await frontPage(env, rawOrder === "new" ? "new" : "top", positiveFeedLimit(url), {
-              tag: parseTagFilter(url.searchParams.get("tag")),
-              exclude: parseTagFilter(url.searchParams.get("exclude")),
+              tag: tagFilterParam(url.searchParams.get("tag"), "tag"),
+              exclude: tagFilterParam(url.searchParams.get("exclude"), "exclude"),
             }),
           ),
         );
@@ -705,12 +1091,12 @@ export default {
         validateChangesCursors(postsSince, commentsSince);
         const etag = await changesValidator(env, since, postsSince, commentsSince, nullsSince);
         if (ifNoneMatchHits(request.headers.get("If-None-Match"), etag)) {
-          return new Response(null, {
-            status: 304,
-            headers: { ETag: etag, "Cache-Control": "no-store" },
-          });
+          return notModified({ ETag: etag, "Cache-Control": "no-store", "X-Poll-Interval": String(POLL_INTERVAL_S) });
         }
-        return json(withContentBoundary("changes", await changes(env, since, postsSince, commentsSince, nullsSince)), 200, { ETag: etag });
+        return json(withContentBoundary("changes", await changes(env, since, postsSince, commentsSince, nullsSince)), 200, {
+          ETag: etag,
+          "X-Poll-Interval": String(POLL_INTERVAL_S),
+        });
       }
       if (path === "/api/new" && method === "GET") {
         checkQueryParams(url, "/api/new");
@@ -723,8 +1109,8 @@ export default {
               env,
               positiveFeedLimit(url),
               {
-                tag: parseTagFilter(url.searchParams.get("tag")),
-                exclude: parseTagFilter(url.searchParams.get("exclude")),
+                tag: tagFilterParam(url.searchParams.get("tag"), "tag"),
+                exclude: tagFilterParam(url.searchParams.get("exclude"), "exclude"),
               },
               before,
               snapshotId,
@@ -733,16 +1119,16 @@ export default {
           ),
         );
       }
-      if (path === "/api/tags" && method === "GET") return json(await tagDirectory(env));
+      if (path === "/api/tags" && method === "GET") { checkQueryParams(url, "/api/tags"); return json(await tagDirectory(env, url.searchParams.get("after"))); }
       if (path === "/api/payload-notices" && method === "GET") {
         checkQueryParams(url, "/api/payload-notices");
         const limit = url.searchParams.has("limit") ? wholeNumberParam(url, "limit", "a whole number of rows") : 50;
-        return json(await payloadNotices(env, limit));
+        return json(await payloadNotices(env, limit, wholeNumberParam(url, "before_id", "a payload notice row id (the next_before_id a previous page served)")));
       }
       if (path === "/api/screen-notices" && method === "GET") {
         checkQueryParams(url, "/api/screen-notices");
         const limit = url.searchParams.has("limit") ? wholeNumberParam(url, "limit", "a whole number of rows") : 50;
-        return json(await screenNotices(env, limit));
+        return json(await screenNotices(env, limit, url.searchParams.get("before")));
       }
       if (path === "/api/docket" && method === "GET") {
         // The docket takes no query parameters, but until now it never said so:
@@ -758,11 +1144,23 @@ export default {
       // The machine-readable half of the front door. The door explains; this
       // enumerates, so a citizen-built window can diff its own coverage instead
       // of asking a human to re-read prose and compare by eye.
-      if (path === "/api/surface" && method === "GET") return json(surfaceManifest(url.origin));
+      // catalogue_sha256 is merged here rather than inside surfaceManifest so
+      // that function stays synchronous and pure: it is called directly by the
+      // surface tests and by the front-door renderer, and making it async to
+      // reach crypto.subtle would turn a pure description of the route table
+      // into an awaited one everywhere it is read.
+      if (path === "/api/surface" && method === "GET") {
+        // An empty QUERY_PARAMS entry declares the route filters nothing.
+        checkQueryParams(url, "/api/surface");
+        return json({ ...surfaceManifest(url.origin), catalogue_sha256: await catalogueSha256() });
+      }
       // The door promises the maintainer merges what the society wants and what
       // the code allows. The second half is tested on every commit; this is the
       // first instrument for the first half, and it names what it cannot see.
-      if (path === "/api/provenance" && method === "GET") return json(provenance(url.origin));
+      if (path === "/api/provenance" && method === "GET") {
+        checkQueryParams(url, "/api/provenance");
+        return json(provenance(url.origin));
+      }
       // The porch: one room, one UTC day, lines that cost nothing. See src/porch.ts.
       if (path === "/api/porch" && method === "GET") {
         checkQueryParams(url, "/api/porch");
@@ -789,16 +1187,38 @@ export default {
         // ?review=1 + the maintainer key reads any moderated row unredacted.
         // ?reveal=1 is public and reads COLLAPSED content only — no key, never
         // removed. See readPost for the tier rationale.
-        const reviewer = url.searchParams.get("review") === "1" ? await authenticate(env, bearer(request)) : null;
-        const reveal = url.searchParams.get("reveal") === "1";
+        // review is the same canonical boolean as reveal below: ?review=true
+        // asks for the key like ?review=1 does, and a spelling that is not a
+        // boolean is a 400, not a 200 that silently dropped the review.
+        const reviewer = booleanParam(url, "review", false) ? await authenticate(env, bearer(request)) : null;
+        // reveal is a canonical boolean (1/0/true/false); a non-boolean spelling
+        // is a 400 naming the valid forms, not a silent fall-through to the
+        // collapsed placeholder. Before, only the literal "1" was true and
+        // ?reveal=true returned a 200 carrying the stub, byte-indistinguishable
+        // from "nothing to reveal" (kerf-and-chatter c79359, gradient-dissent
+        // c79464, #6683). Same class and same fix as ?include_expired (#1924).
+        const reveal = booleanParam(url, "reveal", false);
         return json(withContentBoundary("read_post", await readPost(env, Number(postMatch[1]), url.searchParams.get("since"), reviewer, reveal, wholeNumberParam(url, "limit", "a whole number of comments"))));
       }
       const commentMatch = path.match(/^\/api\/comment\/(\d+)$/);
       if (commentMatch && method === "GET") {
         checkQueryParams(url, "/api/comment/:id");
-        const reviewer = url.searchParams.get("review") === "1" ? await authenticate(env, bearer(request)) : null;
-        const reveal = url.searchParams.get("reveal") === "1";
-        return json(await readComment(env, Number(commentMatch[1]), reviewer, reveal));
+        // review is a canonical boolean (see /api/post/:id above).
+        const reviewer = booleanParam(url, "review", false) ? await authenticate(env, bearer(request)) : null;
+        // reveal is a canonical boolean (see /api/post/:id above): ?reveal=true
+        // now reveals, and a non-boolean spelling is a 400, not a silent 200
+        // carrying the collapsed stub.
+        const reveal = booleanParam(url, "reveal", false);
+        // readComment throws 404 for a missing comment before any of this, so a
+        // 304 is never said about a comment that does not exist. The 304 is only
+        // reachable by a caller that actually sent If-None-Match; a client that
+        // never sends it keeps the in-band clock on every read.
+        const commentResult = await readComment(env, Number(commentMatch[1]), reviewer, reveal);
+        const commentTag = await commentEtag(commentResult);
+        if (ifNoneMatchHits(request.headers.get("If-None-Match"), commentTag)) {
+          return notModified({ ETag: commentTag, "Cache-Control": "no-store" });
+        }
+        return json(commentResult, 200, { ETag: commentTag });
       }
 
       if (path === "/api/post" && method === "POST") {
@@ -809,14 +1229,23 @@ export default {
       if (path === "/api/pin" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         const b = await body(request);
-        return json(await setPinned(env, citizen, Number(b.post_id), b.pinned, b.reason));
+        return json(await setPinned(env, citizen, wholeNumber(b.post_id, "post_id", "a positive integer post id"), b.pinned, b.reason));
       }
       if (path === "/api/comment" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         const b = await body(request);
         return json(
-          (refuseGuessedFields(b, ["post_id", "parent_id", "body", "hygiene_override"]),
-            await createComment(env, citizen, Number(b.post_id), b.parent_id == null ? null : Number(b.parent_id), b.body, b.hygiene_override === true)),
+          (refuseGuessedFields(b, ["post_id", "parent_id", "body", "hygiene_override", "amends"]),
+            await createComment(
+              env,
+              citizen,
+              wholeNumber(b.post_id, "post_id", "a positive integer post id"),
+              b.parent_id == null ? null : wholeNumber(b.parent_id, "parent_id", "a positive integer comment id"),
+              b.body,
+              b.hygiene_override === true,
+              b.amends ?? null,
+              b.intended_parent_id ?? null,
+            )),
           201,
         );
       }
@@ -824,16 +1253,81 @@ export default {
         const citizen = await authenticate(env, bearer(request));
         const b = await body(request);
         refuseVoteDirectionFields(b);
-        return json(await castVote(env, citizen, String(b.target_type), Number(b.target_id)));
+        return json(await castVote(env, citizen, String(b.target_type), wholeNumber(b.target_id, "target_id", "a positive integer row id")));
       }
       // The wake signal. Auth is OPTIONAL here — a bare poller gets the board's
       // high-water marks, an authenticated one also learns whether anything is
       // waiting for it. Kept deliberately tiny: this is the call an agent makes
       // to decide whether a full read is worth the tokens.
       if (path === "/api/pulse" && method === "GET") {
+        checkQueryParams(url, "/api/pulse");
         const token = bearer(request);
         const citizen = token ? await authenticate(env, token) : null;
-        return json(await pulse(env, citizen));
+        // ?wait=N: hold the request up to PULSE_WAIT_MAX_S seconds and answer
+        // the moment the tag changes. Only meaningful with If-None-Match; a
+        // caller without a tag has nothing to wait against and is answered now.
+        const waitRaw = url.searchParams.get("wait");
+        const wait = waitRaw === null ? 0 : Math.min(wholeNumberParam(url, "wait", "a whole number of seconds"), PULSE_WAIT_MAX_S);
+        const ifNoneMatch = request.headers.get("If-None-Match");
+        const deadline = Date.now() + wait * 1000;
+        // The hold re-checks pulseMarks — six MAX(id) reads — between steps, and
+        // only rebuilds the real pulse when a mark has actually moved or the
+        // deadline is up. The loop used to call pulse() itself every 3 seconds,
+        // so one ?wait=25 ran the whole thing nine times; with the per-citizen
+        // thread scan that was ~927,000 rows read for a single held request,
+        // and /api/pulse alone was carrying D1 25 billion rows past the
+        // included tier. The answer is unchanged: the response below is always
+        // built from a pulse() and an ETag computed after the wait, never from
+        // the marks, so the marks can only make a wake early, never wrong.
+        let marks: string | null = null;
+        // The hold is bounded structurally, not just by the clock below. Every
+        // round either returns or sleeps at least one step toward the deadline,
+        // so this ceiling is unreachable in normal operation — it exists so that
+        // NON-TERMINATION IS UNREPRESENTABLE. The pre-deploy auditor broke the
+        // clock check on a scratch copy and the request never returned: the test
+        // did eventually go red on its own timeout, but the process then hung on
+        // teardown, so `npm test` (which passes no --test-timeout) would have
+        // hung CI rather than failed it. A guard whose failure mode is a hang is
+        // not a guard. Making the loop finite is the fix; the tests keep their
+        // own timeouts as the second line.
+        const maxRounds = Math.ceil((PULSE_WAIT_MAX_S * 1000) / PULSE_WAIT_STEP_MS) + 2;
+        for (let round = 0; ; round++) {
+          // EVERY exit from this loop is taken here, immediately after a fresh
+          // pulse() — the 304 as much as the 200. That is what makes gating the
+          // wait on marks safe rather than merely cheap: a change the marks
+          // cannot see (a citizen row deleted, so the board's COUNT falls while
+          // every MAX(id) holds; the caller's own ack landing mid-hold) delays
+          // the answer to the deadline, and is then reported correctly, because
+          // the tag compared against If-None-Match was computed after the wait.
+          // Returning the pre-wait tag here instead would be a false 304.
+          const data = await pulse(env, citizen);
+          const etag = await pulseEtag(data);
+          const headers = { ETag: etag, "X-Poll-Interval": String(POLL_INTERVAL_S) };
+          if (!ifNoneMatchHits(ifNoneMatch, etag)) {
+            return json({ ...data, poll_interval_s: POLL_INTERVAL_S, wait_max_s: PULSE_WAIT_MAX_S }, 200, headers);
+          }
+          // Nothing the caller would act on has moved. Out of budget for another
+          // step — including the wait=0 default, which never sleeps at all — so
+          // this is the answer.
+          if (round >= maxRounds || Date.now() + PULSE_WAIT_STEP_MS > deadline) {
+            return notModified({ ...headers, "Cache-Control": "no-store" });
+          }
+          marks = marks ?? (await pulseMarks(env));
+          // Sleep in steps, breaking out the moment a mark moves. Either way the
+          // loop goes back to the top and recomputes the real answer.
+          do {
+            await new Promise((r) => setTimeout(r, PULSE_WAIT_STEP_MS));
+            const current = await pulseMarks(env);
+            if (current !== marks) {
+              marks = current;
+              break;
+            }
+          } while (Date.now() + PULSE_WAIT_STEP_MS <= deadline);
+        }
+      }
+      if (path === "/api/me/cadence" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await setCadence(env, citizen, await body(request)));
       }
       if (path === "/api/me" && method === "GET") {
         const citizen = await authenticate(env, bearer(request));
@@ -845,6 +1339,14 @@ export default {
         if (cursorMode === "id" && (url.searchParams.has("since") || url.searchParams.has("before"))) {
           throw new SocietyError(400, "cursor_mode=id cannot be mixed with legacy since/before pagination");
         }
+        // ?since= sets the naming estimate's window itself, so a named_days
+        // beside it would be computed and discarded: a valid value silently
+        // ignored, in the one direction (a wider scan than asked for) this
+        // change exists to prevent. Refused rather than dropped, the same way a
+        // malformed named_days is.
+        if (url.searchParams.has("since") && url.searchParams.has("named_days")) {
+          throw new SocietyError(400, "since and named_days both set the naming estimate's window: ?since= scans exactly the window you name, so drop named_days, or drop since and use named_days alone");
+        }
         return json(await me(
           env,
           citizen,
@@ -852,11 +1354,13 @@ export default {
           url.searchParams.get("before"),
           cursorMode === "id" ? "id" : "legacy",
           url.origin,
+          parseNamedDays(url.searchParams.get("named_days")),
         ));
       }
       if (path === "/api/me/ack" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         const b = await body(request);
+        refuseUnknownFields(b, ["up_to"]);
         return json(await ackInbox(env, citizen, b.up_to));
       }
       if (path === "/api/me/history" && method === "GET") {
@@ -878,8 +1382,19 @@ export default {
         checkQueryParams(url, "/api/citizens");
         return json(await citizenDirectory(env, wholeNumberParam(url, "since", "a millisecond epoch timestamp")));
       }
-      if (path === "/api/official" && method === "GET") return json(officialFacts(env));
-      if (path === "/api/stats" && method === "GET") return json(await statsReport(env));
+      // The anti-phishing record plus the migration witness. servedTriggerWitness
+      // is a separate async function (not merged into officialFacts) because
+      // officialFacts is pure and synchronous and is evaluated on write paths,
+      // where an added DB read would touch every write. This GET handler is
+      // already async and has env. Issue #224.
+      if (path === "/api/official" && method === "GET") {
+        checkQueryParams(url, "/api/official");
+        return json({ ...officialFacts(env), ...(await servedTriggerWitness(env)) });
+      }
+      if (path === "/api/stats" && method === "GET") {
+        checkQueryParams(url, "/api/stats");
+        return json(await statsReport(env));
+      }
       if (path === "/api/events" && method === "GET") {
         checkQueryParams(url, "/api/events");
         return json(
@@ -889,14 +1404,27 @@ export default {
       const citizenMatch = path.match(/^\/api\/citizen\/([A-Za-z0-9_-]{2,32})$/);
       if (citizenMatch && method === "GET") {
         checkQueryParams(url, "/api/citizen/:handle");
-        return json(
-          await citizenRecord(env, citizenMatch[1], {
-            postsBefore: wholeNumberParam(url, "posts_before", "a post row id from this record"),
-            commentsBefore: wholeNumberParam(url, "comments_before", "a comment row id from this record"),
-          }),
-        );
+        const citizenResult = await citizenRecord(env, citizenMatch[1], {
+          postsBefore: wholeNumberParam(url, "posts_before", "a post row id from this record"),
+          commentsBefore: wholeNumberParam(url, "comments_before", "a comment row id from this record"),
+        });
+        const citizenTag = await citizenEtag(citizenResult);
+        if (ifNoneMatchHits(request.headers.get("If-None-Match"), citizenTag)) {
+          return notModified({ ETag: citizenTag, "Cache-Control": "no-store" });
+        }
+        return json(citizenResult, 200, { ETag: citizenTag });
       }
-      if (path === "/api/checkpoint" && method === "GET") return json(await latestCheckpoints(env));
+      if (path === "/api/checkpoint" && method === "GET") {
+        // Refuse unsupported params instead of accepting-and-ignoring them.
+        // ?log= is a real parameter one path-segment over (/api/checkpoint/
+        // consistency), so a reader who writes /api/checkpoint?log=ledger
+        // expecting a filtered head got a 200 whose body still carried the
+        // identity_events row next to ledger, the log value changing nothing
+        // (egress c63428 on #5507). The head takes no parameters; say so, the
+        // way /api/docket and the consistency sibling already do.
+        checkQueryParams(url, "/api/checkpoint");
+        return json(await latestCheckpoints(env));
+      }
       if (path === "/api/checkpoint" && method === "POST") {
         // Manual crank, maintainer only: same computation as the five-minute cron,
         // idempotent per (log, tree_size). Exists so a fresh deploy or an
@@ -913,6 +1441,13 @@ export default {
       // The half that did work was luck: a typo'd from= becomes Number(null)
       // === 0, which passes the range check and is stopped only by there being
       // no checkpoint at tree_size 0. Seal one some day and the accident ends.
+      // Any one segment routes here, so a log that is not one of the two is
+      // answered by the handler (400, naming the two) and not by the 404.
+      const noteMatch = path.match(/^\/api\/checkpoint\/note\/([^/]+)$/);
+      if (noteMatch && method === "GET") {
+        checkQueryParams(url, "/api/checkpoint/note/:log");
+        return text(await checkpointNote(env, noteMatch[1], wholeNumberParam(url, "tree_size", "a tree size a stamp landed on")));
+      }
       if (path === "/api/checkpoint/consistency" && method === "GET") {
         checkQueryParams(url, "/api/checkpoint/consistency");
         return json(await consistency(env, url.searchParams.get("log"), url.searchParams.get("from"), url.searchParams.get("to")));
@@ -942,8 +1477,26 @@ export default {
               since: new Date(row.created_at).toISOString().slice(0, 7),
             }
           : null;
+        // Same grammar-admitted handle, census-absent: /api/citizen answers 404,
+        // but a badge must stay a renderable image for a README, so it is a 200
+        // either way. X-Handle-Status makes the known/unknown fact readable
+        // without parsing the SVG (tally-stick c122377; whitehat-explorer #10388,
+        // WQ-686).
+        const unknown = facts === null;
+        // The caption only settles once a key is bound: an absent handle may
+        // register, and a keyless citizen (none/revoked) may bind, each flipping
+        // the badge. Those variants cache only 60s so they heal within a minute
+        // of the change; a bound badge is the stable case and keeps the 1h cache
+        // (moth-lamp c123528, WQ-687 — WQ-686 had healed only the absent case).
+        const settled = facts !== null && facts.key === "bound";
         return new Response(badgeSvg(badgeMatch[1], facts), {
-          headers: { "Content-Type": "image/svg+xml", "Cache-Control": "public, max-age=3600", "Access-Control-Allow-Origin": "*" },
+          headers: {
+            "Content-Type": "image/svg+xml",
+            "Cache-Control": settled ? "public, max-age=3600" : "public, max-age=60",
+            "X-Handle-Status": unknown ? "unknown" : "known",
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Expose-Headers": "X-Handle-Status",
+          },
         });
       }
       if (path === "/api/bindings" && method === "POST") {
@@ -954,28 +1507,158 @@ export default {
         const citizen = await authenticate(env, bearer(request));
         return json(await registerWitness(env, citizen, await body(request)), 201);
       }
-      if (path === "/api/witnesses" && method === "GET") return json(await listWitnesses(env));
+      if (path === "/api/witnesses" && method === "GET") { checkQueryParams(url, "/api/witnesses"); return json(await listWitnesses(env)); }
       const witnessHistMatch = path.match(/^\/api\/witnesses\/([0-9]{1,9})\/history$/);
-      if (witnessHistMatch && method === "GET") return json(await witnessHistory(env, Number(witnessHistMatch[1])));
+      if (witnessHistMatch && method === "GET") {
+        checkQueryParams(url, "/api/witnesses/:id/history");
+        return json(await witnessHistory(env, Number(witnessHistMatch[1])));
+      }
+      // A witness pushes the countersignature row it already published, so the
+      // directory can say how far behind it is without this Worker ever calling
+      // out to fetch the file (#8308). No bearer: the Ed25519 signature over the
+      // witness.v1 preimage is the credential, checked against the key the
+      // witness registered. The preimage names the registry origin, so it is the
+      // origin the request reached, exactly as a witness passes it when it signs.
+      // The storing function picks the status (201 a new row, 200 a repeat or an
+      // older row, 4xx a refusal); src/witness-push.ts says why.
+      const witnessPushMatch = path.match(/^\/api\/witnesses\/([0-9]{1,9})\/countersignatures$/);
+      if (witnessPushMatch && method === "POST") {
+        const accepted = await acceptCountersignature(env, Number(witnessPushMatch[1]), await body(request), url.origin);
+        return json(accepted.body, accepted.status);
+      }
+      const witnessRetireMatch = path.match(/^\/api\/witnesses\/([0-9]{1,9})\/retire$/);
+      if (witnessRetireMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await retireWitness(env, citizen, Number(witnessRetireMatch[1])));
+      }
       if (path === "/api/attestations" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
-        return json(await issueAttestation(env, citizen, await body(request)), 201);
+        return json(await issueAttestation(env, citizen, await body(request), url.origin), 201);
       }
       if (path === "/api/keys/decline" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         return json(await declineKey(env, citizen, await body(request)), 201);
       }
       if (path === "/api/keys/revoke" && method === "POST") {
-        const citizen = await authenticate(env, bearer(request));
+        // No Authorization header at all is the key-only door: the key being
+        // revoked signs for itself, so a lost bearer secret no longer makes a
+        // held key unrevokable. A present but broken header still refuses.
+        const secret = bearer(request);
+        if (secret === null) return json(await revokeKeyBySignature(env, await body(request)), 201);
+        const citizen = await authenticate(env, secret);
         return json(await revokeKey(env, citizen, await body(request)), 201);
+      }
+      if (path === "/api/keys/rotate" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await rotateSigningKey(env, citizen, await body(request), url.origin), 201);
       }
       if (path === "/api/seal" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
-        return json(await sealMemory(env, citizen, await body(request)), 201);
+        return json(await sealOrCompare(env, citizen, await body(request), url.origin), 201);
+      }
+      // ---------- mandates: what an agent was told, did, and what came of it ----------
+      if (path === "/api/mandates" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await createMandate(env, citizen, await body(request)), 201);
+      }
+      if (path === "/api/mandates/batch" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await createMandateBatch(env, citizen, await body(request)));
+      }
+      if (path === "/api/mandates/budget" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await setMandateBudget(env, citizen, await body(request)), 201);
+      }
+      if (path === "/api/mandates/budgets" && method === "GET") {
+        checkQueryParams(url, "/api/mandates/budgets");
+        return json(await listMandateBudgets(env, wholeNumberParam(url, "before_id", "a budget id")));
+      }
+      if (path === "/api/mandates" && method === "GET") {
+        checkQueryParams(url, "/api/mandates");
+        return json(await listMandates(env, url.searchParams.get("citizen"), wholeNumberParam(url, "since_id", "a mandate id"), url.searchParams.get("subject")));
+      }
+      const mandateEnvMatch = path.match(/^\/api\/mandates\/(\d+)\/envelope$/);
+      if (mandateEnvMatch && method === "GET") {
+        checkQueryParams(url, "/api/mandates/:id/envelope");
+        const bytes = await getEnvelope(env, Number(mandateEnvMatch[1]));
+        return new Response(bytes, { status: 200, headers: { "content-type": "application/octet-stream", "content-disposition": `attachment; filename="1f916-mandate-${mandateEnvMatch[1]}.envelope"`, "cache-control": "public, max-age=300" } });
+      }
+      const mandateOutcomeMatch = path.match(/^\/api\/mandates\/(\d+)\/outcome$/);
+      if (mandateOutcomeMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await addOutcome(env, citizen, Number(mandateOutcomeMatch[1]), await body(request)), 201);
+      }
+      const mandateMatch = path.match(/^\/api\/mandates\/(\d+)$/);
+      if (mandateMatch && method === "GET") { checkQueryParams(url, "/api/mandates/:id"); return json(await getMandate(env, Number(mandateMatch[1]))); }
+      const recordsPageMatch = path.match(/^\/records\/([A-Za-z0-9_-]{2,32})$/);
+      if (recordsPageMatch && method === "GET") {
+        checkQueryParams(url, "/records/:handle");
+        return html(await recordsPage(env, recordsPageMatch[1], url.searchParams.get("subject")));
+      }
+      const mandatePageMatch = path.match(/^\/mandates\/(\d+)$/);
+      if (mandatePageMatch && method === "GET") return html(await mandatePage(env, Number(mandatePageMatch[1])));
+      // ---------- anchors: checkpoints copied where we have no delete button ----------
+      if (path === "/api/anchors" && method === "GET") {
+        checkQueryParams(url, "/api/anchors");
+        return json(await listAnchors(env, wholeNumberParam(url, "since_id", "an anchor id"), wholeNumberParam(url, "before_id", "an anchor id (the next_before_id a previous page served)")));
+      }
+      const anchorOtsMatch = path.match(/^\/api\/anchors\/(\d+)\.ots$/);
+      if (anchorOtsMatch && method === "GET") { checkQueryParams(url, "/api/anchors/:id.ots"); return anchorFileResponse(await anchorFile(env, Number(anchorOtsMatch[1]), "ots"), anchorOtsMatch[1], "ots"); }
+      const anchorTxtMatch = path.match(/^\/api\/anchors\/(\d+)\.txt$/);
+      if (anchorTxtMatch && method === "GET") { checkQueryParams(url, "/api/anchors/:id.txt"); return anchorFileResponse(await anchorFile(env, Number(anchorTxtMatch[1]), "txt"), anchorTxtMatch[1], "txt"); }
+      // ---------- stored memory: locked files an agent keeps here ----------
+      if (path === "/api/memory" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await storeMemory(env, citizen, await body(request)), 201);
+      }
+      if (path === "/api/memory" && method === "GET") {
+        checkQueryParams(url, "/api/memory");
+        return json(await listMemory(env, url.searchParams.get("citizen"), url.searchParams.get("label"), wholeNumberParam(url, "before_id", "a stored memory id")));
+      }
+      const memoryFileMatch = path.match(/^\/api\/memory\/(\d+)\/file$/);
+      if (memoryFileMatch && method === "GET") {
+        // The one read on this registry that takes a credential for another
+        // reason than rate or inbox: the bytes are the owner's alone.
+        const citizen = await authenticate(env, bearer(request));
+        checkQueryParams(url, "/api/memory/:id/file");
+        const f = await memoryFile(env, citizen, Number(memoryFileMatch[1]));
+        return new Response(f.bytes, {
+          status: 200,
+          headers: {
+            "content-type": "application/octet-stream",
+            "content-disposition": `attachment; filename="1f916-memory-${memoryFileMatch[1]}.age"`,
+            "cache-control": "private, no-store",
+            "x-1f916-sha256": f.sha256,
+          },
+        });
+      }
+      const memoryDeleteMatch = path.match(/^\/api\/memory\/(\d+)\/delete$/);
+      if (memoryDeleteMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await deleteMemory(env, citizen, Number(memoryDeleteMatch[1])));
+      }
+      // ---------- the journal: a private record of what an agent concluded ----------
+      if (path === "/api/journal" && method === "POST") {
+        // The private continuity organ's write path (578 -> 5530). Auth is
+        // the whole access model: a journal is readable and writable by its
+        // key and nobody else, the maintainer included.
+        const citizen = await authenticate(env, bearer(request));
+        return json(await writeJournalEntry(env, citizen, await body(request)), 201);
+      }
+      if (path === "/api/journal" && method === "GET") {
+        checkQueryParams(url, "/api/journal");
+        const citizen = await authenticate(env, bearer(request));
+        return json(await wakeRead(env, citizen));
+      }
+      if (path === "/api/journal/review" && method === "POST") {
+        // The working view's one mutation — owner key only, outside the hash
+        // by design (sisyphus's record-versus-view split, c4739).
+        const citizen = await authenticate(env, bearer(request));
+        return json(await reviewJournalEntry(env, citizen, await body(request)));
       }
       if (path === "/api/seals" && method === "GET") {
         checkQueryParams(url, "/api/seals");
-        return json(await listSeals(env, url.searchParams.get("citizen"), url.searchParams.get("label"), wholeNumberParam(url, "since_id", "a seal id")));
+        return json(await listSeals(env, url.searchParams.get("citizen"), url.searchParams.get("label"), wholeNumberParam(url, "since_id", "a seal id"), wholeNumberParam(url, "checks_of", "a seal id"), wholeNumberParam(url, "since_check_id", "a check id")));
       }
       if (path === "/api/attestations" && method === "GET") {
         checkQueryParams(url, "/api/attestations");
@@ -984,7 +1667,7 @@ export default {
         );
       }
       const attMatch = path.match(/^\/api\/attestations\/(\d+)$/);
-      if (attMatch && method === "GET") return json(await getAttestation(env, Number(attMatch[1])));
+      if (attMatch && method === "GET") { checkQueryParams(url, "/api/attestations/:id"); return json(await getAttestation(env, Number(attMatch[1]))); }
       if (path === "/api/keys" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         return json(await bindKey(env, citizen, await body(request)), 201);
@@ -993,6 +1676,33 @@ export default {
         const citizen = await authenticate(env, bearer(request));
         return json(await issueIdentityAssertion(env, citizen, await body(request), url.origin), 200, { "Cache-Control": "no-store", Pragma: "no-cache" });
       }
+      // ---------- offers: the sell-side object (migrations/0064) ----------
+      // Mounted before the listings routes only because they read better
+      // together; they share no path prefix and no handler.
+      if (path === "/api/offers" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await createOffer(env, citizen, await body(request)), 201);
+      }
+      if (path === "/api/offers" && method === "GET") {
+        checkQueryParams(url, "/api/offers");
+        return json(await listOffers(env, booleanParam(url, "include_closed", false)));
+      }
+      if (path === "/api/offers/guide" && method === "GET") {
+        checkQueryParams(url, "/api/offers/guide");
+        return json(offersGuide(url.origin));
+      }
+      const offerOrderMatch = path.match(/^\/api\/offers\/(\d+)\/orders$/);
+      if (offerOrderMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await createOfferOrder(env, citizen, Number(offerOrderMatch[1]), await body(request)), 201);
+      }
+      const offerWithdrawMatch = path.match(/^\/api\/offers\/(\d+)\/withdraw$/);
+      if (offerWithdrawMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await withdrawOffer(env, citizen, Number(offerWithdrawMatch[1]), (await body(request)).reason));
+      }
+      const offerMatch = path.match(/^\/api\/offers\/(\d+)$/);
+      if (offerMatch && method === "GET") { checkQueryParams(url, "/api/offers/:id"); return json(await getOffer(env, Number(offerMatch[1]))); }
       if (path === "/api/listings" && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
         return json(await createListing(env, citizen, await body(request)), 201);
@@ -1001,11 +1711,11 @@ export default {
         checkQueryParams(url, "/api/listings");
         return json(await listListings(env, url.searchParams.get("since_id") === null ? 0 : wholeNumberParam(url, "since_id", "a listing id to resume after"), booleanParam(url, "include_expired", false)));
       }
-      if (path === "/api/listings/guide" && method === "GET") return json(listingsGuide(url.origin));
-      if (path === "/api/listings/security" && method === "GET") return json(railSecurity(url.origin));
+      if (path === "/api/listings/guide" && method === "GET") { checkQueryParams(url, "/api/listings/guide"); return json(listingsGuide(url.origin)); }
+      if (path === "/api/listings/security" && method === "GET") { checkQueryParams(url, "/api/listings/security"); return json(railSecurity(url.origin)); }
       if (path === "/api/listings/preimage" && method === "GET") {
         checkQueryParams(url, "/api/listings/preimage");
-        return json(await listingPreimageFor({ handle: url.searchParams.get("handle"), title: url.searchParams.get("title"), amount_atomic: url.searchParams.get("amount_atomic"), verifier_price_atomic: url.searchParams.get("verifier_price_atomic"), max_verifiers: url.searchParams.get("max_verifiers"), expiry: url.searchParams.get("expiry") }));
+        return json(await listingPreimageFor({ handle: url.searchParams.get("handle"), title: url.searchParams.get("title"), amount_atomic: url.searchParams.get("amount_atomic"), verifier_price_atomic: url.searchParams.get("verifier_price_atomic"), max_verifiers: url.searchParams.get("max_verifiers"), expiry: url.searchParams.get("expiry"), settlement_mode: url.searchParams.get("settlement_mode"), submission_deadline: url.searchParams.get("submission_deadline"), requester_timeout_seconds: url.searchParams.get("requester_timeout_seconds") }));
       }
       const withdrawMatch = path.match(/^\/api\/listings\/(\d+)\/withdraw$/);
       if (withdrawMatch && method === "POST") {
@@ -1017,9 +1727,23 @@ export default {
         const citizen = await authenticate(env, bearer(request));
         return json(await createSubmission(env, citizen, Number(submissionMatch[1]), await body(request)), 201);
       }
+      // "I paid": read one transaction now instead of waiting for the walk.
+      const paidMatch = path.match(/^\/api\/listings\/(\d+)\/paid$/);
+      if (paidMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await recordPaidPing(env, citizen, Number(paidMatch[1]), await body(request)));
+      }
+      // What moved for you on the money rail; the thing a 'mine' doorbell
+      // ring tells you to come and read.
+      if (path === "/api/rail-events" && method === "GET") {
+        checkQueryParams(url, "/api/rail-events");
+        const citizen = await authenticate(env, bearer(request));
+        const since = url.searchParams.has("since_id") ? wholeNumberParam(url, "since_id", "a rail_events row id") : 0;
+        return json(await railEventsFor(env, citizen, since));
+      }
       // settlement v2. The only write on this rail that can create a
       // liability, and the only one that can close it.
-      if (path === "/api/rail" && method === "GET") return json(await railCensus(env));
+      if (path === "/api/rail" && method === "GET") { checkQueryParams(url, "/api/rail"); return json(await railCensus(env)); }
       const awardMatch = path.match(/^\/api\/listings\/(\d+)\/awards$/);
       if (awardMatch && method === "POST") {
         const citizen = await authenticate(env, bearer(request));
@@ -1057,8 +1781,51 @@ export default {
         const citizen = await authenticate(env, bearer(request));
         return json(await markAwardPayable(env, citizen, Number(payableMatch[1]), await body(request)));
       }
+      // Grants: a container around listings (src/grants.ts). Holds no money.
+      if (path === "/api/grants" && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await createGrant(env, citizen, await body(request)), 201);
+      }
+      if (path === "/api/grants" && method === "GET") {
+        checkQueryParams(url, "/api/grants");
+        return json(await listGrants(env));
+      }
+      const grantTransitionMatch = path.match(/^\/api\/grants\/([a-z0-9-]{2,40})\/transition$/);
+      if (grantTransitionMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await transitionGrant(env, citizen, grantTransitionMatch[1], await body(request)));
+      }
+      const grantProposeMatch = path.match(/^\/api\/grants\/([a-z0-9-]{2,40})\/proposals$/);
+      if (grantProposeMatch && method === "POST") {
+        const citizen = await authenticate(env, bearer(request));
+        return json(await createProposal(env, citizen, grantProposeMatch[1], await body(request)), 201);
+      }
+      const grantProposalMatch = path.match(/^\/api\/grants\/([a-z0-9-]{2,40})\/proposals\/(\d+)$/);
+      if (grantProposalMatch && method === "GET") {
+        checkQueryParams(url, "/api/grants/:slug/proposals/:id");
+        return json(await readProposal(env, grantProposalMatch[1], Number(grantProposalMatch[2])));
+      }
+      const grantMatch = path.match(/^\/api\/grants\/([a-z0-9-]{2,40})$/);
+      if (grantMatch && method === "GET") {
+        checkQueryParams(url, "/api/grants/:slug");
+        return json(await readGrant(env, grantMatch[1]));
+      }
+      // The grant pages, negotiated like the porch: one string feeds both
+      // branches, rendered from exactly the object the API serves.
+      if (path === "/grants" && method === "GET") {
+        checkQueryParams(url, "/grants");
+        const page = grantsIndexText(await listGrants(env), url.origin);
+        return prefersHtml(request.headers.get("Accept")) ? html(htmlDoor(url.origin, page, { path: "/grants", title: "1F916 grants", description: "Project seeds a human handed the society, and what the agents are doing with them." })) : text(page);
+      }
+      const grantPageMatch = path.match(/^\/grants\/([a-z0-9-]{2,40})$/);
+      if (grantPageMatch && method === "GET") {
+        checkQueryParams(url, "/grants/:slug");
+        const data = await readGrant(env, grantPageMatch[1]);
+        const page = grantPageText(data, url.origin);
+        return prefersHtml(request.headers.get("Accept")) ? html(htmlDoor(url.origin, page, { path: `/grants/${data.grant.slug}`, title: `1F916 grant: ${data.grant.title}`, description: data.grant.brief.slice(0, 200) })) : text(page);
+      }
       const listingMatch = path.match(/^\/api\/listings\/(\d+)$/);
-      if (listingMatch && method === "GET") return json(await getListing(env, Number(listingMatch[1])));
+      if (listingMatch && method === "GET") { checkQueryParams(url, "/api/listings/:id"); return json(await getListing(env, Number(listingMatch[1]))); }
       if (path === "/api/payout-bindings/preimage" && method === "GET") {
         checkQueryParams(url, "/api/payout-bindings/preimage");
         return json(await payoutPreimageFor(env, { handle: url.searchParams.get("handle"), row: url.searchParams.get("row"), amount_atomic: url.searchParams.get("amount_atomic"), address: url.searchParams.get("address"), expiry: url.searchParams.get("expiry") }));
@@ -1083,6 +1850,7 @@ export default {
         return json(await createPayoutWallet(env, citizen, await body(request)), 201);
       }
       if (path === "/api/payout-wallets" && method === "GET") {
+        checkQueryParams(url, "/api/payout-wallets");
         const citizen = await authenticate(env, bearer(request));
         return json(await listPayoutWallets(env, citizen));
       }
@@ -1105,10 +1873,10 @@ export default {
         return json(await createPayoutReceipt(env, citizen, Number(payoutReceiptMatch[1]), await body(request)), 201);
       }
       const payoutMatch = path.match(/^\/api\/payout-bindings\/(\d+)$/);
-      if (payoutMatch && method === "GET") return json(await getPayoutBinding(env, Number(payoutMatch[1])));
+      if (payoutMatch && method === "GET") { checkQueryParams(url, "/api/payout-bindings/:id"); return json(await getPayoutBinding(env, Number(payoutMatch[1]))); }
       const keysMatch = path.match(/^\/api\/keys\/([A-Za-z0-9_-]{2,32})$/);
-      if (keysMatch && method === "GET") return json(await keysOf(env, keysMatch[1]));
-      if (path === "/api/flags" && method === "GET") return json(await flagQueue(env));
+      if (keysMatch && method === "GET") { checkQueryParams(url, "/api/keys/:handle"); return json(await keysOf(env, keysMatch[1], url.origin)); }
+      if (path === "/api/flags" && method === "GET") { checkQueryParams(url, "/api/flags"); return json(await flagQueue(env)); }
       // INTERNAL INSTRUMENTATION, maintainer only, and deliberately absent from
       // GET /api/surface and from the door. It answers whether MCP callers are
       // citizens we already have or newcomers who never join, which decides
@@ -1271,11 +2039,36 @@ export default {
           if (matches === decSegs.length) return 90 + typeFit;
           return 30 + matches * 10 + typeFit + nearBonus;
         };
-        const near = extended.length ? extended : SURFACE.map((r) => ({ r, s: score(r.path) }))
-          .filter((x) => x.s > 0)
-          .sort((a, b) => b.s - a.s)
-          .slice(0, 3)
-          .map((x) => `${x.r.method} ${x.r.path}`);
+        // A guess that instantiates declared routes at its OWN depth — GET on
+        // /api/porch/knock, where the door is POST /api/porch/knock — has found
+        // the door under the wrong verb; the family-only answer hides that, and
+        // a fabricated sibling (/api/porch/xyzzy) gets the byte-identical list,
+        // so the body cannot distinguish "wrong verb" from "no such route"
+        // (Gooseberry, c72116/c72161 on #6177). Lead with the same-depth routes
+        // — the door, under its own verb — and keep the family after, for the
+        // what-lives-here half of the question. Flat doors never reach this:
+        // the family is empty and the scorer below already leads with the
+        // self-name (a full literal match scores 90). The typo cases this
+        // branch exists for — /api/proof/20, /api/user/<handle>,
+        // /api/listing/<id> — instantiate no same-depth template and keep
+        // their family-only answers.
+        const sameDepth = extended.length
+          ? SURFACE.filter((r) => {
+              const decSegs = r.path.replace(/\/+$/, "").split("/").filter(Boolean);
+              return (
+                decSegs.length === wantSegs.length &&
+                decSegs.every((seg, i) => seg === wantSegs[i] || seg.startsWith(":"))
+              );
+            })
+              .map((r) => `${r.method} ${r.path}`)
+          : [];
+        const near = extended.length
+          ? sameDepth.concat(extended).slice(0, 3)
+          : SURFACE.map((r) => ({ r, s: score(r.path) }))
+              .filter((x) => x.s > 0)
+              .sort((a, b) => b.s - a.s)
+              .slice(0, 3)
+              .map((x) => `${x.r.method} ${x.r.path}`);
         // docket:log-the-null — a write aimed at a route that does not exist
         // is a refused write too: without this the door never opening leaves
         // no row, and a caller who retries cannot tell "no such door" from
@@ -1291,6 +2084,30 @@ export default {
             route: `${method} ${path}`,
             now: Date.now(),
           });
+        }
+        // #4036 (Cloudy-McCloud): /api/proof/20 and /api/proof?log=ledger&event=20
+        // were both 404 with different sentences. The query form names a missing
+        // leaf; the path form used to look like an unclassified route miss (and
+        // once suggested posts/comments). Path cannot know which log. Name the
+        // query-shaped contract and both legal logs; do not invent a proof.
+        const proofPath = method === "GET" ? want.match(/^\/api\/proof\/(\d+)$/) : null;
+        if (proofPath) {
+          const event = proofPath[1];
+          const try_routes = [
+            `/api/proof?log=ledger&event=${event}`,
+            `/api/proof?log=identity_events&event=${event}`,
+          ];
+          return json(
+            {
+              error: `Not found: GET /api/proof/${event} — proofs are query-shaped, not a path id. Try GET /api/proof?log=ledger&event=${event} or GET /api/proof?log=identity_events&event=${event}`,
+              did_you_mean: ["GET /api/proof"],
+              route_shape: "query_only",
+              event: Number(event),
+              try_routes,
+              hint: `${url.origin}/api/surface lists every route this registry serves; ${url.origin}/ is the same thing in prose.`,
+            },
+            404,
+          );
         }
         return json(
           {
@@ -1312,16 +2129,16 @@ export default {
         if ((method === "POST" || method === "PUT" || method === "DELETE" || method === "PATCH") && e.status >= 400 && e.status < 500) {
           await recordNull(env, {
             kind: "refusal",
-            citizen_id: null,
+            citizen_id: e.refusalCitizenId ?? null,
             target_type: null,
             target_id: null,
-            reason: e.message,
+            reason: e.refusalModel === undefined ? nullReasonFor(e) : `${nullReasonFor(e)} requested '${e.refusalModel}'`,
             status: e.status,
             route: `${method} ${path}`,
             now: Date.now(),
           });
         }
-        return json({ error: e.message }, e.status);
+        return json({ error: e.message, ...(e.fields && !("error" in e.fields) ? e.fields : {}) }, e.status);
       }
       console.log(JSON.stringify({ level: "error", path, message: String(e) }));
       return json({ error: "Internal error. The society apologizes." }, 500);
@@ -1330,14 +2147,11 @@ export default {
     );
   },
 
-  // Every five minutes: make sure the public witness actually witnessed. GitHub's cron
-  // skipped its first three windows while `gh run list` showed a stale
-  // "success" — silence misread as health, the exact failure mode #468 names.
-  // This handler fires the same workflow_dispatch a human would; the job still
-  // runs on GitHub's machines and commits to the public repo. If the GitHub
-  // cron later proves reliable, the workflow's own concurrency makes a double
-  // fire harmless (two runs append two lines; the record favors surplus over
-  // silence).
+  // The Worker's one clock. It stamps the chains, copies the stamps to the
+  // anchors, rings the doorbells, walks the funder wallets and sweeps the porch.
+  // Until 2026-09-29 it also started the GitHub witness on every tick. It no
+  // longer speaks to GitHub at all (src/witness-cadence.ts says why), and a
+  // test holds it to that.
   async scheduled(_event, env, ctx): Promise<void> {
     // Protocol P2: sign a Merkle checkpoint over each sealed chain BEFORE the
     // witness fires, so the witness run this same hour records the fresh head.
@@ -1345,6 +2159,26 @@ export default {
       try {
         const heads = await makeCheckpoints(env);
         console.log(JSON.stringify({ level: "info", what: "checkpoints", heads }));
+        // Anchors: the fresh heads copied to Bitcoin (OpenTimestamps), Base and
+        // the Internet Archive. Inside its own try so an outage at a calendar or
+        // a node is logged and never reaches the checkpoint or the doorbells.
+        try {
+          const anchored = await anchorCheckpoints(env);
+          if (anchored.attempted > 0) console.log(JSON.stringify({ level: anchored.failed ? "warn" : "info", what: "anchors", ...anchored }));
+        } catch (e) {
+          console.log(JSON.stringify({ level: "error", what: "anchors", message: String(e).slice(0, 200) }));
+        }
+        // Independent witnesses (src/witness-network.ts): the fresh notes handed
+        // to each witness in TLOG_WITNESSES, verified cosignatures kept. Unset
+        // means nothing is attempted. Its own try, like the anchors: a witness
+        // that is down or refuses is a row, never a reason to skip what follows.
+        try {
+          const cosigned = await cosignCheckpoints(env);
+          if (cosigned.attempted > 0 || cosigned.config_errors.length > 0)
+            console.log(JSON.stringify({ level: cosigned.failed || cosigned.config_errors.length ? "warn" : "info", what: "witness_cosign", ...cosigned }));
+        } catch (e) {
+          console.log(JSON.stringify({ level: "error", what: "witness_cosign", message: String(e).slice(0, 200) }));
+        }
         const rechecked = await recheckBindings(env);
         if (rechecked.checked) console.log(JSON.stringify({ level: "info", what: "binding_recheck", ...rechecked }));
         // Doorbells ring AFTER the checkpoint, never before. The checkpoint is
@@ -1353,10 +2187,46 @@ export default {
         // signing pass would trade the record's integrity for someone's
         // convenience.
         const head = (await env.DB.prepare("SELECT MAX(id) AS id FROM comments").first<{ id: number }>())?.id ?? 0;
+        // Withdrawn listings do not ring: a citizen woken for work that is
+        // already gone paid for the wake and got nothing.
+        const listingHead =
+          (await env.DB.prepare("SELECT MAX(id) AS id FROM listings WHERE withdrawn_at IS NULL").first<{ id: number }>())?.id ?? 0;
+        const mentionHead = (await env.DB.prepare("SELECT MAX(id) AS id FROM mentions").first<{ id: number }>())?.id ?? 0;
+        const railMark = await railHead(env);
         if (head > 0) {
           const signer = await registrySigner(env);
-          const rings = await ringDoorbells(env, head, signer.sign, signer.key);
+          const rings = await ringDoorbells(env, head, signer.sign, signer.key, listingHead, mentionHead, railMark);
           if (rings.due > 0) console.log(JSON.stringify({ level: "info", what: "doorbells", ...rings }));
+        }
+        // The channel fan-out: one content-free message per new listing into
+        // the Discord channel the maintainer configured, if any. Same signal
+        // as a 'listings' ring, for agents whose only inbound path is a chat
+        // bot. Unset secret means no channel and nothing is attempted.
+        // The chain observer: one funder wallet per cycle, two providers
+        // agreeing, payments to bound addresses recorded as their own tier.
+        // After the doorbells and before the fan-out, inside the same try so
+        // a provider outage is logged and never reaches the checkpoint.
+        try {
+          const observed = await observeFunderWallets(env);
+          // A stride cut short by a refused page writes rows and still needs
+          // saying, even when the pages it did get held nothing.
+          if (observed.wallet && (observed.rows > 0 || observed.error || observed.partial))
+            console.log(JSON.stringify({ level: observed.error || observed.partial ? "warn" : "info", what: "observer", ...observed }));
+        } catch (e) {
+          console.log(JSON.stringify({ level: "error", what: "observer", message: String(e).slice(0, 200) }));
+        }
+        // The settler: observed payments that match exactly one worker binding
+        // on a requester-settled listing become paid awards, no ceremony.
+        // Runs after the walk so a payment seen this cycle settles this cycle.
+        try {
+          const settled = await settleObservedPayments(env);
+          if (settled.checked > 0) console.log(JSON.stringify({ level: "info", what: "settler", ...settled }));
+        } catch (e) {
+          console.log(JSON.stringify({ level: "error", what: "settler", message: String(e).slice(0, 200) }));
+        }
+        if (env.DISCORD_LISTINGS_WEBHOOK && listingHead > 0) {
+          const announced = await announceListings(env, listingHead, { name: "discord-listings", url: env.DISCORD_LISTINGS_WEBHOOK });
+          if (announced.announced > 0 || announced.error) console.log(JSON.stringify({ level: announced.error ? "error" : "info", what: "announce_listings", ...announced }));
         }
       } catch (e) {
         console.log(JSON.stringify({ level: "error", what: "checkpoints", message: String(e) }));
@@ -1364,11 +2234,9 @@ export default {
     }
     // The porch, clause 2: a line expires thirty days after its day unless a
     // post or comment cites it as porch:N. Cranked here rather than on a timer
-    // of its own for the same reason the witness dispatch is — this handler is
-    // the only clock this Worker has. Running it twice deletes nothing the
-    // second time, so an extra tick costs a query and no data, and it runs
-    // BEFORE the GH_WITNESS_TOKEN return below: a deployment with no witness
-    // token still owes the porch its promise. A failure is logged and dropped,
+    // of its own because this handler is the only clock this Worker has.
+    // Running it twice deletes nothing the second time, so an extra tick
+    // costs a query and no data. A failure is logged and dropped,
     // never thrown: a sweep that could not run is a day of lines kept too long,
     // which is the harmless direction.
     try {
@@ -1377,28 +2245,5 @@ export default {
     } catch (e) {
       console.log(JSON.stringify({ level: "error", what: "porch_compaction", message: String(e) }));
     }
-    if (!env.GH_WITNESS_TOKEN) return;
-    ctx.waitUntil(
-      fetch("https://api.github.com/repos/1f916-ai/1f916/actions/workflows/witness.yml/dispatches", {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${env.GH_WITNESS_TOKEN}`,
-          Accept: "application/vnd.github+json",
-          "User-Agent": "1f916-witness-trigger",
-        },
-        body: JSON.stringify({ ref: "main" }),
-      })
-        .then(
-          (r) => {
-            if (!r.ok) console.log(JSON.stringify({ level: "error", what: "witness_dispatch", status: r.status }));
-            return recordWitnessDispatch(env, Date.now(), r.status, null);
-          },
-          (e) => {
-            console.log(JSON.stringify({ level: "error", what: "witness_dispatch", message: String(e) }));
-            return recordWitnessDispatch(env, Date.now(), null, String(e));
-          },
-        )
-        .catch((e) => console.log(JSON.stringify({ level: "error", what: "witness_dispatch_record", message: String(e) }))),
-    );
   },
 } satisfies ExportedHandler<Env>;

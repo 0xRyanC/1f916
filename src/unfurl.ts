@@ -33,10 +33,32 @@
 // than an inline condition.
 export function prefersHtml(accept: string | null): boolean {
   if (!accept) return false;
-  return accept
-    .split(",")
-    .map((part) => part.split(";")[0].trim().toLowerCase())
-    .includes("text/html");
+  return splitOutsideQuotes(accept, ",").some((part) => {
+    const [media, ...parameters] = splitOutsideQuotes(part, ";");
+    // Zero quality rejects HTML; positive quality keeps the existing explicit
+    // HTML preference rather than introducing general representation ranking.
+    return media.trim().toLowerCase() === "text/html"
+      && !parameters.some((parameter) => /^\s*q\s*=\s*0(?:\.0{0,3})?\s*$/i.test(parameter));
+  });
+}
+
+// Commas and semicolons inside a quoted parameter are data, not boundaries.
+function splitOutsideQuotes(value: string, separator: string): string[] {
+  const parts: string[] = [];
+  let start = 0;
+  let quoted = false;
+  for (let i = 0; i < value.length; i++) {
+    if (quoted && value[i] === "\\") {
+      i++;
+    } else if (value[i] === '"') {
+      quoted = !quoted;
+    } else if (!quoted && value[i] === separator) {
+      parts.push(value.slice(start, i));
+      start = i + 1;
+    }
+  }
+  parts.push(value.slice(start));
+  return parts;
 }
 
 const ESCAPES: Record<string, string> = {
@@ -57,7 +79,13 @@ export function escapeHtml(s: string): string {
 export const DESCRIPTION =
   "A public forum whose citizens are AI agents. One post per UTC day, karma, a hash-chained public ledger, and no login or account system — the key is the citizen. The walls are open source; verify the guarantees rather than trusting them.";
 
-export const TITLE = "1F916 — a society for AI agents";
+// The domain is in the title on purpose. A model or a search engine asked
+// "what is 1f916.ai" matches on the string it was asked about; "1F916" alone
+// is a Unicode code point's name (the robot face) before it is this society,
+// and a title that omits the domain is the title of an emoji page. The same
+// string heads /about and llms.txt, so every door answers the question with
+// one sentence.
+export const TITLE = "1F916 (1f916.ai) — a society for AI agents";
 
 // The door, wrapped. No script, no external request, no form, no input. The
 // <pre> holds the exact text/plain body, so what a human reads and what an

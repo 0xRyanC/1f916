@@ -83,6 +83,83 @@ export async function inclusionProof(leaves: string[], index: number, size: numb
   return (await path(index, 0, size)).map(hex);
 }
 
+// A tree over one leaf set that remembers every subtree hash it computes.
+//
+// The pure functions above rebuild each sibling subtree from its leaves on
+// every call: one inclusion proof over n leaves is ~2n SHA-256s, which is the
+// right cost for one proof (every leaf must be hashed once to reach the root)
+// and the wrong cost for a page of them — GET /api/record/:handle proves up
+// to 200 events against the same checkpoint, and paid ~2n hashes per event
+// (0.4 s each at n = 13,000; 4.4 s for a dossier of 11 sealed events, 80 s+
+// for one of 200) where the file header promises O(log n) per event. Over
+// one leaf set the subtree over leaves[start, end) never changes, so the
+// second proof that needs it can have it for free. With the memo a page
+// costs ~2n hashes once plus O(log n) per event, and the proofs are the same
+// bytes: test/merkle.test.ts checks every (index, size) pair against the
+// pure function and counts the digests.
+//
+// The memo is per instance, so build one tree per request over one leaf read
+// and let it go; it holds at most 2n - 1 subtree hashes.
+export class MerkleTree {
+  private readonly leaves: readonly string[];
+  private readonly memo = new Map<number, Promise<Uint8Array>>();
+
+  // (No parameter property: node --experimental-strip-types refuses them.)
+  constructor(leaves: readonly string[]) {
+    this.leaves = leaves;
+  }
+
+  // Merkle Tree Hash over leaves[start, end), memoized. Keyed on the pair as
+  // one number so the map never allocates a string per lookup.
+  private mth(start: number, end: number): Promise<Uint8Array> {
+    const key = start * 0x100000000 + end;
+    let p = this.memo.get(key);
+    if (p === undefined) {
+      const n = end - start;
+      if (n === 0) p = sha256(new Uint8Array(0));
+      else if (n === 1) p = leafHash(this.leaves[start]);
+      else {
+        const k = splitPoint(n);
+        p = Promise.all([this.mth(start, start + k), this.mth(start + k, end)]).then(([l, r]) => nodeHash(l, r));
+      }
+      this.memo.set(key, p);
+    }
+    return p;
+  }
+
+  // Root of the tree over the first `size` leaves (default: all of them).
+  async root(size: number = this.leaves.length): Promise<string> {
+    return hex(await this.mth(0, size));
+  }
+
+  // Inclusion proof for leaves[index] in the tree over the first `size`
+  // leaves. Same path as inclusionProof() above, RFC 6962 §2.1.1.
+  async inclusionProof(index: number, size: number): Promise<string[]> {
+    const path = async (m: number, start: number, end: number): Promise<Uint8Array[]> => {
+      const n = end - start;
+      if (n <= 1) return [];
+      const k = splitPoint(n);
+      if (m < k) return [...(await path(m, start, start + k)), await this.mth(start + k, end)];
+      return [...(await path(m - k, start + k, end)), await this.mth(start, start + k)];
+    };
+    return (await path(index, 0, size)).map(hex);
+  }
+
+  // Consistency proof between the trees over the first m and first n leaves.
+  // Same construction as consistencyProof() above, RFC 6962 §2.1.2.
+  async consistencyProof(m: number, n: number): Promise<string[]> {
+    const subproof = async (m2: number, start: number, end: number, isComplete: boolean): Promise<Uint8Array[]> => {
+      const n2 = end - start;
+      if (m2 === n2) return isComplete ? [] : [await this.mth(start, end)];
+      const k = splitPoint(n2);
+      if (m2 <= k) return [...(await subproof(m2, start, start + k, isComplete)), await this.mth(start + k, end)];
+      return [...(await subproof(m2 - k, start + k, end, false)), await this.mth(start, start + k)];
+    };
+    if (m === n || m === 0) return [];
+    return (await subproof(m, 0, n, true)).map(hex);
+  }
+}
+
 // Verify an inclusion proof. RFC 6962 §2.1.1 verification algorithm.
 export async function verifyInclusion(leaf: string, index: number, size: number, proof: string[], root: string): Promise<boolean> {
   if (index >= size) return false;

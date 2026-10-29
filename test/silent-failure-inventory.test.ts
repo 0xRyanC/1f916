@@ -25,22 +25,34 @@ const root = fileURLToPath(new URL("..", import.meta.url));
 // Every known site, as `file:what`. `what` is the `what:`/`at:` label the log
 // line carries, or the bare path expression when it has neither.
 const KNOWN_LOG_ONLY_FAILURES: Record<string, string> = {
+  "src/index.ts:anchors":
+    "the cron's anchoring pass (anchorCheckpoints). SURFACED in both directions: every attempt, failed or not, is a row on GET /api/anchors with its status and error text, and a pass that stops leaves the newest checkpoint with no anchor rows at all, which the same endpoint shows by omission against GET /api/checkpoint. The log line is the alarm; the rows are the record.",
+  "src/index.ts:witness_cosign":
+    "the cron's independent-witness pass (cosignCheckpoints, src/witness-network.ts). SURFACED: every attempt, refused, timed out or cosigned, is written to tlog_witness_state and served on GET /api/checkpoint under cosigning_witnesses (last_attempt_at, last_result, last_detail, last_ok_at per witness per log), and a witness that stops signing shows as a last_ok_at falling behind the stamps beside it. This catch fires only if the pass throws before writing its row; that is the log-only part.",
   "src/index.ts:path":
     "the top-level request catch. The caller is not left guessing: this branch also answers the request with a 500, so the failure is visible to whoever caused it.",
   "src/index.ts:checkpoints":
     "the cron's checkpoint computation. Staleness is observable from outside because GET /api/checkpoint serves each checkpoint's created_at, so a reader can tell it stopped, though nothing states the reason.",
-  "src/index.ts:witness_dispatch":
-    "REPAIRED 2026-08-20. Still logs, but now also upserts the witness_dispatch row read by GET /api/checkpoint, so status and last_ok_at are served. This is the incident that produced this file.",
-  "src/index.ts:witness_dispatch_record":
-    "UNSURFACED, and knowingly so: it fires when the recording of the dispatch outcome itself fails. Serving it would need a second recorder with the same failure mode. The honest bound is that witness_dispatch.last_attempt_at goes stale, which a reader can see.",
+  "src/index.ts:settler":
+    "the cron's observed-payment settler (settleObservedPayments). SURFACED in the direction it fails: a settler that stops leaves observed_transfers rows with settlement_checked_at NULL, and every observed payment is served on GET /api/listings/:id and GET /api/rail with its settled_award_id and settlement_note, so a reader can see a payment that sat unsettled. What is NOT served is the reason the cycle threw.",
+  "src/society.ts:rail_event":
+    "UNSURFACED, and knowingly so: a rail_events INSERT that fails costs one doorbell ring and one row on GET /api/rail-events, never the fact it announces, which is already on the record (the award, receipt or submission it points at). Serving the failure would need a second stream with the same failure mode.",
   "src/index.ts:porch_compaction":
     "the cron's porch retention sweep (clause 2). SURFACED in the direction it fails: a sweep that does not run leaves expired uncited lines readable at their date, and every day that ever lost lines serves its count and its compacted_at on /porch/YYYY-MM-DD and GET /api/porch?day=, so a reader comparing a thirty-day-old day to the published rule can see the sweep stopped. What is NOT served is the reason, and the failure direction is keeping too much rather than deleting too much.",
+  "src/index.ts:observer":
+    "UNSURFACED, narrowly: this catch fires only if observeFunderWallets THROWS before it can write its own mark. Provider disagreement and RPC failure are handled inside it and written to observer_marks.last_error. observer_marks (last block, last range, last error, updated_at) is served on GET /api/rail under observer.marks, and the catch inside observeFunderWallets writes last_error before rethrowing, so this outer log is reached only if that write itself fails.",
   "src/society.ts:rotateKey":
     "UNSURFACED. A post-commit read-back found no custody row after a key rotation. Nothing serves this; the identity chain would show the rotation without its custody record.",
   "src/society.ts:commitWithIdentityEvent":
     "UNSURFACED. An identity event failed to commit. The gap is implicitly visible as a missing id in the identity log, which is a weaker signal than a stated one.",
+  "src/grants.ts:grants.openThread":
+    "SURFACED in the record: a grant opened but its thread post was not written. GET /api/grants/:slug serves thread: null and post_id: null, the transition event's detail says '(thread write failed; post_id null)', and the page prints 'none yet' where the thread link goes. Proposals are refused on such a grant with a message naming the repair.",
+  "src/grants.ts:grants.proposalComment":
+    "SURFACED in the record: a proposal was recorded but its ballot comment was not. The proposal row carries comment_id null, GET /api/grants/:slug serves on_ballot: false and comment: null for it, the propose response says so in its note, and the tally skips it by construction rather than counting a ballot that does not exist.",
   "src/society.ts:createListing.thread":
     "UNSURFACED. A listing was created but its discussion thread was not. Visible only as a listing whose thread link resolves to nothing.",
+  "src/society.ts:createOffer.thread":
+    "UNSURFACED, and identical in shape to createListing.thread above: an offer was published but its discussion thread was not. GET /api/offers/:id serves post_id null and thread null, so the offer itself is whole and only its room is missing.",
   "src/society.ts:screen_unavailable":
     "SURFACED, with a stated limit. The same catch inserts a screen-unavailable row into screen_refusals, which is counted publicly. The docket records that the insert sits inside a bare catch, so the count can be short of the truth.",
   "src/society.ts:recordNull":

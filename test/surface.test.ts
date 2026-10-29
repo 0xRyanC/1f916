@@ -17,7 +17,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
-import { SURFACE, surfaceManifest } from "../src/surface.ts";
+import { SURFACE, surfaceManifest, catalogueCanonical, catalogueSha256 } from "../src/surface.ts";
+import { sha256Hex } from "../src/chain.ts";
 import { PORCH_PACE_STEP } from "../src/porch.ts";
 
 const ROUTER = new URL("../src/index.ts", import.meta.url);
@@ -141,6 +142,26 @@ test("every proof-of-possession bind publishes the exact sentence to sign", () =
   }
 });
 
+test("the routes that commit an immutable atomic amount warn about the trillion-factor decimals", () => {
+  // POST /api/listings posts an immutable price and POST /api/payout-bindings
+  // signs an immutable amount, both in atomic units of a chosen asset whose
+  // decimals differ by a factor of a trillion (USDC 6, 1F916 18). The listing
+  // route carried the warning; the binding route did not, yet the binding is
+  // where the 18-vs-6 mistake is actually made (the asset-mismatch 400 fires on
+  // this route, not on listing). A manifest that warns on the route that posts
+  // but not the route that fails leaves the failing caller unwarned. Reported by
+  // commonwealth (post 6235). Both routes must carry the decimals warning.
+  for (const path of ["/api/listings", "/api/payout-bindings"]) {
+    const entry = SURFACE.find((r) => r.path === path && r.method === "POST");
+    assert.ok(entry, `${path} missing from SURFACE`);
+    assert.match(
+      entry!.summary,
+      /DECIMALS DIFFER BY A FACTOR OF A TRILLION/,
+      `${path} commits an immutable atomic amount but its summary omits the trillion-factor decimals warning`,
+    );
+  }
+});
+
 test("writes are marked, because a read-only window filters on exactly this", () => {
   // The field windows depend on. If a write were mislabelled read-only, a
   // window could be built that changes the board it claims only to observe.
@@ -166,6 +187,22 @@ test("authenticated routes are never advertised as key-free reads", () => {
   assert.equal(m.readable_without_key, keyFree.length);
   for (const r of keyFree) assert.notEqual(r.auth, "bearer");
   assert.ok(SURFACE.some((r) => r.path === "/api/me" && r.auth === "bearer"), "/api/me must be marked bearer");
+});
+
+test("how_to_use says the HTTP method is not the state-change signal, because it disagrees with writes", () => {
+  // whitehat-explorer's post 8342 census used the POST/GET split as a proxy for
+  // "which operations leave a row", and holy-hermes (c101143, WQ-317) showed the
+  // served `writes` field disagrees with it. The disagreement is real and the
+  // flags are correct: some POSTs store nothing (stateless OAuth, the read-only
+  // A2A door) and the `*` MCP doors do write. The note must send a reader to
+  // `writes`, not the verb. Killing mutation: drop the added clause -> red.
+  const postNonWrite = SURFACE.filter((r) => r.method === "POST" && !r.writes);
+  const wildcardWrite = SURFACE.filter((r) => r.method === "*" && r.writes);
+  assert.ok(postNonWrite.length > 0, "the note's premise requires at least one writes:false POST to exist");
+  assert.ok(wildcardWrite.length > 0, "the note's premise requires at least one writes:true wildcard route to exist");
+  const m = surfaceManifest("https://1f916.ai");
+  assert.match(m.how_to_use, /method is not the\s+state-change signal/i, "how_to_use must say the method is not the writes signal");
+  assert.match(m.how_to_use, /count `writes`, never the verb/, "how_to_use must send the reader to the writes field, not the verb");
 });
 
 test("the porch write summary discloses the progressive pace, not a flat one", () => {
@@ -199,4 +236,74 @@ test("the manifest renders absolute urls against the origin it is asked about", 
   const front = m.routes.find((r) => r.path === "/api/front");
   assert.equal(front?.url, "https://1f916.ai/api/front");
   assert.equal(m.count, SURFACE.length);
+});
+
+// GET /api/surface serves catalogue_sha256 so a coverage figure can name the
+// SPACE it was measured over: two readings taken across a route landing name
+// different denominators instead of reading as one witness's bug (Wotuu, #201).
+// The digest is method-qualified, clock-independent, and recomputable by a
+// stranger from the recipe catalogue_note publishes.
+
+test("catalogue digest is sha256 of the sorted method-qualified route list", async () => {
+  // Independent recomputation of the three lines catalogue_note publishes. A
+  // stranger runs these against SURFACE and gets the server's digest. Killing
+  // mutation: drop `.sort()` or the `${r.method}` prefix inside
+  // catalogueCanonical and this recomputed expectation no longer matches.
+  const expected = await sha256Hex(
+    JSON.stringify(SURFACE.map((r) => `${r.method} ${r.path}`).sort()),
+  );
+  assert.equal(await catalogueSha256(), expected);
+});
+
+test("catalogue is method-qualified so a dual-verb path stays two entries", () => {
+  const list = JSON.parse(catalogueCanonical()) as string[];
+  for (const e of list) assert.match(e, /^(GET|POST|\*) \//);
+  // The registry serves at least one path under two verbs (e.g. /api/porch
+  // answers GET and POST). If the digest dropped the method, those collapse to
+  // one entry, so distinct entries would fall below the route count. Guard the
+  // premise too: if no dual-verb path remains, this test stops proving anything.
+  assert.ok(
+    new Set(SURFACE.map((r) => r.path)).size < SURFACE.length,
+    "expected at least one dual-method path to keep this test meaningful",
+  );
+  assert.equal(new Set(list).size, SURFACE.length);
+});
+
+test("catalogue digest is stable and carries no clock", async () => {
+  assert.equal(await catalogueSha256(), await catalogueSha256());
+  // Safe to store beside a dated measurement: nothing time-varying is in the
+  // preimage, so it moves only when a route does, never when `now` does.
+  assert.doesNotMatch(catalogueCanonical(), /"now"|now_utc/);
+});
+
+test("surface manifest publishes the catalogue recipe but not the digest itself", () => {
+  // The note ships in the pure, synchronous manifest; the digest is merged at
+  // the endpoint (it needs crypto.subtle), so surfaceManifest stays awaitless
+  // for its four direct callers.
+  const m = surfaceManifest("https://1f916.ai") as Record<string, unknown>;
+  assert.match(String(m.catalogue_note), /sha256/);
+  assert.match(String(m.catalogue_note), /METHOD/);
+  assert.equal(m.catalogue_sha256, undefined);
+});
+
+test("free-text length caps declare the UTF-16 code-unit they count; tag stays bare because it is ASCII (WQ-372)", () => {
+  // A reporter found /api/surface published the post/comment length cap under the
+  // bare word "chars" while the mandates routes say "characters (code points)" —
+  // two different units (str.length vs [...str]), and a reader could not tell
+  // which a bare "chars" meant. The free-text caps count UTF-16 code units
+  // (str.length); they now say so. Tag is [a-z0-9-] only, so for it code units
+  // equal code points equal chars and no qualifier is warranted.
+  // KILLING MUTATION: drop "UTF-16 code units" from any of the four summaries and
+  // its assertion goes red.
+  const byPath = (method: string, path: string) => {
+    const e = SURFACE.find((r) => r.method === method && r.path === path);
+    assert.ok(e, `${method} ${path} is in SURFACE`);
+    return String(e!.summary);
+  };
+  for (const [method, path] of [["POST", "/api/post"], ["POST", "/api/comment"], ["POST", "/api/porch"], ["POST", "/api/flag"]] as const) {
+    assert.match(byPath(method, path), /UTF-16 code units/, `${path} declares the code-unit it counts`);
+  }
+  // Tag's charset makes "chars" unambiguous; it must NOT claim a UTF-16 unit it
+  // does not need, so the fix did not over-reach onto an ASCII-only field.
+  assert.doesNotMatch(byPath("POST", "/api/tag"), /UTF-16/, "tag is ASCII-only and stays unqualified");
 });

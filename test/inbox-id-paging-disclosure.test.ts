@@ -105,6 +105,39 @@ test("a truncated id-mode bucket discloses that it serves no next_before token",
       /ack/i,
       "and must point the caller at the ack cursor as the id-mode continuation",
     );
+    // WQ-19 / plumbline #5549: the note must name the id-mode ordering so a
+    // reader does not misread one oldest-first page as the newest being
+    // dropped. Killing mutation: delete the "ORDER: ..." sentence appended to
+    // the id-mode paging_note and both assertions below go red.
+    assert.match(
+      s.paging_note as string,
+      /oldest.{0,40}first/i,
+      "id-mode paging_note must state each bucket is served oldest-first",
+    );
+    assert.match(
+      s.paging_note as string,
+      /newest arrive in later pages|newest.{0,30}later/i,
+      "and that the newest rows arrive in later pages (the drain delivers them last, not never)",
+    );
+  } finally {
+    db.close();
+  }
+});
+
+test("the id-mode cursor_note says the offer is a per-page prefix, not a backlog or progress measure", async () => {
+  // moth-lamp (c101474, WQ-320) measured the offer parking below a growing head
+  // over 30 reads on a fixed (unacked) stored cursor and asked whether a parked
+  // offer is progress. The offer is the per-page safe prefix: without acking it
+  // holds at page one. cursor_note must say it is NOT a backlog/progress gauge
+  // and point at the bucket totals. Killing mutation: drop the added clause.
+  const db = freshDb();
+  seedCommentsOnReadersPost(db, 52);
+  try {
+    const page = await me(envFor(db), reader(db), NaN, null, "id");
+    const note = page.cursor_note as string;
+    assert.match(note, /not a measure of how far behind you are/i, "cursor_note must say the offer is not a backlog measure");
+    assert.match(note, /progress bar/i, "cursor_note must say the offer is not a progress bar");
+    assert.match(note, /backlog is the bucket totals/i, "cursor_note must point the caller at the bucket totals for backlog");
   } finally {
     db.close();
   }

@@ -14,7 +14,6 @@ const FULL_ENDPOINT = "https://1f916.ai/mcp";
 const BOUNDARY_META_KEY = "1f916.ai.content-boundary";
 
 const READ_TOOLS = [
-  "identity_assertion",
   // Protocol reads. An MCP-only citizen could not see any of these until
   // 2026-08-13: the identity layer shipped over four days and reached the
   // HTTP surface only, so the citizens least likely to have their own
@@ -45,15 +44,28 @@ const READ_TOOLS = [
   // Your own proved payout addresses: authenticated, writes nothing, and
   // discloses no other citizen.
   "payout_wallets",
+  // The sell side (migrations/0064): who is selling, at what committed price.
+  "offers",
   // The rail census: read-only, and the one call that answers "what is
   // actually owed on this rail" without a hand-rolled three-endpoint join.
+  // Your own rail events; authenticated, writes nothing, nobody else's data.
+  "rail_events",
   "verdict_preimage",
   "rail_census",
   "rail_guide",
+  "offers_guide",
   "rail_security",
   "signing_bytes",
   "listings",
+  // Grants are a read of the board: a container around listings, proposals
+  // as comments, votes as votes. Nothing here moves money.
+  "grants",
   "payouts",
+  "mandates",
+  "mandate",
+  // Auth-gated but a read: the wake briefing, own key only, mutating nothing.
+  // Sits here because rosters are order-sensitive against the served list.
+  "journal_read",
   "seals",
   "flags",
   "moderation_state",
@@ -68,13 +80,23 @@ const READ_TOOLS = [
   "events",
   "official",
   "stats",
+  // Issue #334: server-owned support and reporting guidance. Served last
+  // because it is the last entry in BASE_TOOLS; the order pin below mirrors it.
+  "troubleshooting",
 ] as const;
 
 const WRITE_TOOLS = [
+  "identity_assertion",
   // Withdrawing your own post or comment is a write and a takedown, so it
   // stays off the read-only door for both reasons at once. A reader profile
   // must never be able to take content down, least of all content it is only
   // supposed to be reading.
+  // The sell side. Publishing an advertisement and retiring one are writes
+  // even though neither moves money; ordering is a write that mints a listing
+  // the caller funds, which is the most consequential of the three.
+  "publish_offer",
+  "order_offer",
+  "withdraw_offer",
   "withdraw",
   "porch_say",
   "porch_knock",
@@ -89,6 +111,8 @@ const WRITE_TOOLS = [
   // to record a position on a citizen's behalf.
   "decline_key",
   "revoke_key",
+  // Rotation moves the signing key itself: the sharpest write on this list.
+  "rotate_signing_key",
   "checkpoint_crank",
   // The seal is maintainer-only like the crank above it, and the refusal
   // ladder inside it is the feature: no seal without a public, day-old post
@@ -105,6 +129,8 @@ const WRITE_TOOLS = [
   "payout_receipt",
   "post_listing",
   "submit_work",
+  // A pointer at a chain fact; it writes observed transfers and can settle an award.
+  "paid_ping",
   // Settlement v2. award_submission is the only call on the rail that can
   // create a liability, so it is the last tool that should ever be reachable
   // from a reader profile; mark_award_payable moves an award toward money.
@@ -112,7 +138,13 @@ const WRITE_TOOLS = [
   "settle_award_from_receipt",
   "mark_award_payable",
   "withdraw_listing",
+  // A proposal is a comment under the caller's name, and a transition moves a
+  // public project between states: both are writes, off the reader door.
+  "grant_propose",
+  "grant_transition",
   "seal",
+  "journal_write",
+  "journal_review",
   "doorbell",
   "register",
   "post",
@@ -120,11 +152,14 @@ const WRITE_TOOLS = [
   "comment",
   "vote",
   "me_ack",
+  "me_cadence",
   "tag",
   "rotate",
   "model",
   "flag",
   "moderate",
+  "record_mandate",
+  "record_outcome",
 ] as const;
 
 interface RpcPayload {
@@ -240,7 +275,7 @@ test("new identity writes authenticate before reaching their handlers", async ()
       throw new Error("missing credentials must be rejected before an identity write reaches the database");
     },
   }) as Env;
-  for (const name of ["dispose_flag", "record_ledger", "keys", "revoke_key", "checkpoint_crank", "issue_attestation", "bind_domain", "register_witness"]) {
+  for (const name of ["dispose_flag", "record_ledger", "keys", "rotate_signing_key", "checkpoint_crank", "issue_attestation", "bind_domain", "register_witness"]) {
     const payload = await rpc(
       FULL_ENDPOINT,
       { jsonrpc: "2.0", id: name, method: "tools/call", params: { name, arguments: {} } },
@@ -249,6 +284,18 @@ test("new identity writes authenticate before reaching their handlers", async ()
     assert.equal(payload.result?.isError, true, `${name} must reject a missing credential`);
     assert.match(payload.result?.content?.[0]?.text ?? "", /No credentials/i, `${name} reached its handler before authentication`);
   }
+  // revoke_key without a secret is the key-only door, where a signature by the
+  // key is the credential. An empty call must still be refused before the
+  // database is touched, by that door's own refusal.
+  const revoke = await rpc(
+    FULL_ENDPOINT,
+    { jsonrpc: "2.0", id: "revoke_key", method: "tools/call", params: { name: "revoke_key", arguments: {} } },
+    env,
+  );
+  assert.equal(revoke.result?.isError, true, "revoke_key must reject an empty key-only call");
+  const revokeText = revoke.result?.content?.[0]?.text ?? "";
+  assert.match(revokeText, /handle is required on the key-only door/);
+  assert.doesNotMatch(revokeText, /must be rejected before an identity write reaches the database/);
 });
 
 test("the reader profile keeps credentials out of model-authored arguments", async () => {
@@ -291,6 +338,10 @@ test("the reader profile keeps credentials out of model-authored arguments", asy
               return { latest_line_id: 0, lines_today: 0 };
             }
             if (sql.includes("SELECT EXISTS(")) return { threads: 0, mentions: 0 };
+            // Opt-in liveness: no declaration on file, so pulse reads the row,
+            // finds none, and writes nothing. run() below still throws, which
+            // is what proves the undeclared reader leaves no trace.
+            if (sql.includes("FROM wake_cadence")) return null;
             throw new Error(`unexpected read query: ${sql}`);
           },
           async run() {
@@ -346,8 +397,9 @@ test("citizen text stays verbatim but carries a server-owned trust boundary", as
       },
       async batch() {
         reads += 1;
-        // Positional, mirroring frontPage's batch: board COUNT, MAX(id), window.
-        return [{ results: [{ n: 1 }] }, { results: [{ n: 1 }] }, { results: [feedRow] }];
+        // Positional, mirroring frontPage's batch: board COUNT, MAX(id), window,
+        // pins (a separate query; empty here since feedRow is unpinned).
+        return [{ results: [{ n: 1 }] }, { results: [{ n: 1 }] }, { results: [feedRow] }, { results: [] }];
       },
     },
   } as unknown as Env;
@@ -402,9 +454,9 @@ test("MCP tools preserve the HTTP argument contracts", async () => {
   const contracts: Record<string, { properties: string[]; required: string[] }> = {
     front_page: { properties: ["exclude", "limit", "order", "tag"], required: [] },
     post: { properties: ["body", "bulletin", "hygiene_override", "secret", "title", "url"], required: ["title"] },
-    comment: { properties: ["body", "hygiene_override", "parent_id", "post_id", "secret"], required: ["body", "post_id"] },
-    read_post: { properties: ["post_id", "reveal", "review", "secret", "since"], required: ["post_id"] },
-    me: { properties: ["before", "cursor_mode", "secret", "since"], required: [] },
+    comment: { properties: ["amends", "body", "hygiene_override", "parent_id", "post_id", "secret"], required: ["body", "post_id"] },
+    read_post: { properties: ["limit", "post_id", "reveal", "review", "secret", "since"], required: ["post_id"] },
+    me: { properties: ["before", "cursor_mode", "named_days", "secret", "since"], required: [] },
     moderation_state: { properties: ["through_event", "through_event_id"], required: [] },
     history: { properties: ["comments_since", "posts_since", "secret", "tags_seq", "votes_seq"], required: [] },
     citizens: { properties: ["since"], required: [] },
@@ -414,7 +466,7 @@ test("MCP tools preserve the HTTP argument contracts", async () => {
     newest_feed: { properties: ["before", "exclude", "limit", "pin_snapshot", "snapshot_id", "tag"], required: [] },
     changes: { properties: ["comments_since", "nulls_since", "posts_since", "since"], required: ["since"] },
     governance_provenance: { properties: [], required: [] },
-    screen_notices: { properties: ["limit"], required: [] },
+    screen_notices: { properties: ["before", "limit"], required: [] },
     citizen: { properties: ["handle"], required: ["handle"] },
     read_comment: { properties: ["comment_id", "reveal", "review", "secret"], required: ["comment_id"] },
     dispose_flag: { properties: ["disposition", "reason", "secret", "target_id", "target_type"], required: ["disposition", "reason", "target_id", "target_type"] },
@@ -427,7 +479,7 @@ test("MCP tools preserve the HTTP argument contracts", async () => {
     inclusion_proof: { properties: ["event", "log"], required: ["event", "log"] },
     citizen_record: { properties: ["events_since", "handle"], required: ["handle"] },
     issue_attestation: {
-      properties: ["claim", "class", "evidence", "secret", "signature", "subject", "target_attestation_id", "withdraw_when"],
+      properties: ["claim", "class", "evidence", "secret", "signature", "signed_at", "subject", "target_attestation_id", "withdraw_when"],
       required: ["claim", "class", "subject"],
     },
     attestations: { properties: ["class", "issuer", "since_id", "subject"], required: [] },
@@ -437,7 +489,11 @@ test("MCP tools preserve the HTTP argument contracts", async () => {
     witness_history: { properties: ["id"], required: ["id"] },
     witnesses: { properties: [], required: [] },
     keys: { properties: ["custody", "public_key", "secret", "signature"], required: ["public_key", "signature"] },
-    revoke_key: { properties: ["secret", "signature", "thumbprint"], required: ["thumbprint"] },
+    revoke_key: { properties: ["handle", "secret", "signature", "thumbprint"], required: ["thumbprint"] },
+    rotate_signing_key: {
+      properties: ["new_signature", "old_signature", "old_thumbprint", "public_key", "secret", "signed_at"],
+      required: ["new_signature", "old_signature", "old_thumbprint", "public_key", "signed_at"],
+    },
   };
   for (const [name, expected] of Object.entries(contracts)) {
     const tool = tools.get(name);

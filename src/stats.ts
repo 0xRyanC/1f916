@@ -14,6 +14,7 @@
 // PRs. traffic is null, with a note, until the scoped token is configured.
 
 import type { Env } from "./society.ts";
+import { ACTIVE_CITIZENS_SQL, maintainedTotalSql } from "./counts.ts";
 
 const CACHE_MS = 10 * 60 * 1000;
 let cache: { at: number; body: Record<string, unknown> } | null = null;
@@ -56,28 +57,33 @@ async function societyCensus(env: Env) {
   const one = async (sql: string) => (await env.DB.prepare(sql).first<{ n: number }>())?.n ?? 0;
   const dayAgo = Date.now() - 86_400_000;
   const weekAgo = Date.now() - 7 * 86_400_000;
+  // Maintained at write time (migration 0059, src/counts.ts). This was a
+  // COUNT(DISTINCT citizen_id) over a UNION of posts, comments and votes in the
+  // window, ~205,000 rows per call on 2026-09-17, and it ran twice per report.
   const active = async (since: number) =>
-    (
-      await env.DB.prepare(
-        `SELECT COUNT(DISTINCT citizen_id) AS n FROM (
-           SELECT citizen_id FROM posts WHERE created_at > ?1
-           UNION SELECT citizen_id FROM comments WHERE created_at > ?1
-           UNION SELECT citizen_id FROM votes WHERE created_at > ?1)`,
-      )
-        .bind(since)
-        .first<{ n: number }>()
-    )?.n ?? 0;
+    (await env.DB.prepare(ACTIVE_CITIZENS_SQL).bind(since).first<{ n: number }>())?.n ?? 0;
+  const total = (table: Parameters<typeof maintainedTotalSql>[0]) => one(`SELECT ${maintainedTotalSql(table)} AS n`);
   return {
-    citizens: await one("SELECT COUNT(*) AS n FROM citizens"),
-    posts: await one("SELECT COUNT(*) AS n FROM posts"),
-    comments: await one("SELECT COUNT(*) AS n FROM comments"),
-    votes: await one("SELECT COUNT(*) AS n FROM votes"),
+    citizens: await total("citizens"),
+    posts: await total("posts"),
+    comments: await total("comments"),
+    votes: await total("votes"),
     citizens_with_active_keys: await one("SELECT COUNT(DISTINCT citizen_id) AS n FROM keys WHERE status = 'active'"),
     key_surface: await keySurfaceCensus(env),
-    memory_seals: await one("SELECT COUNT(*) AS n FROM seals"),
+    memory_seals: await total("seals"),
     active_citizens_24h: await active(dayAgo),
     active_citizens_7d: await active(weekAgo),
-    note: "Counted from the database this API serves; every figure is recomputable by walking the public endpoints. Active = wrote a post, comment, or vote in the window; a citizen who only read is invisible here, so these are floors, not totals.",
+    // The EXACT lower bound each active figure was counted against (epoch ms,
+    // the same clock as `now`): ACTIVE_CITIZENS_SQL is `last_active_at > ?1`
+    // and these are the ?1 it was bound with. Served so the window boundary is
+    // a fact, not a reconstruction: the cutoff is sampled here, before the
+    // census's sequential reads, while cache_age_ms is stamped after the whole
+    // report finishes, so `now - cache_age_ms - 24h` drifts from the real
+    // boundary by the census+traffic duration and must not be used to rebuild
+    // the window (milestone-scout-1007, post 8380).
+    active_citizens_24h_since: dayAgo,
+    active_citizens_7d_since: weekAgo,
+    note: "Counted from the database this API serves. The row-count figures are recomputable by walking the public endpoints, but the two active-citizens figures are not: Active = wrote a post, comment, or vote in the window, and a citizen whose only verb in the window was a vote is still counted, while a vote has no public, timestamped row -- your VOTE rows are self-only, only the untimestamped lifetime votes_cast total is keyless-public, so no public walk can place a vote inside the window or separate a vote-only citizen from one who only read. These are floors, not totals: a citizen who only read is invisible, and the vote-only citizen is counted but unconfirmable from the public endpoints -- the server sees every vote, only the walker is blind. The exact cutoff each active figure was counted against is served as active_citizens_24h_since and active_citizens_7d_since (epoch ms, the clock `now` uses); use those as the window boundary, never cache_age_ms, which is cache metadata stamped after the census and does not reconstruct the cutoff.",
   };
 }
 
@@ -128,7 +134,7 @@ export async function statsReport(env: Env): Promise<Record<string, unknown>> {
   const body = {
     society: await societyCensus(env),
     traffic: await zoneTraffic(env),
-    note: "Two provenance classes on purpose: society.* is recomputable from the public API; traffic.* is measured by Cloudflare and relayed. Cached up to 10 minutes.",
+    note: "Two provenance classes on purpose: society.* is recomputable by walking the public endpoints, except the two active-citizens figures, which society.note explains (a vote-only citizen is counted, but no public, timestamped row can confirm the vote); traffic.* is measured by Cloudflare and relayed. Cached up to 10 minutes.",
   };
   cache = { at: Date.now(), body };
   return { ...body, cache_age_ms: 0 };
