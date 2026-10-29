@@ -6449,6 +6449,10 @@ export async function createPayoutReceipt(env: Env, submitter: Citizen, bindingI
   // A listing that named its paying wallet is paid from that wallet or not
   // recorded at all; anyone else's transfer to the payee is not this bounty.
   const anchoredListingId = listingIdFromRow(binding.docket_id);
+  // Set for a verifier row so the receipt insert and its chained event both
+  // carry the paid-verifier cap (SEC-7); null elsewhere (no cap).
+  let capGuard: ChainGuard | undefined;
+  let capListing: Pick<StoredListing, "id" | "max_verifiers"> | null = null;
   if (anchoredListingId !== null) {
     const anchoredListing = await listingById(env, anchoredListingId);
     // A moderated listing (the wall: paying for speech or promotion) cannot be
@@ -6466,19 +6470,29 @@ export async function createPayoutReceipt(env: Env, submitter: Citizen, bindingI
         "SELECT COUNT(*) AS n FROM payout_receipts pr JOIN payout_bindings pb ON pb.id = pr.binding_id WHERE pb.docket_id = ?",
       ).bind(binding.docket_id).first<{ n: number }>()) ?? { n: 0 };
       assertVerifierCapNotReached(anchoredListing, n);
+      // The count above is read in a statement separate from the insert below,
+      // so two concurrent verifier receipts could both pass it and both commit,
+      // exceeding max_verifiers (SEC-7). Carry the cap as a guard:
+      // commitWithIdentityEvent applies it to BOTH the receipt insert and its
+      // chained event, so the count is re-evaluated atomically at commit time,
+      // only one of a racing pair lands, and the loser commits nothing
+      // (changed === 0) — caught below.
+      capGuard = {
+        sql: "(SELECT COUNT(*) FROM payout_receipts pr JOIN payout_bindings pb ON pb.id = pr.binding_id WHERE pb.docket_id = ?) < ?",
+        binds: [binding.docket_id, anchoredListing.max_verifiers],
+      };
+      capListing = { id: anchoredListing.id, max_verifiers: anchoredListing.max_verifiers };
     }
   }
   const funder = await verifyFunderAttestation(binding, payment, input);
   const payload = payoutReceiptPayload(binding, payment, input.fundingRelationship, funder, submitter.id, now);
   const payloadHash = await payoutReceiptPayloadHash(binding, payment, input.fundingRelationship, funder, submitter.id, now);
-  const stateStmt = env.DB.prepare(
-    `INSERT INTO payout_receipts
-      (binding_id, submitter_id, tx_hash, transfer_log_index, source_address, transaction_sender,
+  const receiptColumns =
+    `(binding_id, submitter_id, tx_hash, transfer_log_index, source_address, transaction_sender,
        block_number, block_hash, block_timestamp, finalized_block_number, confirmations_at_recording, funding_relationship,
        funder_address, funder_statement, funder_signature, funder_attestation_hash,
-       payload_hash, checked_at, created_at, submitted_by)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
-  ).bind(
+       payload_hash, checked_at, created_at, submitted_by)`;
+  const receiptValues = [
     bindingId,
     submitter.id,
     payment.txHash,
@@ -6499,7 +6513,16 @@ export async function createPayoutReceipt(env: Env, submitter: Citizen, bindingI
     payment.checkedAt,
     now,
     submittedBy,
-  );
+  ];
+  const ph = receiptValues.map(() => "?").join(", ");
+  // A verifier row's insert is GUARDED by the cap: INSERT ... SELECT the values
+  // WHERE the listing still has a free paid-verifier slot, re-evaluated at
+  // commit, so a racing pair cannot both land (SEC-7). Every other row keeps the
+  // plain VALUES insert. commitWithIdentityEvent gets the same guard so the
+  // chained event is voided too when the slot is gone.
+  const stateStmt = capGuard
+    ? env.DB.prepare(`INSERT INTO payout_receipts ${receiptColumns} SELECT ${ph} WHERE ${capGuard.sql} RETURNING id`).bind(...receiptValues, ...capGuard.binds)
+    : env.DB.prepare(`INSERT INTO payout_receipts ${receiptColumns} VALUES (${ph}) RETURNING id`).bind(...receiptValues);
   let committed: { state: { id: number } | null; changed: number; hash: string };
   try {
     committed = await commitWithIdentityEvent<{ id: number }>(
@@ -6511,6 +6534,7 @@ export async function createPayoutReceipt(env: Env, submitter: Citizen, bindingI
         detail: `binding=${bindingId}, docket=${binding.docket_id}, receipt payload sha256=${payloadHash}, base tx=${payment.txHash}:${payment.transferLogIndex}`,
       },
       "payout-receipt chain head moved four times running; refusing to record a payment without its anchor",
+      capGuard,
     );
   } catch (error) {
     if (String(error).includes("UNIQUE")) {
@@ -6522,6 +6546,16 @@ export async function createPayoutReceipt(env: Env, submitter: Citizen, bindingI
       if (used) throw new SocietyError(409, `that exact on-chain Transfer is already recorded as payout receipt ${used.id}`);
     }
     throw error;
+  }
+  // The cap guard voided both the insert and its chained event: the last paid-
+  // verifier slot was taken between the pre-check and this commit (SEC-7). Nothing
+  // landed; refuse with the same cap error the pre-check gives, from a fresh count.
+  if (capGuard && committed.changed === 0) {
+    const { n } = (await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM payout_receipts pr JOIN payout_bindings pb ON pb.id = pr.binding_id WHERE pb.docket_id = ?",
+    ).bind(binding.docket_id).first<{ n: number }>()) ?? { n: 0 };
+    if (capListing) assertVerifierCapNotReached(capListing, n);
+    throw new SocietyError(409, `listing ${anchoredListingId} has reached its paid-verifier cap; this payment was not recorded as a verifier payout`);
   }
   const chainAnchor = await identityAnchorByHash(env, committed.hash);
   // Settlement v2: close the award this payment settles, automatically. The
