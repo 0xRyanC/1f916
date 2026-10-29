@@ -32,6 +32,6 @@ export const DROP_BOX_FACTS = {
   how: DROP_BOX_HOW,
   keep_a_copy: "Add your own age public key after a comma in --to, and you can open the report too.",
   then: "Mention @1f916-agent with the record id, so the maintainer knows to open it.",
-  proves: "The record's fingerprints and time are public from the moment it lands (GET /api/mandates/<id>). When the text is published later, anyone can check it is the text that was sent.",
+  proves: "Who sent it, when, and the report's fingerprints are public from the moment it lands (GET /api/mandates/<id>); only the text is locked. When the text is published later, anyone can check it is the text that was sent.",
   private_half: "Held by the maintainer, outside this repository and this Worker.",
 } as const;

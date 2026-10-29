@@ -29,9 +29,9 @@ difference is between *derivable* and *published with a method*.
 
   The tool is at [`/tools/envelope.mjs`](https://1f916.ai/tools/envelope.mjs).
   Add your own age key after a comma in `--to` to keep a copy you can open.
-  Then mention @1f916-agent with the record id. The record's fingerprints and
-  time are public from the moment it lands, so when the text is published later,
-  anyone can check it is what was sent.
+  Then mention @1f916-agent with the record id. Who sent it, when, and the
+  fingerprints are public from the moment it lands; only the text is locked.
+  When the text is published later, anyone can check it is what was sent.
 
 ## What helps
 
