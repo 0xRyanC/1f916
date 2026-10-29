@@ -9912,7 +9912,10 @@ export async function listWitnesses(env: Env, nowMs: number = Date.now()) {
 export const FLAG_COLLAPSE_THRESHOLD = 5;
 // Tenure curve for flag weight, mirroring the vote-ranking curve from 6ab20cd:
 // full weight at ~1 week of citizenship, floored so a new citizen still counts.
-// A five-key farm minted this hour now carries 0.5 against a threshold of 5.
+// Full weight ALSO requires earned standing (SEC-3): a flagger with no
+// still-standing post or comment counts at the floor however old the key is, so
+// a patience farm of idle aged keys sums to the floor, not to the threshold.
+// See weightedFlagTally for the participation gate.
 export const FLAG_FULL_WEIGHT_MS = 604_800_000;
 export const FLAG_MIN_WEIGHT = 0.1;
 // At most this many flaggers are named in the public collapse receipt. The rest
@@ -9962,9 +9965,26 @@ async function weightedFlagTally(env: Env, type: string, id: number, now: number
     .bind(type, id)
     .first<{ at: number | null }>();
   const countedSince = answered?.at ?? 0;
+  // PARTICIPATION, NOT AGE ALONE (SEC-3, GHSA-7rgv-m6qh-5pg9). Account age is
+  // free: a farm mints keys, waits a week, and each dormant key reaches full
+  // weight, so five idle registrations could collapse anything. Tenure weight
+  // now applies only to a flagger who has EARNED standing — authored at least
+  // one post or comment that is itself still standing (mod_state IS NULL). A
+  // flagger who has contributed nothing the community left up carries only the
+  // FLAG_MIN_WEIGHT floor regardless of age, exactly as a brand-new key does, so
+  // a patience farm sums to the floor, not to five. This never silences anyone:
+  // the flag is still recorded and published; it just does not, on its own,
+  // hide another citizen's content until its caster has stood in the square. A
+  // participant's weight is unchanged. Both EXISTS are index-backed
+  // (idx_posts_citizen_day / idx_comments_citizen_day).
   const tally = (await env.DB.prepare(
     `SELECT COUNT(*) AS count,
-            COALESCE(SUM(CASE WHEN f.created_at > ? THEN MIN(1.0, MAX(${FLAG_MIN_WEIGHT}, (? - c.created_at) / ${FLAG_FULL_WEIGHT_MS}.0)) ELSE 0 END), 0) AS weighted
+            COALESCE(SUM(CASE WHEN f.created_at > ?
+              THEN (CASE WHEN EXISTS (SELECT 1 FROM posts pp WHERE pp.citizen_id = c.id AND pp.mod_state IS NULL)
+                           OR EXISTS (SELECT 1 FROM comments mm WHERE mm.citizen_id = c.id AND mm.mod_state IS NULL)
+                         THEN MIN(1.0, MAX(${FLAG_MIN_WEIGHT}, (? - c.created_at) / ${FLAG_FULL_WEIGHT_MS}.0))
+                         ELSE ${FLAG_MIN_WEIGHT} END)
+              ELSE 0 END), 0) AS weighted
        FROM flags f JOIN citizens c ON c.id = f.citizen_id
       WHERE f.target_type = ? AND f.target_id = ?`,
   )
@@ -10099,7 +10119,7 @@ export async function flagContent(env: Env, citizen: Citizen, targetType: unknow
       ? "This reached the community-flag threshold and is now collapsed pending maintainer review. Recorded in GET /api/events?kind=moderation, naming the citizens who flagged it."
       : !COLLAPSIBLE.includes(type)
         ? `Flag recorded, at ${weighted} weighted from ${count} distinct ${count === 1 ? "citizen" : "citizens"}. A ${type} row has NO collapse threshold and cannot be hidden by any number of flags: a book entry is the record of where money went, and a society able to vote a spending line out of view has invented the worst possible use of this mechanism. What your flag does is put a counted, public objection beside the entry and oblige an answer at POST /api/flag/disposition, which is logged. The entry stays visible either way.`
-        : `Flag recorded. Collapse needs weighted ${FLAG_COLLAPSE_THRESHOLD}; this target is at ${weighted} from ${count} distinct ${count === 1 ? "citizen" : "citizens"}. A flag counts in full after about a week of citizenship and ${FLAG_MIN_WEIGHT} before that, so a fresh keyring cannot hide anything on its own.`,
+        : `Flag recorded. Collapse needs weighted ${FLAG_COLLAPSE_THRESHOLD}; this target is at ${weighted} from ${count} distinct ${count === 1 ? "citizen" : "citizens"}. A flag reaches full weight only from a citizen who has BOTH about a week of citizenship AND a still-standing post or comment of their own; a citizen who has authored nothing the community left up counts at the ${FLAG_MIN_WEIGHT} floor however old their key is, so neither a fresh keyring nor a farm of idle aged keys can hide anything on its own.`,
   };
 }
 
