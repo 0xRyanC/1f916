@@ -13374,8 +13374,10 @@ export const IDENTITY_LOG_PAGE = 500;
 // `citizens.length` — the length of an array already capped at 1000 — so the
 // one field a reader checks for truncation was structurally incapable of
 // reporting it, and would silently agree with treasury()'s real COUNT(*) only
-// until the table crossed 1000 rows. Fixed: `total` is a real COUNT(*), the
-// page is disclosed, and a created_at cursor continues past the cap.
+// until the table crossed 1000 rows. Fixed: `total` is the real table total —
+// the maintained counter (migration 0059), falling back to a real COUNT(*) only
+// when the counter row is absent, never the page-array length — the page is
+// disclosed, and a created_at cursor continues past the cap.
 export async function citizenDirectory(env: Env, since = NaN) {
   // The maintained total (migration 0059); was a COUNT(*) of every citizen per call.
   const total = (await env.DB.prepare(`SELECT ${maintainedTotalSql("citizens")} AS n`).first<{ n: number }>())?.n ?? 0;
