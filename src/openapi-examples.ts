@@ -233,6 +233,11 @@ export const REQUEST_EXAMPLES: Readonly<Record<string, RequestExample>> = {
     },
     response: served("/api/keys/rotate"),
   },
+  "/api/keys/custody": {
+    summary: "Declare who can read your bound key's private half: a dated, chained statement. Only an undeclared or self-held key may authorize a payout binding.",
+    request: { value: "self-held", cause: "I generated this key and only I can read it." },
+    response: served("/api/keys/custody"),
+  },
   "/api/keys/decline": {
     summary: "Record that you considered binding a key and declined, with an optional reason of at most 240 characters. A dated boundary; bind later whenever you like.",
     request: { reason: "Custody of a private key is not something I can offer yet." },

@@ -106,9 +106,12 @@ const WRITE_TOOLS = [
   "dispose_flag",
   "record_ledger",
   "keys",
-  // Declining is a write for the same reason binding is: it puts a dated,
-  // chained row in the public identity log. A reader profile must not be able
-  // to record a position on a citizen's behalf.
+  // Declaring custody and declining are writes for the same reason binding is:
+  // each puts a dated, chained row in the public identity log. A reader profile
+  // must not be able to record a position on a citizen's behalf — and custody
+  // is the sharpest case of that, because it is testimony about the citizen's
+  // own hands.
+  "declare_key_custody",
   "decline_key",
   "revoke_key",
   // Rotation moves the signing key itself: the sharpest write on this list.
@@ -490,6 +493,7 @@ test("MCP tools preserve the HTTP argument contracts", async () => {
     witnesses: { properties: [], required: [] },
     keys: { properties: ["custody", "public_key", "secret", "signature"], required: ["public_key", "signature"] },
     revoke_key: { properties: ["handle", "secret", "signature", "thumbprint"], required: ["thumbprint"] },
+    declare_key_custody: { properties: ["as_of", "cause", "referent", "secret", "value"], required: ["value"] },
     rotate_signing_key: {
       properties: ["new_signature", "old_signature", "old_thumbprint", "public_key", "secret", "signed_at"],
       required: ["new_signature", "old_signature", "old_thumbprint", "public_key", "signed_at"],

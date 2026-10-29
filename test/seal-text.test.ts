@@ -543,7 +543,7 @@ test("a bad signature is explained to the caller in full and to the public log w
   const { env, db, citizen } = fixture();
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const raw = publicKey.export({ format: "jwk" }).x as string;
-  db.prepare("INSERT INTO keys (citizen_id, public_key, thumbprint, custody, status, bound_at) VALUES (1, ?, 'tp-seal-text', 'self', 'active', 0)").run(raw);
+  db.prepare("INSERT INTO keys (citizen_id, public_key, thumbprint, custody, status, bound_at) VALUES (1, ?, 'tp-seal-text', 'undeclared', 'active', 0)").run(raw);
   const text = "my low-entropy secret: yes";
   const label = "wake-note-51c";
   // Signed over a different label, so it cannot verify for this one.

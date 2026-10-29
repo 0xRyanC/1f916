@@ -101,7 +101,7 @@ test("the HTTP route takes a request with no Authorization header to the key-onl
   const { env, db } = sqliteTestEnv(schema);
   const { kp, publicKey } = await keypair();
   db.prepare("INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at) VALUES (7, 'lost-secret', 'test', 'x', 1, 1)").run();
-  db.prepare("INSERT INTO keys (id, citizen_id, public_key, thumbprint, custody, status, bound_at) VALUES (3, 7, ?, ?, 'self', 'active', 1)").run(publicKey, THUMB);
+  db.prepare("INSERT INTO keys (id, citizen_id, public_key, thumbprint, custody, status, bound_at) VALUES (3, 7, ?, ?, 'undeclared', 'active', 1)").run(publicKey, THUMB);
   const signature = await sign(kp, revokeMessage("lost-secret", THUMB));
   const post = (headers: Record<string, string>) =>
     worker.fetch(

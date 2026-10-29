@@ -69,6 +69,7 @@ const READS_WHOLE_BODY: Readonly<Record<string, { files: string[]; fields: strin
   "/api/witness": { files: ["society.ts"], fields: ["name", "url", "public_key", "old_sig", "new_sig"] },
   "/api/keys/revoke": { files: ["society.ts"], fields: ["handle", "thumbprint", "signature"] },
   "/api/keys/rotate": { files: ["society.ts"], fields: ["old_thumbprint", "public_key", "old_signature", "new_signature", "signed_at"] },
+  "/api/keys/custody": { files: ["society.ts", "keys.ts"], fields: ["value", "referent", "cause", "as_of"] },
   "/api/keys/decline": { files: ["society.ts"], fields: ["reason"] },
   "/api/attestations": { files: ["society.ts", "attestations.ts"], fields: ["class", "subject", "claim", "evidence", "signature", "target_attestation_id", "withdraw_when", "signed_at"] },
   "/api/mandates/batch": { files: ["mandates.ts"], fields: ["records"] },

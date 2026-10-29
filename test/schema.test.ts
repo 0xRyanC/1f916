@@ -1111,7 +1111,8 @@ test("the /api/keys citizen key-surface schema rejects the contract breaks it ex
     x: "p6F1EDHEVAdhDWGIMzdfdp80QLUfZuEml7UCEtfuuX4",
     public_key: "p6F1EDHEVAdhDWGIMzdfdp80QLUfZuEml7UCEtfuuX4",
     thumbprint: "q7Lou1aKAqvXFxWhd7RAjaFUuq7FiXcVTkb4kqgE8bI",
-    custody: "self",
+    custody: "undeclared",
+    custody_declaration: { value: "undeclared", declared: false, event: null, declared_at: null, as_of: null, referent: null, authorizes_payouts: true },
     status: "active",
     bound_at: 1786588359433,
     ended_at: null,
@@ -1194,7 +1195,9 @@ test("the /api/keys citizen key-surface schema rejects the contract breaks it ex
   rejects("an x one char short", (d) => { d.keys[0].x = "p6F1EDHEVAdhDWGIMzdfdp80QLUfZuEml7UCEtfuuX"; });
 
   // custody is the citizen's dated testimony; it is not a free string.
-  rejects("a key row with custody other than self", (d) => { d.keys[0].custody = "delegated"; });
+  rejects("a key row with a custody outside the vocabulary", (d) => { d.keys[0].custody = "delegated"; });
+  rejects("a key row with the retired custody value", (d) => { d.keys[0].custody = "self"; });
+  rejects("a key row losing custody_declaration", (d) => { delete d.keys[0].custody_declaration; });
 
   // The evidence block itself is required when present: losing asserted_at or
   // the four kinds silences the disclosure.
@@ -1359,11 +1362,11 @@ test("the /api/record citizen ledger schema rejects the contract breaks it exist
   // the same key row as /api/keys (public_key/thumbprint/custody/status), not a
   // bare key; ended_at is null while the key is live and an epoch ms once
   // revoked.
-  rejects("a key row with a short public_key", (d) => { d.keys = [{ public_key: "6xeNDp9JLxN6", thumbprint: "CtNUV_azz6xhOxEmnUDEmSSPHWj9sOmjhWMENLA4JcA", custody: "self", status: "active", bound_at: 1, ended_at: null }]; });
+  rejects("a key row with a short public_key", (d) => { d.keys = [{ public_key: "6xeNDp9JLxN6", thumbprint: "CtNUV_azz6xhOxEmnUDEmSSPHWj9sOmjhWMENLA4JcA", custody: "undeclared", status: "active", bound_at: 1, ended_at: null }]; });
   rejects("a key row with a third-party custody", (d) => { d.keys = [{ public_key: "6xeNDp9JLxN6hdPw8j0CHGNs0Z_hg2ysziTEBlBMrUI", thumbprint: "CtNUV_azz6xhOxEmnUDEmSSPHWj9sOmjhWMENLA4JcA", custody: "registry", status: "active", bound_at: 1, ended_at: null }]; });
-  rejects("a key row losing its bound_at", (d) => { d.keys = [{ public_key: "6xeNDp9JLxN6hdPw8j0CHGNs0Z_hg2ysziTEBlBMrUI", thumbprint: "CtNUV_azz6xhOxEmnUDEmSSPHWj9sOmjhWMENLA4JcA", custody: "self", status: "active", ended_at: null }]; });
-  assert.deepEqual(bend((d) => { d.keys = [{ public_key: "6xeNDp9JLxN6hdPw8j0CHGNs0Z_hg2ysziTEBlBMrUI", thumbprint: "CtNUV_azz6xhOxEmnUDEmSSPHWj9sOmjhWMENLA4JcA", custody: "self", status: "active", bound_at: 1787527771742, ended_at: null }]; }), [], "a live key reads ended_at as null");
-  assert.deepEqual(bend((d) => { d.keys = [{ public_key: "6xeNDp9JLxN6hdPw8j0CHGNs0Z_hg2ysziTEBlBMrUI", thumbprint: "CtNUV_azz6xhOxEmnUDEmSSPHWj9sOmjhWMENLA4JcA", custody: "self", status: "active", bound_at: 1787527771742, ended_at: 1788000000000 }]; }), [], "a revoked key reads ended_at as a time");
+  rejects("a key row losing its bound_at", (d) => { d.keys = [{ public_key: "6xeNDp9JLxN6hdPw8j0CHGNs0Z_hg2ysziTEBlBMrUI", thumbprint: "CtNUV_azz6xhOxEmnUDEmSSPHWj9sOmjhWMENLA4JcA", custody: "undeclared", status: "active", ended_at: null }]; });
+  assert.deepEqual(bend((d) => { d.keys = [{ public_key: "6xeNDp9JLxN6hdPw8j0CHGNs0Z_hg2ysziTEBlBMrUI", thumbprint: "CtNUV_azz6xhOxEmnUDEmSSPHWj9sOmjhWMENLA4JcA", custody: "undeclared", status: "active", bound_at: 1787527771742, ended_at: null }]; }), [], "a live key reads ended_at as null");
+  assert.deepEqual(bend((d) => { d.keys = [{ public_key: "6xeNDp9JLxN6hdPw8j0CHGNs0Z_hg2ysziTEBlBMrUI", thumbprint: "CtNUV_azz6xhOxEmnUDEmSSPHWj9sOmjhWMENLA4JcA", custody: "undeclared", status: "active", bound_at: 1787527771742, ended_at: 1788000000000 }]; }), [], "a revoked key reads ended_at as a time");
 
   // The seal ledger is the same signed/unsigned contract the /api/seals lane
   // pins, read off the record instead: a signed seal carries its signature and

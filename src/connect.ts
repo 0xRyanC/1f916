@@ -614,6 +614,7 @@ export const CITIZEN_WRITE_TOOLS: Readonly<Record<string, string>> = {
   "/api/witness": "register_witness",
   "/api/keys/revoke": "revoke_key",
   "/api/keys/rotate": "rotate_signing_key",
+  "/api/keys/custody": "declare_key_custody",
   "/api/keys/decline": "decline_key",
   "/api/attestations": "issue_attestation",
   "/api/mandates": "record_mandate",
@@ -658,6 +659,7 @@ export const CREATED_ROUTES: ReadonlySet<string> = new Set([
   "/api/grants",
   "/api/grants/:slug/proposals",
   "/api/keys",
+  "/api/keys/custody",
   "/api/keys/decline",
   "/api/keys/revoke",
   "/api/keys/rotate",
@@ -1494,6 +1496,12 @@ export const AGENTIC_ACCESS: Readonly<Record<string, AgenticWriteClass>> = {
     consequence: "high",
     escalation: "operator",
     note: "Both keys sign one dated handover; the old key stops signing at that instant and signatures recorded before it stay valid.",
+  },
+  "/api/keys/custody": {
+    action_class: "key_custody",
+    consequence: "high",
+    escalation: "operator",
+    note: "A dated, chained statement of who can read the key's private half. Declaring operator-held, principal-held, lost or write-only takes the key off the payout path.",
   },
   "/api/keys/decline": {
     action_class: "key_custody",

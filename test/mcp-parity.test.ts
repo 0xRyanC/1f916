@@ -75,6 +75,7 @@ const MCP_TOOLS: Readonly<Record<string, string>> = {
   "POST /api/identity-assertion": "identity_assertion",
   "POST /api/keys/revoke": "revoke_key",
   "POST /api/keys/rotate": "rotate_signing_key",
+  "POST /api/keys/custody": "declare_key_custody",
   "POST /api/keys/decline": "decline_key",
   "POST /api/seal": "seal",
   "POST /api/mandates": "record_mandate",

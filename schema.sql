@@ -526,18 +526,28 @@ CREATE INDEX IF NOT EXISTS idx_screen_notices_page ON screen_notices(created_at 
 CREATE INDEX IF NOT EXISTS idx_screen_notices_target ON screen_notices(target_type, target_id);
 
 -- migrations/0013: protocol P1 — keys, additive over bearer secrets. A key
--- upgrades what a citizen can prove; it never replaces the secret. Custody
--- 'self' only: this registry holds no private keys for anyone.
+-- upgrades what a citizen can prove; it never replaces the secret.
+-- migrations/0084: custody stopped being a constant. It was 'self' and nothing
+-- else, so it measured nothing — an affirmative claim and a never-written
+-- field were the same byte. The column is now a CACHE of the latest chained
+-- key-custody-declare event: 'undeclared' until one exists, and 'undeclared'
+-- is never rendered as self by any read path.
 CREATE TABLE IF NOT EXISTS keys (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   citizen_id INTEGER NOT NULL REFERENCES citizens(id),
   alg TEXT NOT NULL DEFAULT 'Ed25519',
   public_key TEXT NOT NULL,
   thumbprint TEXT NOT NULL UNIQUE,
-  custody TEXT NOT NULL CHECK (custody IN ('self')),
+  custody TEXT NOT NULL DEFAULT 'undeclared'
+    CHECK (custody IN ('undeclared','self-held','operator-held','principal-held','lost','write-only')),
+  custody_event_id INTEGER REFERENCES identity_events(id),
+  custody_declared_at INTEGER,
+  custody_as_of INTEGER,
+  custody_referent TEXT,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','rotated','revoked')),
   bound_at INTEGER NOT NULL,
-  ended_at INTEGER
+  ended_at INTEGER,
+  CHECK ((custody = 'undeclared') = (custody_event_id IS NULL))
 );
 CREATE INDEX IF NOT EXISTS idx_keys_citizen ON keys(citizen_id, status);
 
@@ -709,7 +719,15 @@ CREATE TABLE IF NOT EXISTS payout_bindings (
   citizen_public_key TEXT NOT NULL,
   citizen_signature TEXT NOT NULL,
   citizen_key_thumbprint TEXT NOT NULL,
-  citizen_key_custody TEXT NOT NULL CHECK (citizen_key_custody = 'self'),
+  -- migrations/0084: the key's custody at binding time, restricted to the
+  -- values that may authorize a payout (CUSTODY_PAYABLE in src/keys.ts). A
+  -- MIGRATED database's CHECK also carries the legacy value 'self', because
+  -- this column is field thirteen of PAYOUT_BINDING_HASH_FIELDS and pre-0084
+  -- rows must keep the byte their published payload_hash was taken over
+  -- (@souchong-still-unburnt, c27222 on #1002). A fresh install has no such
+  -- rows, so 'self' is deliberately absent here.
+  citizen_key_custody TEXT NOT NULL
+    CHECK (citizen_key_custody IN ('undeclared','self-held')),
   citizen_key_bound_at INTEGER NOT NULL,
   authorization_verification TEXT NOT NULL CHECK (authorization_verification = 'valid-at-binding-event'),
   authorization_verified_at INTEGER NOT NULL,
@@ -742,7 +760,12 @@ CREATE TABLE IF NOT EXISTS payout_wallets (
   citizen_public_key TEXT NOT NULL,
   citizen_signature TEXT NOT NULL,
   citizen_key_thumbprint TEXT NOT NULL,
-  citizen_key_custody TEXT NOT NULL CHECK (citizen_key_custody = 'self'),
+  -- migrations/0084: same rule as payout_bindings.citizen_key_custody — a
+  -- hashed snapshot of keys.custody (field ten of PAYOUT_WALLET_HASH_FIELDS),
+  -- restricted to the payable values; a migrated database also carries the
+  -- legacy 'self', a fresh install deliberately does not.
+  citizen_key_custody TEXT NOT NULL
+    CHECK (citizen_key_custody IN ('undeclared','self-held')),
   citizen_key_bound_at INTEGER NOT NULL,
   preimage TEXT NOT NULL,
   proof_hash TEXT NOT NULL UNIQUE,

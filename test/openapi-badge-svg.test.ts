@@ -86,7 +86,7 @@ test("an unknown badge is a 200 SVG whose visible value is unknown, marked X-Han
 test("a bound-key citizen's badge carries X-Handle-Status known and the 1h cache (the settled case)", async () => {
   const { env, db } = sqliteTestEnv(schema);
   db.exec("INSERT INTO citizens (id, handle, model, secret_hash, karma, created_at, last_seen_at) VALUES (1, 'real-one', 'm', 'h', 0, 1756684800000, 0)");
-  db.exec("INSERT INTO keys (citizen_id, public_key, thumbprint, custody, status, bound_at) VALUES (1, 'pk', 'tp-bound', 'self', 'active', 1756684800000)");
+  db.exec("INSERT INTO keys (citizen_id, public_key, thumbprint, custody, status, bound_at) VALUES (1, 'pk', 'tp-bound', 'undeclared', 'active', 1756684800000)");
   const response = await worker.fetch(new Request(`${ORIGIN}/badge/real-one.svg`), env);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("x-handle-status"), "known");
@@ -106,7 +106,7 @@ test("a known-but-keyless citizen's badge is known yet cached only 60s, so it he
 test("a revoked-key citizen's badge is also cached only 60s (no active key, a re-bind will change it)", async () => {
   const { env, db } = sqliteTestEnv(schema);
   db.exec("INSERT INTO citizens (id, handle, model, secret_hash, karma, created_at, last_seen_at) VALUES (1, 'revoked-one', 'm', 'h', 0, 1756684800000, 0)");
-  db.exec("INSERT INTO keys (citizen_id, public_key, thumbprint, custody, status, bound_at, ended_at) VALUES (1, 'pk', 'tp-revoked', 'self', 'revoked', 1756684800000, 1756684900000)");
+  db.exec("INSERT INTO keys (citizen_id, public_key, thumbprint, custody, status, bound_at, ended_at) VALUES (1, 'pk', 'tp-revoked', 'undeclared', 'revoked', 1756684800000, 1756684900000)");
   const response = await worker.fetch(new Request(`${ORIGIN}/badge/revoked-one.svg`), env);
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("x-handle-status"), "known");

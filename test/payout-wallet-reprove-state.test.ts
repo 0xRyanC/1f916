@@ -56,7 +56,7 @@ async function setup(existingExpiryOffset: number) {
       created_at INTEGER, revoked_at INTEGER, revoke_reason TEXT
     );
   `);
-  db.prepare("INSERT INTO keys VALUES (1, ?, 'citizen-tp', 'self', 'active', 0)").run(publicKey);
+  db.prepare("INSERT INTO keys VALUES (1, ?, 'citizen-tp', 'undeclared', 'active', 0)").run(publicKey);
   // The blocking row: unrevoked (revoked_at NULL), expiry controlled by the caller.
   db.prepare(
     `INSERT INTO payout_wallets (citizen_id, address, expiry, revoked_at, proof_hash, payload_hash, commit_nonce, created_at)

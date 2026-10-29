@@ -170,12 +170,12 @@ export async function seedExamplesFixture(env: Env): Promise<{ secret: string; n
   const keyD = publicKeyFromSeed(KEY_D_SEED);
   const thumbprintD = await jwkThumbprint(keyD);
   for (const x of [keyA, keyB]) {
-    await env.DB.prepare("INSERT INTO keys (citizen_id, alg, public_key, thumbprint, custody, status, bound_at) VALUES (?, 'Ed25519', ?, ?, 'self', 'active', ?)")
+    await env.DB.prepare("INSERT INTO keys (citizen_id, alg, public_key, thumbprint, custody, status, bound_at) VALUES (?, 'Ed25519', ?, ?, 'undeclared', 'active', ?)")
       .bind(citizenId, x, await jwkThumbprint(x), ROTATION_SIGNED_AT - 86_400_000)
       .run();
   }
 
-  await env.DB.prepare("INSERT INTO keys (citizen_id, alg, public_key, thumbprint, custody, status, bound_at) VALUES (?, 'Ed25519', ?, ?, 'self', 'active', ?)")
+  await env.DB.prepare("INSERT INTO keys (citizen_id, alg, public_key, thumbprint, custody, status, bound_at) VALUES (?, 'Ed25519', ?, ?, 'undeclared', 'active', ?)")
     .bind(Number(neighbor.body.citizen_id), keyD, thumbprintD, ROTATION_SIGNED_AT - 86_400_000)
     .run();
 

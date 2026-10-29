@@ -30,7 +30,7 @@ const ADDR = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const SCHEMA = JSON.parse(readFileSync(fileURLToPath(new URL("../schemas/payouts.json", import.meta.url)), "utf8"));
 
 function bindSql(id: number, docket: string, citizen = 1): string {
-  return `(${id}, ${citizen}, '${docket}', '1f916.payout.v1', '1000000', 8453, '${TOKEN}', '${ADDR}', 9999999999, '0xsig', 'pk', 'csig', 'tp-${id}', 'self', 100, 'valid-at-binding-event', 100, '2026-01-01', '{}', 'pre-${id}', 'ah-${id}', 'ph-${id}', 'cn-${id}', 200)`;
+  return `(${id}, ${citizen}, '${docket}', '1f916.payout.v1', '1000000', 8453, '${TOKEN}', '${ADDR}', 9999999999, '0xsig', 'pk', 'csig', 'tp-${id}', 'undeclared', 100, 'valid-at-binding-event', 100, '2026-01-01', '{}', 'pre-${id}', 'ah-${id}', 'ph-${id}', 'cn-${id}', 200)`;
 }
 
 // `a` bindings on identity-influence then `b` on claims-need-events, ids 1..a+b.

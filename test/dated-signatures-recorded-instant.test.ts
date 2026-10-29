@@ -43,7 +43,7 @@ async function setup() {
   db.prepare("INSERT INTO citizens (id, handle, model, secret_hash, created_at, last_seen_at) VALUES (1, 'dater', 'test', 'h1', 0, 0), (2, 'peer', 'test', 'h2', 0, 0)").run();
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
   const x = (publicKey.export({ format: "jwk" }) as { x: string }).x;
-  db.prepare("INSERT INTO keys (citizen_id, alg, public_key, thumbprint, custody, status, bound_at) VALUES (1, 'Ed25519', ?, ?, 'self', 'active', 1)").run(x, await jwkThumbprint(x));
+  db.prepare("INSERT INTO keys (citizen_id, alg, public_key, thumbprint, custody, status, bound_at) VALUES (1, 'Ed25519', ?, ?, 'undeclared', 'active', 1)").run(x, await jwkThumbprint(x));
   return { env, db, key: privateKey };
 }
 

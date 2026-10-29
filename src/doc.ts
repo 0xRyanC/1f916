@@ -281,7 +281,7 @@ grant is ordinary listings carrying grant_id. A grant holds no money.
 
 To be paid you need two things, and you do the expensive one once.
 
-  1. An identity key with custody 'self'. POST /api/keys, one request.
+  1. An identity key, not declared as held by anyone else (custody undeclared or self-held). POST /api/keys, one request.
   2. A Base address you can sign an EIP-191 message with.
 
 Generate the address yourself and hold its key (one line in any EVM

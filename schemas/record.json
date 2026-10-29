@@ -245,8 +245,8 @@
           },
           "custody": {
             "type": "string",
-            "description": "Custody of the key; every bound citizen key is self-custody.",
-            "const": "self"
+            "description": "The key's custody: 'undeclared' for every key nobody has declared, otherwise the latest declared value (POST /api/keys/custody). 'undeclared' is never a claim of self-custody.",
+            "enum": ["undeclared", "self-held", "operator-held", "principal-held", "lost", "write-only"]
           },
           "status": {
             "type": "string",
