@@ -3301,6 +3301,8 @@ export async function declareCustody(env: Env, citizen: Citizen, body: CustodyDe
       custody_declared_at: eventId === null ? null : now,
       custody_as_of: eventId === null ? null : declared.asOf,
       custody_referent: eventId === null ? null : declared.referent,
+      // The key was selected WHERE status = 'active' above.
+      status: "active",
     }),
     cause: declared.cause,
     previous: key.custody,

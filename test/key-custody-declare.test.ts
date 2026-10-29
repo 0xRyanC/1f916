@@ -258,7 +258,7 @@ test("custodyObject refuses to render an unknown stored word as anything but sil
   // Defence in depth against the failure this row is about. If a value ever
   // reaches the read surface that the vocabulary does not contain, the one
   // thing it must not become is 'self'.
-  const o = custodyObject({ custody: "household", custody_event_id: 7, custody_declared_at: 1, custody_as_of: null, custody_referent: null });
+  const o = custodyObject({ custody: "household", custody_event_id: 7, custody_declared_at: 1, custody_as_of: null, custody_referent: null, status: "active" });
   assert.equal(o.value, CUSTODY_UNDECLARED);
   assert.equal(o.declared, false);
 });
@@ -315,4 +315,46 @@ test("a stale cache is still reported, and the three fields agree with each othe
   assert.equal(served.custody_chain_disagrees, true);
   assert.equal(served.custody_chain_state, "disagrees");
   assert.ok(served.custody_chain_latest, "the reader is told which event the cache is missing");
+});
+
+// ---------------------------------------------------------------------------
+// AN ENDED KEY ADVERTISED AS PAYABLE (added 2026-10-29)
+//
+// authorizes_payouts was computed from custody alone, so every revoked and
+// rotated key on GET /api/keys/:handle served `true` — 15 of 15 ended keys on
+// the live registry at 12:59Z on 2026-10-29 (Kerf's only key among them),
+// while the payout gate in src/payouts.ts refuses any key that is not
+// status = 'active'. The field answered "is this custody value payable", not
+// the question its name asks.
+//
+// KILLING MUTATION: drop the status leg from custodyObject's
+// authorizes_payouts. Both tests below go red.
+test("revoked_key_must_not_advertise_payout_authorization", async () => {
+  const { env, db } = makeEnv();
+  db.prepare("UPDATE keys SET status = 'revoked', ended_at = 2000 WHERE id = 1").run();
+  db.prepare("INSERT INTO keys (id, citizen_id, alg, public_key, thumbprint, custody, status, bound_at) VALUES (2, 1, 'Ed25519', 'pk2', 'tp2', 'undeclared', 'active', 2001)").run();
+  const served = (await keysOf(env, "bound")) as Record<string, unknown>;
+  const byTp = Object.fromEntries((served.keys as Record<string, unknown>[]).map((k) => [k.thumbprint, k]));
+  const decl = (k: unknown) => (k as Record<string, Record<string, unknown>>).custody_declaration;
+  assert.equal(decl(byTp.tp).authorizes_payouts, false, "a revoked key cannot authorize a payout, so it must not say it can");
+  assert.equal(decl(byTp.tp2).authorizes_payouts, true, "the active key beside it, same custody, still can");
+});
+
+test("custodyObject's authorizes_payouts needs an active key, not just a payable custody", () => {
+  const row = { custody: CUSTODY_UNDECLARED, custody_event_id: null, custody_declared_at: null, custody_as_of: null, custody_referent: null };
+  assert.equal(custodyObject({ ...row, status: "active" }).authorizes_payouts, true);
+  for (const status of ["revoked", "rotated", "anything-else"])
+    assert.equal(custodyObject({ ...row, status }).authorizes_payouts, false, status);
+});
+
+// KILLING MUTATION: pass any status but "active" into custodyFields in
+// declareCustody's response. Declaring is only possible on an active key, so
+// the response's answer must match the read surface's for the same key.
+test("declaring self-held on the active key answers authorizes_payouts the way the read surface does", async () => {
+  const { env } = makeEnv();
+  const r = (await declareCustody(env, CITIZEN, { value: "self-held" })) as Record<string, unknown>;
+  assert.equal((r.custody_declaration as Record<string, unknown>).authorizes_payouts, true);
+  const served = (await keysOf(env, "bound")) as Record<string, unknown>;
+  const key = (served.keys as Record<string, unknown>[])[0];
+  assert.equal((key.custody_declaration as Record<string, unknown>).authorizes_payouts, true);
 });
