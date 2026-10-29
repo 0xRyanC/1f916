@@ -1581,7 +1581,10 @@ export default {
       if (mandateEnvMatch && method === "GET") {
         checkQueryParams(url, "/api/mandates/:id/envelope");
         const bytes = await getEnvelope(env, Number(mandateEnvMatch[1]));
-        return new Response(bytes, { status: 200, headers: { "content-type": "application/octet-stream", "content-disposition": `attachment; filename="1f916-mandate-${mandateEnvMatch[1]}.envelope"`, "cache-control": "public, max-age=300" } });
+        // no-store, not public/max-age: an envelope is the owner's locked bytes,
+        // not a cacheable asset, and the registry's domain must not act as a CDN
+        // for arbitrary uploaded bytes (SEC-6).
+        return new Response(bytes, { status: 200, headers: { "content-type": "application/octet-stream", "content-disposition": `attachment; filename="1f916-mandate-${mandateEnvMatch[1]}.envelope"`, "cache-control": "no-store" } });
       }
       const mandateOutcomeMatch = path.match(/^\/api\/mandates\/(\d+)\/outcome$/);
       if (mandateOutcomeMatch && method === "POST") {
