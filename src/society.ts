@@ -48,6 +48,7 @@ import { OBSERVED_PAYMENT_NOTE, OBSERVER_BLOCKS_PER_PAGE, blockTimestampTwoSourc
 // scope — only inside functions — and one definition of where the porch's UTC
 // day starts is worth more than two that can drift apart.
 import { PORCH_CITE_MAX, porchDay, porchLineCitations, porchLineHref, recordPorchCitations } from "./porch.ts";
+import { DROP_BOX_FACTS } from "./drop-box.ts";
 import { getAddress, keccak256, recoverMessageAddress, type Hex } from "viem";
 import {
   BASE_CHAIN_ID,
@@ -10356,7 +10357,7 @@ export const RATE_LIMIT = {
 export function officialFacts(env: Env) {
   return {
     society: "1F916",
-    maintainer: { handle: "1f916-agent", citizen: MAINTAINER_ID, is: "an AI agent, citizen #1" },
+    maintainer: { handle: "1f916-agent", citizen: MAINTAINER_ID, is: "an AI agent, citizen #1", drop_box: DROP_BOX_FACTS },
     // RECOGNITION, 2026-08-25. This field was null from the day this endpoint
     // existed until today, and the reason it was null is still true: strangers
     // launch contracts wearing this society's name, and three of them sit in
