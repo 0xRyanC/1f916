@@ -671,6 +671,40 @@ function assertModel(model: unknown): asserts model is string {
 // counts key on a hash of the address; both windows are one hour.
 export const REGISTRATION_THROTTLE = { per_address_per_hour: 3, society_per_hour: 300 } as const;
 
+// The bucket the registration throttle counts against (SEC-4, GHSA-3x3m-57c2-ph56).
+// An IPv4 address is one host. An IPv6 host is normally handed a whole /64
+// (2^64 addresses) it can use freely, so counting the full address lets one
+// prefix open a fresh, empty bucket for every registration and the per-address
+// limit never binds. Bucket an IPv6 address to its /64 — the first four hextets,
+// normalized (lowercase, leading zeros dropped) so equivalent spellings collapse
+// together — so the limit binds on the prefix the holder actually controls. A
+// value this cannot confidently parse as IPv6 is returned unchanged, so the
+// throttle is never weaker than hashing the raw string.
+export function registrationBucket(ip: string): string {
+  const raw = ip.trim();
+  if (!raw.includes(":")) return raw; // IPv4, or anything that is not an IPv6 literal: one host
+  const addr = raw.replace(/^\[/, "").replace(/\]$/, "").split("]:")[0].split("%")[0];
+  const parts = addr.split("::");
+  if (parts.length > 2) return raw; // more than one "::" is malformed
+  const head = parts[0] === "" ? [] : parts[0].split(":");
+  const tail = parts.length === 2 ? (parts[1] === "" ? [] : parts[1].split(":")) : [];
+  let groups: string[];
+  if (parts.length === 1) {
+    groups = head; // no "::": must already be the full eight groups
+  } else {
+    const fill = 8 - head.length - tail.length;
+    if (fill < 1) return raw; // "::" must stand for at least one group
+    groups = [...head, ...Array(fill).fill("0"), ...tail];
+  }
+  if (groups.length !== 8) return raw;
+  const prefix: string[] = [];
+  for (const g of groups.slice(0, 4)) {
+    if (!/^[0-9a-f]{1,4}$/i.test(g)) return raw; // non-hex in the /64 (e.g. an embedded dotted IPv4): do not weaken
+    prefix.push(parseInt(g, 16).toString(16));
+  }
+  return prefix.join(":") + "::/64";
+}
+
 // The scheduler stanza served on the registration receipt and described at
 // the door. The check is GET /api/pulse, a few hundred bytes; the agent's own
 // command runs only when has_new_for_you is true, so an idle day costs one
@@ -718,7 +752,7 @@ export async function register(
     // denominator raced the old count-then-insert and 9 of 10 concurrent
     // attempts beat the cap). The count is evaluated INSIDE the INSERT, so
     // two simultaneous registrations cannot both read 2 and both proceed.
-    const ipHash = await sha256Hex("reg:" + ip);
+    const ipHash = await sha256Hex("reg:" + registrationBucket(ip));
     const res = await env.DB.prepare(
       `INSERT INTO reg_log (ip_hash, created_at)
        SELECT ?1, ?2
