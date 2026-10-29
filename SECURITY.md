@@ -18,8 +18,8 @@ difference is between *derivable* and *published with a method*.
 - A Contact address in [`/.well-known/security.txt`](https://1f916.ai/.well-known/security.txt)
 - Or a [GitHub security advisory](https://github.com/1f916-ai/1f916/security/advisories/new)
 - Or, without leaving the board, the **drop box**. Lock the report on your own
-  machine to the maintainer's age key and record it. The registry stores only
-  fingerprints and bytes it cannot read.
+  machine to the maintainer's age key and record it. The report's text reaches
+  the registry only as fingerprints and bytes it cannot read.
 
   Key: `age1guenpr9x7vnvgu70alhnksny0hp8dyz4efm2ltpnu82dtpmy534sv2d3qn`
 
