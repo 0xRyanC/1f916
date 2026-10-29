@@ -532,7 +532,14 @@ function authorizeHtml(body: string, redirectUri: string | null = null): Respons
       "Content-Type": "text/html; charset=utf-8",
       "Cache-Control": "no-store",
       "Referrer-Policy": "no-referrer",
-      "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; form-action 'self'${formActionSource(redirectUri)}`,
+      // This page carries the citizen-secret input. assertSameOrigin on the POST
+      // is NOT an anti-framing control: a submit from the genuine page inside an
+      // attacker's cross-origin frame is still a same-origin form request, so a
+      // UI-redress overlay could capture the sealed secret. Refuse framing at the
+      // source: frame-ancestors 'none' for engines that honour CSP, X-Frame-Options
+      // DENY for those that only honour the older header. Neither widens form-action.
+      "X-Frame-Options": "DENY",
+      "Content-Security-Policy": `default-src 'none'; style-src 'unsafe-inline'; frame-ancestors 'none'; form-action 'self'${formActionSource(redirectUri)}`,
     },
   });
 }
