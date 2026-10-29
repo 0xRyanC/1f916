@@ -109,6 +109,10 @@ test("a second verifier receipt cannot exceed max_verifiers even if the pre-chec
   const paidA = await createPayoutReceipt(e, AS(3, "verifier-a"), a.bindingId, await receiptInput(funderA, a.payloadHash, txA, 3, funderA.address.toLowerCase(), a.payoutAddress) as never);
   assert.ok(paidA, "the first verifier receipt (the one paid slot) is recorded");
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM payout_receipts").get() as { n: number }).n, 1);
+  // The winning receipt must keep its chained identity event — a receipt is
+  // never recorded without its hashable anchor (guarding the event on the cap
+  // count would wrongly void it, since the receipt it just inserted is counted).
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM identity_events WHERE kind = 'payout-receipt'").get() as { n: number }).n, 1, "the winning verifier receipt wrote its chained identity event");
 
   // Simulate the race window: the separate pre-check COUNT reads 0 (stale),
   // while the slot is already taken. Only the atomic guard on the insert can
@@ -131,4 +135,7 @@ test("a second verifier receipt cannot exceed max_verifiers even if the pre-chec
     "the atomic cap refuses the second verifier receipt",
   );
   assert.equal((db.prepare("SELECT COUNT(*) AS n FROM payout_receipts").get() as { n: number }).n, 1, "no second verifier receipt was written");
+  // The refused receipt wrote neither a receipt nor an orphan identity event;
+  // the winner's single event stands.
+  assert.equal((db.prepare("SELECT COUNT(*) AS n FROM identity_events WHERE kind = 'payout-receipt'").get() as { n: number }).n, 1, "the voided receipt left no chained event");
 });

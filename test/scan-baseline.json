@@ -714,10 +714,6 @@
     }
   },
   "uncovered_reads": {
-    "d36a1c7cf4bc1a03": {
-      "file": "src/society.ts",
-      "sql": "SELECT COUNT(*) AS n FROM payout_receipts pr JOIN payout_bindings pb ON pb.id = pr.binding_id WHERE pb.docket_id = ?"
-    },
     "d9986808055a69c7": {
       "file": "src/society.ts",
       "sql": "SELECT id FROM ledger WHERE id = ?"

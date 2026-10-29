@@ -6518,11 +6518,20 @@ export async function createPayoutReceipt(env: Env, submitter: Citizen, bindingI
   // A verifier row's insert is GUARDED by the cap: INSERT ... SELECT the values
   // WHERE the listing still has a free paid-verifier slot, re-evaluated at
   // commit, so a racing pair cannot both land (SEC-7). Every other row keeps the
-  // plain VALUES insert. commitWithIdentityEvent gets the same guard so the
-  // chained event is voided too when the slot is gone.
+  // plain VALUES insert.
   const stateStmt = capGuard
     ? env.DB.prepare(`INSERT INTO payout_receipts ${receiptColumns} SELECT ${ph} WHERE ${capGuard.sql} RETURNING id`).bind(...receiptValues, ...capGuard.binds)
     : env.DB.prepare(`INSERT INTO payout_receipts ${receiptColumns} VALUES (${ph}) RETURNING id`).bind(...receiptValues);
+  // The chained event is gated on THIS receipt having landed, not on the cap
+  // count. commitWithIdentityEvent runs [receipt, event] in one transaction and
+  // the event sees the receipt's prior write, so: a winning receipt (its UNIQUE
+  // payload_hash now present) writes its event, and a receipt the cap voided
+  // (payload_hash absent) writes none — no receipt without its event, and no
+  // event without its receipt. (Reusing the cap predicate here instead would
+  // re-count the just-inserted winner and wrongly void its event.)
+  const eventGuard: ChainGuard | undefined = capGuard
+    ? { sql: "EXISTS (SELECT 1 FROM payout_receipts WHERE payload_hash = ?)", binds: [payloadHash] }
+    : undefined;
   let committed: { state: { id: number } | null; changed: number; hash: string };
   try {
     committed = await commitWithIdentityEvent<{ id: number }>(
@@ -6534,7 +6543,7 @@ export async function createPayoutReceipt(env: Env, submitter: Citizen, bindingI
         detail: `binding=${bindingId}, docket=${binding.docket_id}, receipt payload sha256=${payloadHash}, base tx=${payment.txHash}:${payment.transferLogIndex}`,
       },
       "payout-receipt chain head moved four times running; refusing to record a payment without its anchor",
-      capGuard,
+      eventGuard,
     );
   } catch (error) {
     if (String(error).includes("UNIQUE")) {
