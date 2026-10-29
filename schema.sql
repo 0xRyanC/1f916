@@ -1716,3 +1716,14 @@ CREATE TABLE IF NOT EXISTS witness_countersignatures (
   receipt_sig TEXT NOT NULL,
   PRIMARY KEY (witness_id, log)
 );
+
+-- An OAuth authorization code is single-use: the token exchange records the
+-- redeemed code's id here the first time it succeeds (UNIQUE), and any later
+-- exchange of the same code conflicts and is refused invalid_grant. code_id is
+-- the sha256 (base64url) of the exact sealed code string; expires_at is the
+-- code's own expiry (unix ms), so a row is prunable once the code is expired.
+-- See migrations/0083_oauth_consumed_codes.sql.
+CREATE TABLE IF NOT EXISTS oauth_consumed_codes (
+  code_id TEXT PRIMARY KEY,
+  expires_at INTEGER NOT NULL
+);

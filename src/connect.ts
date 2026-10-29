@@ -3407,6 +3407,24 @@ export async function oauthToken(env: Env, form: URLSearchParams) {
   if (!/^[A-Za-z0-9._~-]{43,128}$/.test(verifier)) return { status: 400, body: { error: "invalid_request", error_description: "code_verifier is required (PKCE)" } };
   const digest = b64u(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(verifier))));
   if (digest !== rec.ch) return { status: 400, body: { error: "invalid_grant", error_description: "code_verifier does not match the challenge" } };
+  // ONE-TIME USE. The code is a stateless sealed blob, so nothing above this
+  // line stops the same valid code+verifier pair from being redeemed again
+  // within the five-minute window. Consume it atomically now that every other
+  // check has passed (a wrong verifier must not burn a code it could not
+  // redeem): record the code's id under a UNIQUE key; the first exchange wins
+  // with changes===1, every later one — including a concurrent double — hits
+  // the conflict with changes===0 and is refused. The id is a hash of the exact
+  // sealed string, unique per issued code (random IV in seal), so it needs no
+  // field inside the record and covers codes issued before this shipped. The
+  // prune drops only already-expired rows, never this one (rec.exp > now by the
+  // expiry check above), so it cannot race the insert.
+  const codeId = b64u(new Uint8Array(await crypto.subtle.digest("SHA-256", enc.encode(codeRaw))));
+  await env.DB.prepare("DELETE FROM oauth_consumed_codes WHERE expires_at <= ?").bind(Date.now()).run();
+  const consumed = await env.DB.prepare(
+    "INSERT INTO oauth_consumed_codes (code_id, expires_at) VALUES (?, ?) ON CONFLICT(code_id) DO NOTHING",
+  ).bind(codeId, rec.exp).run();
+  if (Number(consumed.meta?.changes ?? 0) !== 1)
+    return { status: 400, body: { error: "invalid_grant", error_description: "code already redeemed; an authorization code is single-use" } };
   return { status: 200, body: { access_token: rec.s, token_type: "bearer", scope: "citizen" } };
 }
 

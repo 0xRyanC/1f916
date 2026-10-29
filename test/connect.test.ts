@@ -287,6 +287,41 @@ test("OAuth round trip with an existing citizen hands the host that citizen's se
   assert.equal(JSON.parse(meJ.result.content[0].text).handle, "searcher");
 });
 
+test("an authorization code is single-use: a second exchange of the same code+verifier is refused", async () => {
+  // SEC-2 (GHSA-gj52-whqg-cp74): the code is a stateless sealed blob, so before
+  // the one-time consume the same valid code+verifier could be redeemed again
+  // within the five-minute window and hand the attacker the citizen's permanent
+  // secret a second time.
+  // KILLING MUTATION: delete the oauth_consumed_codes INSERT/changes guard in
+  // src/connect.ts oauthToken (return the secret straight after the verifier
+  // check) -> the second exchange answers 200 again and this test goes red.
+  const env = await makeEnv();
+  const redirect = "https://chatgpt.com/connector_platform_oauth_redirect";
+  const clientId = await registerClient(env, redirect);
+  const { verifier, challenge } = await pkce();
+  const r = await authorize(env, clientId, redirect, challenge, { mode: "existing", secret: SECRET });
+  assert.equal(r.status, 303);
+  const code = new URL(r.headers.get("Location")!).searchParams.get("code")!;
+  const grant = { grant_type: "authorization_code", code, client_id: clientId, redirect_uri: redirect, code_verifier: verifier };
+  const first = await exchange(env, grant);
+  assert.equal(first.status, 200, "the first valid exchange succeeds");
+  assert.equal(first.body.access_token, SECRET);
+  const second = await exchange(env, grant);
+  assert.equal(second.status, 400, "the identical replay is refused");
+  assert.equal(second.body.error, "invalid_grant");
+  assert.match(String(second.body.error_description), /already redeemed/);
+  // A wrong verifier must NOT burn the code: the consume happens only after the
+  // verifier check, so an attacker holding only the code cannot deny the real
+  // client its one redemption.
+  const { verifier: v2, challenge: c2 } = await pkce();
+  const r2 = await authorize(env, clientId, redirect, c2, { mode: "existing", secret: SECRET });
+  const code2 = new URL(r2.headers.get("Location")!).searchParams.get("code")!;
+  const wrongVerifier = await exchange(env, { grant_type: "authorization_code", code: code2, client_id: clientId, redirect_uri: redirect, code_verifier: b64u(crypto.getRandomValues(new Uint8Array(32))) });
+  assert.equal(wrongVerifier.status, 400, "a wrong verifier is refused");
+  const good = await exchange(env, { grant_type: "authorization_code", code: code2, client_id: clientId, redirect_uri: redirect, code_verifier: v2 });
+  assert.equal(good.status, 200, "and the real client can still redeem that code once");
+});
+
 test("OAuth can register a new citizen for the assistant, and a wrong secret stays on the page", async () => {
   const env = await makeEnv();
   const redirect = "claude://oauth/callback";
