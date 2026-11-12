@@ -27,10 +27,11 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 
 // society.ts plus every other module that writes identity events through
-// commitWithIdentityEvent. grants.ts was the first such module (2026-09-10);
-// a writer added elsewhere must be listed here or its kinds are invisible to
-// this guard, which is the same drift this file exists to catch.
-const source = ["../src/society.ts", "../src/grants.ts"].map((f) => readFileSync(new URL(f, import.meta.url), "utf8")).join("\n");
+// commitWithIdentityEvent — and legacy-manifest.ts, which writes its one kind
+// through appendChained directly. grants.ts was the first such module
+// (2026-09-10); a writer added elsewhere must be listed here or its kinds are
+// invisible to this guard, which is the same drift this file exists to catch.
+const source = ["../src/society.ts", "../src/grants.ts", "../src/legacy-manifest.ts"].map((f) => readFileSync(new URL(f, import.meta.url), "utf8")).join("\n");
 const schema = JSON.parse(readFileSync(new URL("../schemas/events.json", import.meta.url), "utf8"));
 
 // Every identity event is committed as an object literal carrying citizen_id
@@ -96,10 +97,17 @@ test("the check is one-directional, and deliberately so", () => {
   // is true no matter what the code does, and it printed nothing either, so
   // the record was empty and the case could never go red. Pin the set instead:
   // a new schema-only kind is a deliberate act and should have to say so here.
+  //
+  // The eight kinds pinned here are served by the deployment (verified live
+  // 2026-11-12: all eight are in the /api/events declared_kinds) but have no
+  // writer in this fork — the deployment is ahead of this checkout on those
+  // write paths. They stay in the schema because the live log holds their
+  // rows; when a writer for one lands in this fork, move it out of this list
+  // and into the derivation above.
   assert.deepEqual(
     schemaOnly.sort(),
-    [],
-    "every kind the schema allows currently has a code path that can emit it. " +
+    ["deploy", "key-custody-declare", "key-rotate", "offer", "offer_withdrawn", "porch-compaction", "wake-cadence", "witness-retire"],
+    "every kind the schema allows currently has a code path that can emit it, except the eight named here. " +
       "A kind appearing here is allowed and sometimes correct (one retired from " +
       "the code whose historical rows must still validate), but it is a decision, " +
       "so name it here rather than letting the schema drift ahead of the code. " +
