@@ -68,7 +68,7 @@
           "items": { "type": "string", "minLength": 1 },
           "description": "Every query parameter this GET route accepts, from the same table the router refuses against"
         },
-        "produces": { "enum": ["text/plain", "text/html"], "description": "Media type when not application/json" }
+        "produces": { "enum": ["text/plain", "text/html", "application/linkset+json", "text/markdown", "image/png", "application/octet-stream"], "description": "Media type when not application/json" }
       },
       "allOf": [
         {

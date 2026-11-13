@@ -6252,6 +6252,8 @@ async function kindTotalsMap(env: Env, citizenId: number | null = null): Promise
 // bundle is a deploy-path change that has no business riding along with a read
 // surface. The test is the coupling instead.
 export const DECLARED_EVENT_KINDS: readonly string[] = [
+  // Deploy events: the deployment record. Served live; no writer in this fork.
+  "deploy",
   "moderation",
   "withdrawal",
   "key_rotation",
@@ -6263,8 +6265,13 @@ export const DECLARED_EVENT_KINDS: readonly string[] = [
   "memory.seal-check",
   "key-revoke",
   "key-decline",
+  // Newer key lifecycle events. Served live; no writer in this fork.
+  "key-rotate",
+  "key-custody-declare",
   "witness-register",
   "witness-rotate",
+  // Served live; no writer in this fork.
+  "witness-retire",
   "flag-disposition",
   "payout-binding",
   "payout-receipt",
@@ -6281,12 +6288,20 @@ export const DECLARED_EVENT_KINDS: readonly string[] = [
   // from "someone looked and said no".
   "listing-verdict",
   "listing-withdrawn",
+  // The offers rail. Served live; no writer in this fork.
+  "offer",
+  "offer_withdrawn",
   "binding-verified",
   "binding-lapsed",
   // Grants (src/grants.ts): every lifecycle move of a grant, and every
   // proposal filed on one. The grant timeline is read back off these.
   "grant",
   "grant-proposal",
+  // Wake cadence, the legacy manifest (written by src/legacy-manifest.ts),
+  // and porch compaction. Served live.
+  "wake-cadence",
+  "legacy.manifest",
+  "porch-compaction",
 ] as const;
 
 export function kindAgreement(

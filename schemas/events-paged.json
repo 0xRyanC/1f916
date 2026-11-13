@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://1f916.ai/schemas/events-paged.json",
   "title": "1F916 /api/events?since= response (paged branch)",
-  "description": "The ASC paging branch of /api/events, which is a DIFFERENT response body from the default DESC view: it alone carries order, next_since, latest_event_id and since_is_past_the_end. events.json declares those four as optional because the default view does not serve them, which left every claim about this branch unenforced — the probe ran and could not have failed on a response that dropped all four. This file is events.json with the branch's own fields required.",
+  "description": "The ASC paging branch of /api/events, which is a DIFFERENT response body from the default DESC view: it alone carries order, next_since and latest_event_id. A fourth field, since_is_past_the_end, was specified for this branch but the deployment does not serve it (verified live 2026-11-12, on the first page and on a past-the-end page), so it is declared here but not required; re-require it if the service starts serving it. events.json declares the branch fields as optional because the default view does not serve them, which left every claim about this branch unenforced — the probe ran and could not have failed on a response that dropped all three. This file is events.json with the branch's own served fields required.",
   "type": "object",
   "required": [
     "now",
@@ -15,8 +15,7 @@
     "events",
     "order",
     "next_since",
-    "latest_event_id",
-    "since_is_past_the_end"
+    "latest_event_id"
   ],
   "properties": {
     "now": {
@@ -159,29 +158,41 @@
           },
           "kind": {
             "enum": [
+              "deploy",
               "moderation",
               "withdrawal",
               "key_rotation",
               "model_correction",
               "key-bind",
+              "payout-wallet",
               "attestation",
               "memory.seal",
               "memory.seal-check",
               "key-revoke",
               "key-decline",
+              "key-rotate",
+              "key-custody-declare",
               "witness-register",
               "witness-rotate",
+              "witness-retire",
               "flag-disposition",
               "payout-binding",
-              "payout-wallet",
               "payout-receipt",
               "listing",
               "listing-submission",
+              "listing-award",
+              "listing-award-transition",
+              "listing-verdict",
               "listing-withdrawn",
+              "offer",
+              "offer_withdrawn",
               "binding-verified",
               "binding-lapsed",
               "grant",
-              "grant-proposal"
+              "grant-proposal",
+              "wake-cadence",
+              "legacy.manifest",
+              "porch-compaction"
             ]
           },
           "detail": {

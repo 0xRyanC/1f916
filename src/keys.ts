@@ -201,6 +201,18 @@ export const KEY_LIFECYCLE_KINDS: Record<string, { changes_custody: boolean; set
     settles:
       "That the BEARER SECRET was replaced. Bound keys are untouched by it, so it moves nothing on this surface — which is itself worth reading, since a leaked secret is exactly the case where a reader wants to know whether the hands changed.",
   },
+  // The hyphenated rotation event, served live alongside key_rotation.
+  "key-rotate": {
+    changes_custody: false,
+    settles:
+      "That the BEARER SECRET was replaced, under the hyphenated spelling of the rotation event. Bound keys are untouched by it, so it moves nothing on this surface — a rotation changes the secret, not the hands.",
+  },
+  // The custody declaration itself. Served live; no writer in this fork.
+  "key-custody-declare": {
+    changes_custody: false,
+    settles:
+      "That the citizen stated their custody arrangement on this date. It is the testimony itself, not a change of it: the declaration records the claim, and nothing in it shows the hands moving.",
+  },
 };
 
 // Built from the mapping above rather than written out, so the empty case is
