@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1f916.ai/schemas/payout-wallets.json",
+  "title": "1F916 /api/payout-wallets response",
+  "description": "Auth-gated inventory of the caller's standing payout-wallet proofs (GET /api/payout-wallets via listPayoutWallets). A wallet proof is an address the citizen proved once; it authorizes no payment by itself — per-listing bindings still name the exact amount. Always-present on 200: handle, wallets (array; empty is the legitimate empty arm), note, plus the router's json() clock (now / now_utc). Each wallet row carries the SELECT columns plus derived live (boolean) and state (live|expired|revoked). Presence/stringness of note is pinned; wording is not. Auth-gated like /api/me — the unauthenticated live lane cannot probe this endpoint. Soft-power / cloudymcclouder. Cousin of Cloudy #308 (/api/payout-wallets/preimage) on the LIST arm only — does not touch preimage, create, or revoke.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["now", "now_utc", "handle", "wallets", "note"],
+  "properties": {
+    "now": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Server time, ms epoch (router json() clock)."
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Server time, ISO-8601 UTC (router json() clock)."
+    },
+    "handle": {
+      "type": "string",
+      "minLength": 1,
+      "description": "The authenticated citizen's handle."
+    },
+    "wallets": {
+      "type": "array",
+      "description": "Standing proofs for this citizen, newest id first (ORDER BY id DESC). Empty array when none — key is always present.",
+      "items": { "$ref": "#/$defs/walletRow" }
+    },
+    "note": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Server-authored framing prose. Presence/stringness pinned; wording is not."
+    }
+  },
+  "$defs": {
+    "walletRow": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "chain_id",
+        "address",
+        "expiry",
+        "proof_hash",
+        "payload_hash",
+        "created_at",
+        "revoked_at",
+        "revoke_reason",
+        "live",
+        "state"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "payout_wallets row id."
+        },
+        "chain_id": {
+          "type": "integer",
+          "const": 8453,
+          "description": "Base mainnet only (CHECK chain_id = 8453)."
+        },
+        "address": {
+          "type": "string",
+          "pattern": "^0x[0-9a-f]{40}$",
+          "description": "Lowercase 20-byte hex address the citizen proved."
+        },
+        "expiry": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Unix-seconds expiry of the standing proof."
+        },
+        "proof_hash": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Hash of the wallet proof preimage/signature bundle."
+        },
+        "payload_hash": {
+          "type": "string",
+          "minLength": 1,
+          "description": "Committed payload hash for the proof row."
+        },
+        "created_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "ms-epoch when the proof was recorded."
+        },
+        "revoked_at": {
+          "type": ["integer", "null"],
+          "description": "ms-epoch of revocation, or null while not revoked."
+        },
+        "revoke_reason": {
+          "type": ["string", "null"],
+          "description": "Public reason when revoked; null exactly when revoked_at is null."
+        },
+        "live": {
+          "type": "boolean",
+          "description": "True iff revoked_at is null AND expiry is still in the future (three-condition live, not revoked_at alone)."
+        },
+        "state": {
+          "type": "string",
+          "enum": ["live", "expired", "revoked"],
+          "description": "Derived lifecycle: revoked if revoked_at set; else live if expiry in the future; else expired."
+        }
+      }
+    }
+  }
+}

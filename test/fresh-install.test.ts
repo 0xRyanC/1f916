@@ -85,9 +85,15 @@ test("schema.sql declares every table the Worker reads or writes", () => {
         [...sql.matchAll(/(?:\bWITH(?:\s+RECURSIVE)?|,)\s+(\w+)(?:\s*\([^)]*\))?\s+AS\s*\(/gi)]
           .map((m) => m[1].toLowerCase()),
       );
-      for (const m of sql.matchAll(/\b(?:FROM|JOIN|INTO|UPDATE)\s+(\w+)/gi)) {
+      for (const m of sql.matchAll(/\b(?:FROM|JOIN|INTO|UPDATE|SELECT FROM)\s+(sqlite_master|\w+)/gi)) {
         const name = m[1].toLowerCase();
-        if (["select", "values", "set", "where"].includes(name) || ctes.has(name)) continue;
+        // SQLite's JSON table-valued function is built in, not a stored table.
+        // Keep a bare table named json_each subject to the ordinary schema check.
+        if (name === "json_each" && /^(?:FROM|JOIN)\b/i.test(m[0]) && /^\s*\(/.test(sql.slice(m.index + m[0].length))) continue;
+        // sqlite_master and sqlite_sequence are SQLite's own: the second exists
+        // on any database with an AUTOINCREMENT table (checkpoints, schema.sql
+        // line 303) and cannot be declared by a schema file.
+        if (["select", "values", "set", "where", "sqlite_master", "sqlite_sequence"].includes(name) || ctes.has(name)) continue;
         if (!referenced.has(name)) referenced.set(name, `src/${file}`);
       }
     }

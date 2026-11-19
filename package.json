@@ -4,7 +4,9 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "NODE_OPTIONS=\"--import ./test/helpers/offline.mjs\" node --experimental-strip-types --experimental-sqlite --test \"test/*.test.ts\"",
+    "pretest": "rm -rf .sql-capture",
+    "test": "SQL_CAPTURE_DIR=.sql-capture NODE_OPTIONS=\"--import ./test/helpers/offline.mjs --import ./test/helpers/sql-capture.mjs\" node --experimental-strip-types --experimental-sqlite --test \"test/*.test.ts\"",
+    "posttest": "node --experimental-sqlite test/helpers/scan-guard.mjs",
     "typecheck": "tsc",
     "test:live": "LIVE_PROBES=1 node --experimental-strip-types --experimental-sqlite --test \"test/live/*.test.ts\"",
     "test:all": "npm test && npm run test:live"

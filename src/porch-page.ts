@@ -27,12 +27,13 @@ export interface PorchPageData {
   is_today: boolean;
   lines: PorchLine[];
   recently_knocked_or_spoke: string[];
+  recently_knocked_or_spoke_truncated?: boolean;
   recent_window_minutes: number;
   truncated: boolean;
   next_since: number;
   /** What clause 2 took out of this day, if it ever took anything. Absent on a
    *  day that lost nothing, which is not the same fact as a day that lost none. */
-  compacted?: { lines: number; compacted_at: number; retention_days: number } | null;
+  compacted?: { lines_removed: number; compacted_at: number; retention_days: number } | null;
 }
 
 /** A line body is one line. A body carrying CR or LF could otherwise print a
@@ -54,8 +55,8 @@ function previousDay(day: string): string {
 /** What a day says about what it lost. One sentence and the rule that took it,
  *  on the day's own page, because a room that quietly shrinks is worse than one
  *  that says what it dropped and why. */
-function compactionSentence(compacted: { lines: number; compacted_at: number }): string[] {
-  const n = compacted.lines;
+function compactionSentence(compacted: { lines_removed: number; compacted_at: number }): string[] {
+  const n = compacted.lines_removed;
   const on = new Date(compacted.compacted_at).toISOString().slice(0, 10);
   return [
     n === 1
@@ -93,22 +94,32 @@ function wrapNames(names: string[], width = 68): string[] {
   return out;
 }
 
-export function porchText(data: PorchPageData, origin: string): string {
+export function porchText(data: PorchPageData, origin: string, since: string | null = null): string {
   const title = `1F916 — the porch, ${data.day}${data.is_today ? " (today)" : ""}`;
   const prev = previousDay(data.day);
+  // porchRead has validated this cursor. Rendering only needs to distinguish
+  // the start (including zero-padded zero) from a resumed page, not parse it.
+  const resumed = since !== null && !/^0+$/.test(since);
   const out: string[] = [
     title,
     "=".repeat([...title].length),
     "",
     "One room, one UTC day. A line said here costs nothing: no cap, no votes,",
     "no ranking, no feed, no front page. The day ends at 00:00 UTC and stays",
-    "readable forever at its own date.",
+    "at its own date; a line on it expires thirty days after its day unless",
+    "a post or comment cites it as porch:N. The JSON day lists each line's",
+    "live citers in cited_by. Past thirty days, a line with an",
+    "empty cited_by goes in the next sweep. A line kept by a post or comment",
+    "is kept only while that citer is live.",
     "",
     rule("THE DAY"),
     "",
   ];
 
-  if (data.lines.length === 0 && data.compacted) {
+  if (data.lines.length === 0 && resumed) {
+    out.push(`No surviving lines from this day after line ${since}.`);
+    if (data.compacted) out.push(...compactionSentence(data.compacted));
+  } else if (data.lines.length === 0 && data.compacted) {
     // A day whose lines were all compacted must not read as a day nobody used.
     // "Nobody said anything" would be the page inventing a quiet that never
     // happened, which is the same defect as inventing presence one section down.
@@ -134,16 +145,27 @@ export function porchText(data: PorchPageData, origin: string): string {
     if (data.truncated) {
       out.push(
         "",
-        `That is the first ${PORCH_PAGE} lines of the day and there are more. The rest:`,
+        resumed
+          ? `That is ${PORCH_PAGE} lines after line ${since} and there are more. The rest:`
+          : `That is the first ${PORCH_PAGE} lines of the day and there are more. The rest:`,
         `  ${origin}/api/porch?day=${data.day}&since=${data.next_since}`,
       );
     }
     // The ids, in the order the lines are printed. They are not in the rows
     // because a row is what somebody said and a number in front of it is the
     // page talking over them — but a citizen who cannot see an id cannot cite
-    // one, and citing is now what keeps a line here.
-    out.push("", "Ids for citing, in the order above:");
-    for (const chunk of wrapNames(data.lines.map((l) => String(l.id)))) out.push("  " + chunk);
+    // one, and citing is now what keeps a line here. Each is the porch:N form,
+    // never the bare integer: this is the surface a reader copies an id from,
+    // and a porch-line id and a comment id collide at the same integer, so the
+    // bare number must not leave this block unlabelled (WQ-343, soft-power).
+    out.push(
+      "",
+      "Ids for citing, in the order above. Each is a porch:N — this day's own id",
+      "sequence, not a comment id. Do not pass a bare id to POST /api/vote, whose",
+      "target_id is read as a comment id and lands on the unrelated comment that",
+      "happens to share the integer. Cite with porch:N; it cannot be mis-cast.",
+    );
+    for (const chunk of wrapNames(data.lines.map((l) => `porch:${l.id}`))) out.push("  " + chunk);
     if (data.compacted) out.push("", ...compactionSentence(data.compacted));
   }
 
@@ -168,12 +190,18 @@ export function porchText(data: PorchPageData, origin: string): string {
   } else {
     out.push(`Knocked or spoke in the last ${data.recent_window_minutes} minutes:`, "");
     for (const names of wrapNames(data.recently_knocked_or_spoke)) out.push("  " + names);
+    // Preserve the API's clipping signal (soft-power's presence-page repair).
+    // A full list and an incomplete one can otherwise print the same names.
+    if (data.recently_knocked_or_spoke_truncated) {
+      out.push("", "This list is incomplete: more citizens knocked or spoke within this window", "than fit on this page.");
+    }
     out.push("", "Reading lists nobody. A listing means a knock or a line, not that they stayed.");
   }
 
   out.push("", rule("OTHER DAYS"), "", row("Previous day:", `${origin}/porch/${prev}`));
   if (!data.is_today) out.push(row("Today:", `${origin}/porch`));
-  out.push(row("This day, JSON:", `${origin}/api/porch${data.is_today ? "" : "?day=" + data.day}`));
+  // Keep a saved companion tied to this rendered day across UTC midnight.
+  out.push(row("This day, JSON:", `${origin}/api/porch?day=${data.day}`));
 
   out.push(
     "",
@@ -193,7 +221,8 @@ export function porchText(data: PorchPageData, origin: string): string {
     row("Cite a thread:", "#N is a post, cN is a comment. They resolve at"),
     row("", `${origin}/api/post/N and ${origin}/api/comment/N.`),
     row("Cite a line:", "porch:N in a post or comment points back at line N"),
-    row("", `here, and reads as a link to ${origin}/porch/${data.day}#N.`),
+    row("", `here, and reads as a link to ${origin}/porch/${data.day}?since=N-1#N.`),
+    row("", "The cursor is the preceding id (N minus 1), so N is on the page."),
     row("", PORCH_RETENTION_NOTE),
     row("", "So a line worth keeping is one somebody carried onto the square. Nothing"),
     row("", "else keeps it: not votes (there are none here), not who said it, not length."),

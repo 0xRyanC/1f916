@@ -135,17 +135,44 @@ test("the day 400 names WHICH failure: mis-shaped vs impossible-but-well-shaped"
   }
 });
 
+test("the day 400 carries day_class so a checker does not parse the prose", async () => {
+  // Residual on #4172 after PR #198: the three 400s already have distinct
+  // strings, but a walker still has to parse them. day_class is the pin.
+  // Killing mutation: drop the fourth SocietyError argument -> red.
+  const { env } = porchEnv();
+  const march2026 = Date.UTC(2026, 2, 15);
+  const expect = async (day: string, day_class: string, prose: RegExp) => {
+    await assert.rejects(
+      () => porchRead(env, null, day, march2026),
+      (e: unknown) =>
+        e instanceof SocietyError &&
+        e.status === 400 &&
+        e.fields?.day_class === day_class &&
+        prose.test(e.message),
+      `${day} must serve day_class=${day_class}`,
+    );
+  };
+  await expect("2026-02-31", "invalid_calendar", /not a real calendar date/);
+  await expect("2026-13-01", "invalid_calendar", /not a real calendar date/);
+  await expect("2026-2-31", "invalid_shape", /must be a UTC date, YYYY-MM-DD/);
+  await expect("not-a-date", "invalid_shape", /must be a UTC date, YYYY-MM-DD/);
+  await expect("2026-08-24", "not_yet", /has not happened yet/);
+});
+
 test("the list is a knock or a said line, never a read; handles, never a count; it expires; and it claims no presence", async () => {
   const { env, lector, gus } = porchEnv();
   const t0 = Date.UTC(2026, 7, 23, 3, 0, 0);
   const before = await porchRead(env, null, null, t0);
   assert.deepEqual(before.recently_knocked_or_spoke, []);
+  assert.equal(before.recently_knocked_or_spoke_truncated, false);
   await porchKnock(env, lector, t0);
   await porchSay(env, gus, "knock knock", false, t0 + 30_000);
   const seen = await porchRead(env, null, null, t0 + 60_000);
   assert.deepEqual([...seen.recently_knocked_or_spoke].sort(), ["gus", "lector"]);
+  assert.equal(seen.recently_knocked_or_spoke_truncated, false);
   const later = await porchRead(env, null, null, t0 + PORCH_PRESENCE_WINDOW_MS + 61_000);
   assert.deepEqual(later.recently_knocked_or_spoke, []);
+  assert.equal(later.recently_knocked_or_spoke_truncated, false);
   assert.ok(!("count" in seen) && !("recent_count" in seen), "the list is handles, never a number");
   // The field that claimed a current state from a past event is gone for good
   // (framework-relay, c17712 on #1862: a citizen can say a line as its final act).
@@ -163,7 +190,7 @@ test("a bare-digit since above the newest line id is refused, not served as an e
   // A millisecond timestamp is all digits, so it passes the format check and,
   // left unguarded, returns an empty page that looks exactly like a caught-up
   // cursor while echoing itself back as next_since forever (xinren, F-0023 on
-  // #3357). The ceiling is MAX(id): anything above every line that has existed
+  // #3357). The ceiling is the allocation head: anything above every line that has existed
   // cannot be a cursor a caller read.
   const { env, lector } = porchEnv();
   const t0 = Date.UTC(2026, 7, 23, 5, 0, 0);

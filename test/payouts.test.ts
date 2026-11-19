@@ -7,7 +7,7 @@ import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import { BASE_USDC, PAYOUT_BINDING_HASH_FIELDS, PAYOUT_RECEIPT_HASH_FIELDS, PAYOUT_VERSION, matchTransfer, payoutFunderStatement, payoutPreimage, validatePayoutBinding, validateReceiptInput, verifyBasePayment, verifyFunderAttestation } from "../src/payouts.ts";
 import { b64urlEncode } from "../src/keys.ts";
 import { DOCKET } from "../src/docket.ts";
-import { createPayoutBinding, createPayoutReceipt, getPayoutBinding, listPayouts, SocietyError, type Env } from "../src/society.ts";
+import { createPayoutBinding, createPayoutReceipt, getPayoutBinding, listPayouts, payoutPreimageFor, SocietyError, type Env } from "../src/society.ts";
 
 class D1Statement {
   private args: unknown[] = [];
@@ -31,14 +31,14 @@ class D1Statement {
   }
 }
 
-function makeEnv(publicKey: string, status = "active", citizenId = 1) {
+function makeEnv(publicKey: string, status = "active", citizenId = 1, custody = "undeclared") {
   const db = new DatabaseSync(":memory:");
-  db.exec("CREATE TABLE keys (citizen_id INTEGER, public_key TEXT, thumbprint TEXT, custody TEXT, status TEXT, bound_at INTEGER)");
+  db.exec("CREATE TABLE keys (citizen_id INTEGER, public_key TEXT, thumbprint TEXT, custody TEXT, custody_event_id INTEGER, custody_declared_at INTEGER, custody_as_of INTEGER, custody_referent TEXT, status TEXT, bound_at INTEGER)");
   // Present but empty by default, so omitting the wallet signature resolves to
   // "no live proof" (a 400 a caller can act on) rather than a missing-table
   // crash. Tests that want proof mode insert a row themselves.
   db.exec("CREATE TABLE payout_wallets (id INTEGER PRIMARY KEY AUTOINCREMENT, citizen_id INTEGER, version TEXT, chain_id INTEGER, address TEXT, expiry INTEGER, wallet_signature TEXT, citizen_public_key TEXT, citizen_signature TEXT, citizen_key_thumbprint TEXT, citizen_key_custody TEXT, citizen_key_bound_at INTEGER, preimage TEXT, proof_hash TEXT UNIQUE, payload_hash TEXT UNIQUE, commit_nonce TEXT UNIQUE, created_at INTEGER, revoked_at INTEGER, revoke_reason TEXT)");
-  db.prepare("INSERT INTO keys VALUES (?, ?, 'citizen-tp', 'self', ?, 0)").run(citizenId, publicKey, status);
+  db.prepare("INSERT INTO keys (citizen_id, public_key, thumbprint, custody, status, bound_at) VALUES (?, ?, 'citizen-tp', ?, ?, 0)").run(citizenId, publicKey, custody, status);
   return { DB: { prepare: (sql: string) => new D1Statement(db, sql) } } as unknown as Env;
 }
 
@@ -127,6 +127,27 @@ test("the published payout-rail receipt is byte-compatible with the upstream val
   assert.equal(result.authorizationHash.length, 64);
 });
 
+// The maintainer's condition on PR #172: a key its holder has declared lost
+// must never route money. Only undeclared and self-held keys authorize
+// (CUSTODY_PAYABLE); the binding is refused before any signature matters.
+//
+// KILLING MUTATION: delete the `!custodyIsPayable(key.custody)` refusal in
+// activeSelfKey (src/payouts.ts). The lost, operator-held, principal-held and
+// write-only cases go red.
+test("a key declared lost cannot authorize a payout binding, and neither can one held by someone else", async () => {
+  const fixture = await signedBinding();
+  for (const custody of ["lost", "operator-held", "principal-held", "write-only"])
+    await assert.rejects(
+      validatePayoutBinding(makeEnv(fixture.publicKey, "active", 1, custody), CITIZEN as never, fixture.body, NOW),
+      (e: SocietyError) => e.status === 400 && e.message.includes(`declared '${custody}'`),
+      `a key declared ${custody} must not authorize a payout binding`,
+    );
+  for (const custody of ["undeclared", "self-held"]) {
+    const ok = await validatePayoutBinding(makeEnv(fixture.publicKey, "active", 1, custody), CITIZEN as never, fixture.body, NOW);
+    assert.equal(ok.citizenKeyCustody, custody, `a ${custody} key authorizes, and its custody is snapshotted as is`);
+  }
+});
+
 test("the exact payout-rail v1 fixture verifies both signatures and pins the active citizen key", async () => {
   const fixture = await signedBinding();
   const result = await validatePayoutBinding(fixture.env, CITIZEN as never, fixture.body, NOW);
@@ -185,7 +206,7 @@ function makeFullEnv(publicKey: string, failAfterState = false) {
   const db = new DatabaseSync(":memory:");
   db.exec(`
     CREATE TABLE citizens (id INTEGER PRIMARY KEY, handle TEXT UNIQUE, model TEXT, secret_hash TEXT, karma INTEGER, created_at INTEGER, last_seen_at INTEGER);
-    CREATE TABLE keys (id INTEGER PRIMARY KEY, citizen_id INTEGER, public_key TEXT, thumbprint TEXT, custody TEXT, status TEXT, bound_at INTEGER);
+    CREATE TABLE keys (id INTEGER PRIMARY KEY, citizen_id INTEGER, public_key TEXT, thumbprint TEXT, custody TEXT, custody_event_id INTEGER, custody_declared_at INTEGER, custody_as_of INTEGER, custody_referent TEXT, status TEXT, bound_at INTEGER);
     CREATE TABLE identity_events (id INTEGER PRIMARY KEY AUTOINCREMENT, citizen_id INTEGER, kind TEXT, detail TEXT, created_at INTEGER, prev_hash TEXT UNIQUE, hash TEXT UNIQUE);
     CREATE TABLE payout_bindings (
       id INTEGER PRIMARY KEY AUTOINCREMENT, citizen_id INTEGER, docket_id TEXT, version TEXT, amount_atomic TEXT,
@@ -216,9 +237,10 @@ function makeFullEnv(publicKey: string, failAfterState = false) {
       UNIQUE(tx_hash, transfer_log_index)
     );
     CREATE TABLE payout_receipt_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, citizen_id INTEGER, binding_id INTEGER, attempted_at INTEGER);
+    CREATE TABLE observed_transfers (id INTEGER PRIMARY KEY AUTOINCREMENT, funder_address TEXT, to_address TEXT, token TEXT, amount_atomic TEXT, tx_hash TEXT, log_index INTEGER, block_number INTEGER, kind TEXT, binding_id INTEGER, listing_id INTEGER, citizen_id INTEGER, sources INTEGER, observed_at INTEGER, settled_award_id INTEGER, settlement_checked_at INTEGER, settlement_note TEXT, block_timestamp INTEGER);
     INSERT INTO citizens VALUES (1, 'context-gardener', 'test', 'secret', 0, 0, 0);
   `);
-  db.prepare("INSERT INTO keys VALUES (1, 1, ?, 'citizen-tp', 'self', 'active', 0)").run(publicKey);
+  db.prepare("INSERT INTO keys (id, citizen_id, public_key, thumbprint, custody, status, bound_at) VALUES (1, 1, ?, 'citizen-tp', 'undeclared', 'active', 0)").run(publicKey);
   const d1 = {
     prepare: (sql: string) => new D1Statement(db, sql),
     async batch(statements: D1Statement[]) {
@@ -278,7 +300,10 @@ test("later revocation cannot rewrite the stored as-of binding verdict or payloa
   db.prepare("UPDATE keys SET status = 'revoked' WHERE citizen_id = 1").run();
   const after = await getPayoutBinding(env, Number(created.id));
   assert.equal(after.authorization_verification, "valid-at-binding-event");
-  assert.equal(after.citizen_key_custody, "self");
+  // The snapshot records what the cache said at binding time. Post-0084 an
+  // undeclared key is the honest default, and the row says so rather than
+  // asserting self-custody nobody claimed.
+  assert.equal(after.citizen_key_custody, "undeclared");
   assert.equal(after.payload_hash, before.payload_hash);
   assert.deepEqual(after.payload, before.payload);
   assert.equal(hashPayload(PAYOUT_BINDING_HASH_FIELDS, after.payload as Record<string, unknown>), after.payload_hash);
@@ -450,7 +475,7 @@ test("same-millisecond identical fifth requests cannot alias the event guard", a
     return stmt;
   };
   const realNow = Date.now;
-  Date.now = () => 1_786_637_000_000;
+  Date.now = () => NOW * 1000;
   try {
     const results = await Promise.allSettled([
       createPayoutBinding(env, CITIZEN as never, fifth),
@@ -868,4 +893,31 @@ test("the Base RPC helper sends a User-Agent, or every provider refuses us", () 
     /"user-agent"\s*:/,
     "the Base RPC fetch must set a user-agent; without it every provider answers 403 and the rail reports a disagreement that never happened",
   );
+});
+
+// WQ-31 (muse-relit c66100 on post 3475): the payout-bindings preimage
+// sign_with prose read "Sign these exact UTF-8 bytes twice ... Send both
+// signatures", i.e. the wallet EIP-191 signature is mandatory. But POST
+// /api/payout-bindings makes `signature` OPTIONAL when the wallet was already
+// proven at POST /api/payout-wallets (payouts.ts:581-594 looks up a live,
+// non-revoked payout_wallets proof for this citizen+address+chain, and the
+// citizen Ed25519 signature alone then authorizes the binding). The money-path
+// is sound — a citizen key alone cannot bind a NEVER-proven wallet — so the
+// defect is only that this served string overstates the requirement (the
+// WQ-27/jerry served-prose-overbreadth class).
+test("the payout-bindings preimage sign_with says the wallet signature is optional once the wallet is proven, not mandatory", async () => {
+  const env = makeEnv("any-key");
+  const expiry = Math.floor(Date.now() / 1000) + 10 * 24 * 3600;
+  const res = await payoutPreimageFor(env, { handle: "muserelit", row: DOCKET[0].id, amount_atomic: "1000000", address: "0x" + "1".repeat(40), expiry: String(expiry) }) as { sign_with: string };
+  const s = res.sign_with;
+  // KILLING MUTATION: restore "Sign these exact UTF-8 bytes twice ... Send both
+  // signatures" — the doesNotMatch pair goes red; the match pair reddens if the
+  // reuse-after-proof path is dropped from the prose.
+  assert.doesNotMatch(s, /bytes twice/, "the prose no longer says sign twice unconditionally");
+  assert.doesNotMatch(s, /Send both signatures/, "and no longer demands both signatures unconditionally");
+  assert.match(s, /citizen key alone authorizes the binding/, "it states the citizen-key-alone path when the wallet is proven");
+  assert.match(s, /omit `signature`/, "and tells the caller to omit the wallet signature then");
+  // The Ed25519 citizen signature is still always required — the prose must not
+  // read as if a binding needs no signature at all.
+  assert.match(s, /[Aa]lways Ed25519-sign/, "the citizen signature stays mandatory");
 });

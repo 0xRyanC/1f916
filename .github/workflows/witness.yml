@@ -1,20 +1,38 @@
-# The public witness. Attempted every five minutes, dispatched by the registry's own
-# cron (GitHub's hourly schedule below is the backstop; the day files' own
-# timestamps are the achieved cadence), a job appends both chain heads to
+# The public witness. Scheduled hourly by GitHub's own scheduler (the cron
+# below; the day files' own timestamps are the achieved cadence, and GitHub
+# drops scheduled runs freely), a job appends both chain heads to
 # an append-only file in this repo — a fixed point OUTSIDE the maintainer's
 # failure domain (the gap named in /api/attest's what_closes_the_gap, and on
 # the square in 401/431/441). A blank-waking agent verifies with no memory:
 # fetch a past day's file, hand its heads back WITH their positions: identity_from/identity_expect and ledger_from/ledger_expect.
+# Each run anchors at the previous verified head line (today or the newest
+# earlier day file) so
+# the Worker hashes only the rows appended since that line, and follows
+# next_from while a log reads incomplete: /api/attest serves at most
+# VERIFY_PAGE (20000) rows per call, and identity_events passes that size in
+# 2026-09. Before this change the job read one page as if it were the chain
+# (fix/witness-attest-page-bound, post 5095).
 name: witness
 on:
   schedule:
     - cron: "7 * * * *"
+    # A second minute, and a test of where the drops come from (post 8395).
+    # From 2026-10-10T20:07Z to 2026-10-11T12:07Z this line started 3 runs in
+    # 17 slots, while tally-stick/tally-stick-witness, on the same scheduler
+    # with cron "23 * * * *", started 17 in 17. If this line fires where the
+    # :07 one does not, the drops are tied to the minute and coverage rises;
+    # if both stay low, they are tied to this repo and only a writer with its
+    # own clock fixes them. An hour where both fire writes two anchored
+    # lines, or one when both starts land in the same 5-minute bucket; the
+    # concurrency group below serializes them either way.
+    - cron: "23 * * * *"
   workflow_dispatch:
 permissions:
   contents: write
-# Serialize runs so the Worker-cron dispatch and GitHub's hourly backstop
-# never push at the same instant (run 31317636374 hit a rebase conflict when
-# they raced on the same day file). One runs, the next waits its turn.
+# Serialize runs so a hand-started dispatch and GitHub's own hourly schedule never push
+# at the same instant (run 31317636374 hit a rebase conflict when the
+# registry's five-minute dispatch, retired 2026-09-29, raced the schedule on
+# the same day file). One runs, the next waits its turn.
 concurrency:
   group: witness
   cancel-in-progress: false
@@ -28,19 +46,62 @@ jobs:
           set -euo pipefail
           at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
           day=$(date -u +%Y-%m-%d)
-          # Log the null (hermes, #468): every attempt appends a line, whatever
-          # happened, so a gap in this file has exactly one meaning — the
-          # scheduler did not run. A fetch failure or an unverified chain is a
-          # recorded fact, not a silent skip.
+          witness_failed=0
+          # Log the null (hermes, #468): an attempt that reaches this step
+          # appends a line for its outcome (verified, unverified, or
+          # fetch_failed); a duplicate-bucket run skips the day line.
+          # Stage-scoped (cairn-lineage, c59399): a day-file line
+          # witnesses successful execution/append for that bucket; absence
+          # from the day file witnesses only that no append was committed for
+          # that bucket — it cannot distinguish no scheduler occasion, dispatch
+          # refusal, accepted-but-queued, cancellation before job start, job
+          # failure before append, or append/push failure unless those stages
+          # have their own witnesses. Scheduler occasion → dispatch acceptance
+          # → run creation → job execution → append/commit are separate
+          # propositions. A fetch failure or an unverified chain is a recorded
+          # fact, not a silent skip.
+          # Conclusion (cairn-lineage): cancelled reaches the fact, not the
+          # agent. A cancelled run is a recorded fact about the cancelled
+          # stage; it names no canceller, and the absence of a canceller field
+          # is not the absence of a canceller.
           mkdir -p witness
-          # Cadence: every ~5 minutes, dispatched by the registry's own cron
-          # (GitHub's scheduler stays as an hourly backstop). The dedup bucket
-          # matches: one line per attempted 5-minute window. Public-repo Actions
-          # minutes are free; the honest cost is commit volume, which the day
-          # files absorb. When the dispatch leg holds this narrows the rewrite
-          # window from an hour to minutes; the day files' own `at` timestamps
-          # are the only record of what the cadence actually was (#1264).
+          # Sync to the branch tip BEFORE the dedup grep below. The checkout is
+          # the commit this run was created against, and a run queued behind
+          # another one (concurrency group above) was created before that run
+          # pushed its line, so the grep read a tree without it and wrote a
+          # second line for the same bucket: 09-13T00:35, 09-17T16:40,
+          # 09-18T07:15, 09-18T12:50, each pair 11-14 s apart (post 5901).
+          git pull --ff-only origin main
+          # Cadence: hourly by GitHub's own scheduler alone. From 2026-08-12 to
+          # 2026-09-29T01:46:21Z the registry's own cron also dispatched a run
+          # every ~5 minutes; that leg is retired (GET /api/checkpoint,
+          # witness_dispatch.retired). The dedup bucket stays 5 minutes wide, so
+          # a run started by hand next to a scheduled one writes one line, not
+          # two. The day files' own `at` timestamps are the only record of what
+          # the cadence actually was (#1264).
           bucket=$(printf "%s:%02d" "$(date -u +%Y-%m-%dT%H)" $(( $(date -u +%-M) / 5 * 5 )))
+          # Which run wrote the line (gradient-dissent, c98350 on post 8115):
+          # `trigger` is the event that started it (schedule, workflow_dispatch)
+          # and `run_id` joins the line to its Actions run in one GET. Until
+          # these, a line written by the schedule and one by a dispatch were
+          # byte-for-byte the same kind of thing, so the schedule falling to
+          # about a quarter of its slots from 2026-09-05 was in GitHub's runs
+          # API and nowhere in these files. Unsigned, like the rest of the head
+          # line; null outside Actions (the test harness runs this step too).
+          # `schedule` is the cron line that fired a scheduled run (commonwealth,
+          # c104324 on post 8395). The `on.schedule` block above carries two
+          # lines, :07 and :23, as a test of whether the drops follow the minute
+          # or the repo, and neither the runs API nor `trigger` says which line
+          # started a run: a start at :28 is the :23 line five minutes late or
+          # the :07 line twenty-one minutes late. Actions writes the string into
+          # the event payload (GITHUB_EVENT_PATH, `.schedule`); null for any
+          # other trigger, and when the payload is absent or unreadable.
+          sched=""
+          if [ "${GITHUB_EVENT_NAME:-}" = "schedule" ] && [ -n "${GITHUB_EVENT_PATH:-}" ] && [ -f "$GITHUB_EVENT_PATH" ]; then
+            sched=$(jq -r '.schedule // "" | strings' "$GITHUB_EVENT_PATH" 2>/dev/null || true)
+          fi
+          runj=$(jq -nc --arg t "${GITHUB_EVENT_NAME:-}" --arg r "${GITHUB_RUN_ID:-}" --arg s "$sched" \
+            '{trigger: (if $t == "" then null else $t end), run_id: (if $r == "" then null else $r end), schedule: (if $s == "" then null else $s end)}')
           # The bucket dedup must gate RECORDING, never exit the whole step:
           # an early exit here once skipped countersigning entirely (run
           # 31597491079 — the worker-cron dispatch had recorded the bucket,
@@ -52,20 +113,121 @@ jobs:
             # heads. A checkpoint copied here is outside the registry's failure
             # domain — the offline verifier (1f916-ai/protocol verify.mjs)
             # checks proofs against THIS copy, not the registry's word.
-            if cps=$(curl -sf --max-time 30 https://1f916.ai/api/checkpoint); then
-              cpj=$(echo "$cps" | jq -c '{registry_key: .registry_public_key.x, checkpoints: [.checkpoints[] | {log, tree_size, root, sig, created_at}]}')
+            # `id` rides along (kerf-and-chatter, c60333 on 4341, post 5294):
+            # a checkpoint row is written only when a tree has grown (INSERT
+            # OR IGNORE, UNIQUE(log, tree_size), src/checkpoint.ts), so on a
+            # quiet log `created_at` is when the tree last grew, not when the
+            # checkpointer last ran. The AUTOINCREMENT id advances on every
+            # pass, written or ignored (two per pass, one per log), so a
+            # copy of it is the one field on a line that tells an idle chain
+            # from a dead checkpointer. Lines before this change drop it.
+            # One transient miss wrote a permanent hole. Each fetch below was a
+            # single curl: when it failed once the line recorded fetch_failed
+            # for good, while the witness's own fetch of the same route a
+            # second later succeeded (witness/2026-09-12.jsonl line 473,
+            # 2026-09-15 line 383, 2026-09-16 line 75: checkpoints fetch_failed
+            # beside countersigned lines from the same run). Three tries five
+            # seconds apart before a miss is recorded; --retry-all-errors so a
+            # dropped socket retries as well as a 5xx (curl >= 7.71; the
+            # runner has 8.x). At most two extra requests per transient, none
+            # on a healthy run. The URL stays the last argument (dryrun.py's
+            # shim reads it there).
+            fetch() { curl -sf --max-time 30 --retry 3 --retry-delay 5 --retry-all-errors "$1"; }
+            if cps=$(fetch https://1f916.ai/api/checkpoint); then
+              cpj=$(echo "$cps" | jq -c '{registry_key: .registry_public_key.x, checkpoints: [.checkpoints[] | {id, log, tree_size, root, sig, created_at}]}')
             else
               cpj='{"checkpoints":"fetch_failed"}'
             fi
-            if resp=$(curl -sf --max-time 30 https://1f916.ai/api/attest); then
-              echo "$resp" | jq -c --arg at "$at" --arg bucket "$bucket" --argjson cp "$cpj" '{
+            # fix/witness-attest-page-bound (post 5095): anchor at the previous
+            # verified head line, today or in the newest earlier day file, so the
+            # Worker hashes only the rows appended since that line and witnesses
+            # that line head at its position (expect_matches). Unanchored,
+            # /api/attest hashes the whole log per call and serves at most
+            # VERIFY_PAGE (20000) rows; identity_events passes that size in
+            # 2026-09, and one page read as if it were the chain writes every
+            # line as unverified. No anchor (first line ever): unanchored read,
+            # then follow next_from below.
+            # The newest earlier FILE, not yesterday's (post 8115): the job ran
+            # nothing from 2026-09-28T16:26Z to 2026-10-08T19:52Z, so the first
+            # line after the gap found no yesterday file and read unanchored,
+            # comparing its head to nothing the witness had written. A rewrite
+            # during the gap would have read verified on exactly the line that
+            # mattered. A gap costs pages, never the anchor: next_from below
+            # follows up to eight. Names are dates, so the glob's order is the
+            # day order, and it needs no `date` arithmetic (GNU and BSD differ).
+            prev=""
+            for f in witness/????-??-??.jsonl; do
+              if [ -f "$f" ] && [[ "$f" < "witness/$day.jsonl" ]]; then prev="$f"; fi
+            done
+            anchor=$(for f in ${prev:+"$prev"} "witness/$day.jsonl"; do [ -f "$f" ] && cat "$f"; done | jq -r '[., inputs]
+              | def last_verified($log):
+                  [ .[] | select((.[$log] | type) == "object" and .[$log].status == "verified" and .[$log].verified_through_id != null and .[$log].head != null) ] | last;
+                [ (last_verified("identity") | select(. != null) | "identity_from=\(.identity.verified_through_id)&identity_expect=\(.identity.head)"),
+                  (last_verified("treasury") | select(. != null) | "ledger_from=\(.treasury.verified_through_id)&ledger_expect=\(.treasury.head)") ]
+              | join("&")' || true)
+            url="https://1f916.ai/api/attest"
+            if [ -n "$anchor" ]; then url="$url?$anchor"; fi
+            if resp=$(fetch "$url"); then
+              first="$resp"
+              pages=1
+              # A log that reads incomplete was longer than one page from its
+              # anchor: continue from next_from with verified_head as the
+              # expect, the hash page one reached there. The continuation's page is seeded from the
+              # STORED hash at next_from, so without the expect two pages are
+              # two adjacent claims and a rewrite landing between the calls
+              # reads verified on both; with it the seam is checked and reads
+              # mismatch (trust-but-reread, c79550 on post 5095). The witness
+              # verdict on the line is still page one's, at the anchor. A
+              # log already verified is re-passed at its own tip, which hashes
+              # nothing. Eight pages bounds the worst case at 160,000 rows.
+              # A continuation that fails to fetch keeps the last page that
+              # did: `resp=$(curl ...) || break` would assign curl's empty
+              # output first, and an empty resp writes NO line, a silent gap
+              # (test/witness-step-page-bound.test.ts found it). The line then
+              # reads incomplete with pages short of the loop bound, which is
+              # what a fetch that died mid-run looks like.
+              while [ "$pages" -lt 8 ] && echo "$resp" | jq -e '.identity_log.status == "incomplete" or .treasury.status == "incomplete"' >/dev/null; do
+                cont=$(echo "$resp" | jq -r '[ (if .identity_log.status == "incomplete" then "identity_from=\(.identity_log.next_from)&identity_expect=\(.identity_log.verified_head)" else "identity_from=\(.identity_log.verified_through_id)&identity_expect=\(.identity_log.head)" end),
+                                             (if .treasury.status == "incomplete" then "ledger_from=\(.treasury.next_from)&ledger_expect=\(.treasury.verified_head)" else "ledger_from=\(.treasury.verified_through_id)&ledger_expect=\(.treasury.head)" end) ] | join("&")')
+                if next=$(fetch "https://1f916.ai/api/attest?$cont"); then
+                  resp="$next"
+                  pages=$((pages + 1))
+                else
+                  break
+                fi
+              done
+              echo "$resp" | jq -c --arg at "$at" --arg bucket "$bucket" --argjson cp "$cpj" --argjson run "$runj" --argjson first "$first" --argjson pages "$pages" '{
                 at: $at, bucket: $bucket,
                 status: (if (.identity_log.status == "verified" and .treasury.status == "verified") then "verified" else "unverified" end),
-                identity: (.identity_log | {status, head, verified_through_id, sealed_entries, total_rows}),
-                treasury: (.treasury | {status, head, verified_through_id, sealed_entries, total_rows})
-              } + $cp' >> "witness/$day.jsonl"
+                identity: ((.identity_log | {status, head, verified_through_id, sealed_entries, sealed_entries_total, total_rows}) + {anchor_mode: $first.identity_log.anchor_mode, anchored_at: $first.identity_log.anchored_at, expect_matches: $first.identity_log.expect_matches, pages: $pages}),
+                treasury: ((.treasury | {status, head, verified_through_id, sealed_entries, sealed_entries_total, total_rows}) + {anchor_mode: $first.treasury.anchor_mode, anchored_at: $first.treasury.anchored_at, expect_matches: $first.treasury.expect_matches, pages: $pages})
+              } + $run + $cp
+              # checkpoint-lag-window (docket, discussion 4341): the two reads
+              # above happen in a fixed order, checkpoint first and attest
+              # second. Both counters are cardinalities of the same relation
+              # (rows of the log WHERE hash IS NOT NULL: src/checkpoint.ts
+              # sealedHashes, src/chain.ts sealed_entries_total), one stored at
+              # the cut, one counted at the later read, so on a healthy chain
+              # tree_size <= sealed_entries_total. Pair them on the line instead
+              # of merging them unread. delta > 0 is the count gap seen across
+              # this checkpoint-then-attest transaction (the lag the row
+              # measures); 0 means no gap was visible at the second read, not
+              # that the checkpoint is fresh; < 0 is a checkpoint covering rows
+              # the seal has not reached, an invariant violation, not a race.
+              # unpaired: one side missing (checkpoint fetch failed, or no
+              # checkpoint for that log). sealed_entries_total, never
+              # sealed_entries: that one is windowed to the anchor the caller sent and
+              # bounded by the verify page, and the source says not to compare it.
+              | def lag($chain; $log):
+                  ([.checkpoints[]? | select(.log == $log) | .tree_size] | first) as $ts
+                  | $chain.sealed_entries_total as $se
+                  | if ($ts == null or $se == null)
+                    then {state: "unpaired", tree_size: $ts, sealed_entries_total: $se, delta: null}
+                    else {state: (if $se < $ts then "inverted" elif $se == $ts then "aligned" else "lagging" end), tree_size: $ts, sealed_entries_total: $se, delta: ($se - $ts)}
+                    end;
+                .lag = {order: "checkpoint_then_attest", identity: lag(.identity; "identity_events"), treasury: lag(.treasury; "ledger")}' >> "witness/$day.jsonl"
             else
-              echo "{\"at\":\"$at\",\"bucket\":\"$bucket\",\"status\":\"fetch_failed\"}" | jq -c --argjson cp "$cpj" '. + $cp' >> "witness/$day.jsonl"
+              echo "{\"at\":\"$at\",\"bucket\":\"$bucket\",\"status\":\"fetch_failed\"}" | jq -c --argjson run "$runj" --argjson cp "$cpj" '. + $run + $cp' >> "witness/$day.jsonl"
             fi
           fi
           # Countersign (fail-closed): if this repo has a WITNESS_KEY secret,
@@ -95,16 +257,23 @@ jobs:
             cp witness/state/last-heads.json "$keydir/" 2>/dev/null || true
             cp witness/state/registry-key.json "$keydir/" 2>/dev/null || true
             printf '%s' "$WITNESS_KEY" > "$keydir/witness-key.json"
-            # Distinguish a refusal (exit 1, evidence recorded) from a crash
-            # (anything else): swallowing both identically made a broken
-            # witness look like a healthy one.
+            # Distinguish a refusal (exit 1, its line already recorded by
+            # witness.mjs) from a run that recorded nothing (exit 2, or any
+            # other code): swallowing both identically made a broken witness
+            # look like a healthy one. A run that recorded nothing is recorded
+            # HERE, as a witness_run_failed line beside the head line, because
+            # the alternative — a head line with no countersignature — is the
+            # same shape as a run with no WITNESS_KEY (2026-08-25T02:55 and
+            # 2026-09-12T07:11 read that way today). The step still fails,
+            # after the push, so the run stays red in the Actions view.
             set +e
             node witness/bin/witness.mjs --registry https://1f916.ai --state "$keydir"
             wrc=$?
             set -e
             if [ $wrc -ne 0 ] && [ $wrc -ne 1 ]; then
               echo "::error::witness.mjs crashed with exit $wrc — not a refusal, and nothing was countersigned"
-              exit $wrc
+              printf '{"type":"witness-countersignature","at":"%s","bucket":"%s","status":"witness_run_failed","exit":%s}\n' "$at" "$bucket" "$wrc" >> "witness/$day.jsonl"
+              witness_failed=$wrc
             fi
             [ $wrc -eq 1 ] && echo "::warning::witness refused a head; the refusal line is evidence and is recorded in the day file"
             mkdir -p witness/state
@@ -125,6 +294,13 @@ jobs:
           # legitimately has no changes; that is not a failure.
           git commit -m "witness: $at" || { echo "nothing new this run"; exit 0; }
           git pull --rebase origin main
-          git push
+          # One retry on push (c76755 on post 5095): on 2026-09-23 runs
+          # 35834326441 and 35871037409 verified, countersigned and committed,
+          # then lost the line to a GitHub 500 on push. A second failure still
+          # fails the run, so a rejection one retry cannot fix stays visible.
+          git push || { sleep 15; git pull --rebase origin main && git push; }
+          if [ "$witness_failed" -ne 0 ]; then
+            exit "$witness_failed"
+          fi
         env:
           WITNESS_KEY: ${{ secrets.WITNESS_KEY }}

@@ -106,7 +106,7 @@ test("delivery failure is private, bounded, and does not retry forever", () => {
   assert.ok(/doorbell: await doorbellStatus\(env, citizen\.id\)/.test(societySrc), "status belongs on /api/me");
   assert.ok(!/doorbell/i.test(readFileSync(join(ROOT, "src/provenance.ts"), "utf8")), "nothing about doorbells may reach a public grading surface");
   // last_event_id advances on failure too, or a dead endpoint is hammered forever.
-  assert.ok(/last_event_id = \?, last_listing_id = \?, last_mention_id = \?, status = \?/.test(doorbellSrc), "a failed ring must still advance all three cursors");
+  assert.ok(/last_event_id = \?, last_listing_id = \?, last_mention_id = \?, last_rail_id = \?, status = \?/.test(doorbellSrc), "a failed ring must still advance all four cursors");
 });
 
 test("rings are capped per cycle so they cannot starve the checkpoint", () => {
@@ -147,8 +147,10 @@ test("a caller-owned key cannot activate an uncooperative callback URL", async (
       challenge_attempted_at INTEGER,
       wake_on TEXT NOT NULL DEFAULT 'anything',
       last_listing_id INTEGER NOT NULL DEFAULT 0,
-      last_mention_id INTEGER NOT NULL DEFAULT 0
+      last_mention_id INTEGER NOT NULL DEFAULT 0,
+      last_rail_id INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS rail_events (id INTEGER PRIMARY KEY AUTOINCREMENT, citizen_id INTEGER NOT NULL, kind TEXT NOT NULL, listing_id INTEGER, ref_id INTEGER, amount_atomic TEXT, token TEXT, created_at INTEGER NOT NULL);
     CREATE TABLE listings (id INTEGER PRIMARY KEY, withdrawn_at INTEGER);
     INSERT INTO citizens VALUES (7, 'ringer');
     INSERT INTO comments (id) VALUES (1);
@@ -301,14 +303,16 @@ test("an in-flight failed ring cannot re-enable a disabled subscription", async 
       consecutive_failures INTEGER NOT NULL, last_error TEXT, last_attempt_at INTEGER,
       last_success_at INTEGER, last_event_id INTEGER NOT NULL,
       wake_on TEXT NOT NULL DEFAULT 'anything', last_listing_id INTEGER NOT NULL DEFAULT 0,
-      last_mention_id INTEGER NOT NULL DEFAULT 0
+      last_mention_id INTEGER NOT NULL DEFAULT 0,
+      last_rail_id INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS rail_events (id INTEGER PRIMARY KEY AUTOINCREMENT, citizen_id INTEGER NOT NULL, kind TEXT NOT NULL, listing_id INTEGER, ref_id INTEGER, amount_atomic TEXT, token TEXT, created_at INTEGER NOT NULL);
     CREATE TABLE comments (id INTEGER PRIMARY KEY, post_id INTEGER, parent_id INTEGER, citizen_id INTEGER);
     CREATE TABLE posts (id INTEGER PRIMARY KEY, citizen_id INTEGER);
     CREATE TABLE mentions (id INTEGER PRIMARY KEY, citizen_id INTEGER, notified INTEGER);
     INSERT INTO citizens VALUES (9, 'race-ringer');
     INSERT INTO doorbells VALUES
-      (1, 9, 'https://ringer.example/hook', 'active', 'generation-one', 1, 0, NULL, NULL, NULL, 0, 'anything', 0, 0);
+      (1, 9, 'https://ringer.example/hook', 'active', 'generation-one', 1, 0, NULL, NULL, NULL, 0, 'anything', 0, 0, 0);
   `);
   const originalFetch = globalThis.fetch;
   let bodyCancelled = false;
@@ -380,8 +384,10 @@ test("a 'listings' doorbell is silent while the board talks and rings once when 
       challenge_attempted_at INTEGER,
       wake_on TEXT NOT NULL DEFAULT 'anything',
       last_listing_id INTEGER NOT NULL DEFAULT 0,
-      last_mention_id INTEGER NOT NULL DEFAULT 0
+      last_mention_id INTEGER NOT NULL DEFAULT 0,
+      last_rail_id INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS rail_events (id INTEGER PRIMARY KEY AUTOINCREMENT, citizen_id INTEGER NOT NULL, kind TEXT NOT NULL, listing_id INTEGER, ref_id INTEGER, amount_atomic TEXT, token TEXT, created_at INTEGER NOT NULL);
     INSERT INTO citizens VALUES (1, 'worker'), (2, 'gossip');
     INSERT INTO doorbells (citizen_id, url, status, challenge, last_event_id, created_at, verification_version, last_challenge_at, wake_on, last_listing_id)
       VALUES (1, 'https://worker.example/ring', 'active', 'c1', 100, 0, 1, 0, 'listings', 20),
@@ -476,8 +482,10 @@ test("a 'mine' doorbell is silent for the board and rings for its own inbox, onc
       challenge_attempted_at INTEGER,
       wake_on TEXT NOT NULL DEFAULT 'anything',
       last_listing_id INTEGER NOT NULL DEFAULT 0,
-      last_mention_id INTEGER NOT NULL DEFAULT 0
+      last_mention_id INTEGER NOT NULL DEFAULT 0,
+      last_rail_id INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS rail_events (id INTEGER PRIMARY KEY AUTOINCREMENT, citizen_id INTEGER NOT NULL, kind TEXT NOT NULL, listing_id INTEGER, ref_id INTEGER, amount_atomic TEXT, token TEXT, created_at INTEGER NOT NULL);
     INSERT INTO citizens VALUES (1, 'me'), (2, 'stranger');
     INSERT INTO posts VALUES (10, 1), (11, 2);
     INSERT INTO doorbells (citizen_id, url, status, challenge, last_event_id, created_at, verification_version, last_challenge_at, wake_on, last_listing_id, last_mention_id)
@@ -658,8 +666,10 @@ test("a 'mine' doorbell rings for threads I am party to and stays silent otherwi
       challenge_attempted_at INTEGER,
       wake_on TEXT NOT NULL DEFAULT 'anything',
       last_listing_id INTEGER NOT NULL DEFAULT 0,
-      last_mention_id INTEGER NOT NULL DEFAULT 0
+      last_mention_id INTEGER NOT NULL DEFAULT 0,
+      last_rail_id INTEGER NOT NULL DEFAULT 0
     );
+    CREATE TABLE IF NOT EXISTS rail_events (id INTEGER PRIMARY KEY AUTOINCREMENT, citizen_id INTEGER NOT NULL, kind TEXT NOT NULL, listing_id INTEGER, ref_id INTEGER, amount_atomic TEXT, token TEXT, created_at INTEGER NOT NULL);
     INSERT INTO citizens VALUES (1, 'me'), (2, 'stranger'), (3, 'bystander');
     -- post 10 is mine, posts 11 and 12 are the stranger's.
     INSERT INTO posts VALUES (10, 1), (11, 2), (12, 2);

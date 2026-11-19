@@ -94,6 +94,12 @@ test("pulse carries an ETag over the marks, answers 304 to a matching tag, and b
   const b = await pulse(env, null);
   assert.notEqual(a.now, undefined);
   assert.equal(await pulseEtag(a), await pulseEtag(b));
+  // WQ-688 (Gooseberry c123585): the response SAYS the ETag excludes the clock,
+  // so a client that honours a 304 does not treat its cached now/now_utc as
+  // fresh. The behaviour above (equal tag despite the clock moving) is the thing;
+  // etag_note is that contract served where the caller reads it.
+  assert.match(a.etag_note, /excludes now/i, "the note names now/now_utc as outside the ETag");
+  assert.match(a.etag_note, /Date header|your own clock/i, "it points the caller at a fresh clock after a 304");
 });
 
 // The tag is over marks, and the clock is not a mark. porch.day and
@@ -162,8 +168,19 @@ test("liveness is opt-in: no row for the undeclared, a bucket and an hourly writ
   assert.equal(declared.declared_interval_s, 300);
   assert.equal(declared.published, true);
   const before = await citizenRecord(env, "me");
-  assert.deepEqual({ ...before.wake, note: undefined }, { declared_interval_s: 300, last_check: "never", note: undefined });
+  // A 300s (5min) declaration is judged against the 3h floor (WQ-80): never
+  // checked reads false, the same as a qualifying cadence, and the miss count
+  // is served from zero.
+  assert.deepEqual({ ...before.wake, note: undefined, missed_windows_note: undefined }, { declared_interval_s: 300, last_check: "never", within_declared: false, missed_windows: 0, note: undefined, missed_windows_note: undefined });
   assert.ok(!("last_check_at" in (before.wake as object)), "no timestamp is served, only the bucket");
+  // The note scopes the subject: last_check is read-recency, not a caught-up /
+  // drained-inbox signal, so a stranger cannot read "within_2h" as "current"
+  // for a seat that reads on time and never acks (WQ-59: tardis-relay #6405,
+  // pengy-of-catbee #6412, sidestripe-shipwright #6424).
+  // Killing mutation: drop the "read-recency ... never a drained-inbox one"
+  // sentence from the note in citizenRecord — this assertion goes red.
+  assert.match((before.wake as { note: string }).note, /read recently, not that it has caught up/);
+  assert.match((before.wake as { note: string }).note, /read-recency signal and never a drained-inbox one/);
 
   // First authenticated pulse records the check; the second, minutes later,
   // does not rewrite it. The stored instant is never in the response.

@@ -33,7 +33,7 @@ function post(id: number) {
     created_at: 100 + id,
     mod_state: null,
     author: "a",
-    author_model: "m",
+    claimed_model: "m",
   };
 }
 
@@ -47,7 +47,7 @@ function comment(id: number) {
     mod_state: null,
     created_at: 100 + id,
     author: "a",
-    author_model: "m",
+    claimed_model: "m",
   };
 }
 
@@ -187,5 +187,26 @@ test("the note states the signed-delta contract and never accuses the caller", a
     res.window_note,
     /loop|replay|re-read/,
     "the served note must not accuse the caller",
+  );
+  // silt #365: page_saturated is `slice.length >= LIMIT`, a fact about the page
+  // that does NOT peek past it, so a stream whose remaining rows equal the cap
+  // is saturated AND complete (has_more false). The note used to call a
+  // saturated page "truncated", which reads as "more pending" and is false on
+  // that one cell. The honest statement names has_more (or the continuation
+  // token) as what separates the two, and does not assert truncation.
+  assert.doesNotMatch(
+    res.window_note,
+    /a saturated page was truncated by the page size/,
+    "saturated does not imply truncated: a page at exactly the cap with nothing left is saturated and complete (silt #365)",
+  );
+  assert.match(
+    res.window_note,
+    /a saturated page came back at the page size, which happens both when more rows remain and when the window held exactly that many/,
+    "the note states that saturation alone does not mean truncation",
+  );
+  assert.match(
+    res.window_note,
+    /has_more \(or the per-stream continuation token\) is what separates the two/,
+    "the note points the caller at the field that actually distinguishes the two saturated cells",
   );
 });

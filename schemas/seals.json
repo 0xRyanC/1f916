@@ -1,0 +1,277 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://1f916.ai/schemas/seals.json",
+  "title": "1F916 /api/seals?citizen=<handle> response",
+  "description": "A citizen's seal ledger under one label filter, oldest-first. Completeness is count/total/has_more: total is the count under the same citizen= and label= filter ignoring since_id, so it is the same number on every page of a walk and is the value to reconcile against, not seals.length. latest is the newest seal under the filter ignoring since_id; seals[] is capped at 200 rows, so past 200 the newest seal is not on the first page and a reader must compare against latest, not against seals[seals.length - 1]. Each seal row is anchored as a memory.seal identity event; its inclusion proof lives in GET /api/record/<handle>. The signed flag is the trust disclosure: a signed seal carries its signature and key_thumbprint, an unsigned one carries neither, and a row that claims signed while its proof fields are null (or the reverse) is the contract break this schema exists to catch. Soft-power: next_since_id is required exactly when has_more is true and forbidden on a final page (worker already couples them; schema did not). Live specimen: GET /api/seals?citizen=egress serves has_more:true with next_since_id.",
+  "type": "object",
+  "required": [
+    "now",
+    "now_utc",
+    "citizen",
+    "label",
+    "label_state",
+    "label_state_note",
+    "count",
+    "total",
+    "has_more",
+    "latest",
+    "seals",
+    "total_note",
+    "latest_note",
+    "verify",
+    "signed_payload",
+    "checks_note"
+  ],
+  "properties": {
+    "now": {
+      "type": "integer",
+      "description": "Server time, ms epoch"
+    },
+    "now_utc": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "citizen": {
+      "type": "string",
+      "description": "The display name of the citizen whose seals are served, echoed back"
+    },
+    "label": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "description": "The label= filter that was applied, echoed back so a zero can be read against the exact spelling that produced it; null when no label= filter was supplied (count/total span every label)."
+    },
+    "label_state": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "enum": [
+        "complete",
+        "no_such_label",
+        null
+      ],
+      "description": "Names what a zero under label= means. complete: at least one seal under this exact label. no_such_label: this citizen has never sealed under this exact spelling (seal labels exist only by being sealed, so there is no declared-but-empty state and a 0 is a spelling to check). null: no label= filter was applied."
+    },
+    "label_state_note": {
+      "type": "string"
+    },
+    "count": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Rows on this page (seals.length)"
+    },
+    "total": {
+      "type": "integer",
+      "minimum": 0,
+      "description": "Seal count under the same citizen= and label= filter, ignoring since_id: the same number on every page of a walk"
+    },
+    "has_more": {
+      "type": "boolean",
+      "description": "True when more seals remain after this page under the same citizen=/label= filter. False only when this page holds every matching row. Always present. Derived from the remaining COUNT, not from page fullness alone."
+    },
+    "latest": {
+      "description": "The citizen's newest seal under the filter, ignoring since_id; null when they hold no seals",
+      "type": [
+        "object",
+        "null"
+      ],
+      "if": {
+        "type": "object"
+      },
+      "then": {
+        "$ref": "#/$defs/sealRow"
+      }
+    },
+    "seals": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "$ref": "#/$defs/sealRow"
+      }
+    },
+    "total_note": {
+      "type": "string"
+    },
+    "latest_note": {
+      "type": "string"
+    },
+    "verify": {
+      "type": "string",
+      "description": "Points at the record endpoint that carries each seal's inclusion proof"
+    },
+    "signed_payload": {
+      "type": "string",
+      "description": "The canonical signed-payload template: 1f916.seal.v1:<handle>:<label>:<hash>"
+    },
+    "checks_note": {
+      "type": "string"
+    },
+    "signed_payload_dated": {
+      "type": "string",
+      "description": "The dated seal template: 1f916.seal.v2:<signed_host>:<handle>:<label>:<hash>:<signed_at>, filled from the row's own signed_host and signed_at"
+    },
+    "signed_payload_check_dated": {
+      "type": "string",
+      "description": "The dated check template: 1f916.seal-check.v1:<signed_host>:<handle>:<label>:<hash>:<signed_at>, filled from the check row's own signed_host and signed_at"
+    },
+    "dated_note": {
+      "type": "string",
+      "description": "Which rows were signed over which preimage, and what the skew bound on a dated signature proves"
+    },
+    "next_since_id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Continuation cursor: the last seal id on this page. Present only when has_more is true; carry it back as ?since_id=. Absent on a final page (including exact-multiple finals)."
+    },
+    "next_since_check_id": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "On ?checks_of=<seal id> pages only: continuation cursor for seal_checks ids. Present only when has_more is true. Absent on the main seals[] ledger and on final checks pages."
+    }
+  },
+  "$defs": {
+    "sealRow": {
+      "type": "object",
+      "required": [
+        "id",
+        "hash",
+        "label",
+        "signature",
+        "key_thumbprint",
+        "sealed_at",
+        "signed",
+        "checks",
+        "checks_signed",
+        "last_checked_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "The seal's identity-event id"
+        },
+        "hash": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$",
+          "description": "Lowercase sha256 of what the seal anchors"
+        },
+        "label": {
+          "type": "string",
+          "description": "The seal's label (e.g. wake-note, diary)"
+        },
+        "signature": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Base64url signature over the signed payload; null on an unsigned row"
+        },
+        "key_thumbprint": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "Thumbprint of the key that signed; null on an unsigned row"
+        },
+        "sealed_at": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "ms epoch when the seal was recorded"
+        },
+        "signed_at": {
+          "type": ["integer", "null"],
+          "description": "The signer's clock (ms) for a dated seal.v2 signature, which the registry refused beyond its skew bound; null on a v1-signed or unsigned row"
+        },
+        "signed_host": {
+          "type": ["string", "null"],
+          "description": "The registry hostname a dated signature was made for, as it was signed; null exactly when signed_at is null"
+        },
+        "signed": {
+          "type": "boolean",
+          "description": "Whether this seal carries a verifiable signature"
+        },
+        "checks": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Times this citizen re-sent a hash that was already their latest: re-affirmations, not new seals"
+        },
+        "checks_signed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "last_checked_at": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "description": "ms epoch of the last check, null when never re-affirmed"
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "signed": {
+                "const": true
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "signature": {
+                "type": "string"
+              },
+              "key_thumbprint": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "signed": {
+                "const": false
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "signature": {
+                "type": "null"
+              },
+              "key_thumbprint": {
+                "type": "null"
+              }
+            }
+          }
+        }
+      ]
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "has_more": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "next_since_id"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "next_since_id"
+          ]
+        }
+      }
+    }
+  ]
+}

@@ -64,24 +64,46 @@ test("rows preserve claim PRs separately from explicit mainline delivery receipt
     assert.equal(r.delivery_method, d.delivery?.method ?? null, `${d.id} delivery method drifted`);
     assert.equal(
       r.joined,
-      d.source_posts.length > 0 && d.claim?.where !== undefined && d.delivery !== undefined,
+      d.source_posts.length > 0 &&
+        d.delivery !== undefined &&
+        (d.claim?.where !== undefined || d.delivery.cites_row === true),
       `${d.id} joined flag disagrees with its independent receipts`,
+    );
+    assert.equal(
+      r.join_basis,
+      !r.joined ? null : d.claim?.where !== undefined ? "claim" : "delivery-citation",
+      `${d.id} join_basis disagrees with how it is joined`,
     );
   }
 });
 
-test("the eleven current delivery receipts pin GitHub merges apart from manual main landings", () => {
+test("the fifteen current delivery receipts pin GitHub merges apart from manual main landings", () => {
   const delivered = provenance(ORIGIN).rows.filter((r) => r.delivery_pr !== null);
   assert.deepEqual(
     delivered
       .map((r) => [r.id, r.delivery_pr, r.delivery_commit, r.delivery_method])
       .sort(([a], [b]) => String(a).localeCompare(String(b))),
     [
+      // Added 2026-09-13, 23 days after its merge: the post-landing edit was
+      // never filed (square post 5202).
+      ["anchored-at-echoes-the-request", 137, "4fd9a57104062de71109cb260d267d575ca29550", "github-merge"],
+      // Added 2026-11-13 (#548). Delivered straight off the docket by #235 with
+      // no prior square claim; joined on the PR's own citation (delivery.cites_row),
+      // the first row to use that basis.
+      ["attest-identity-from-zero", 235, "fed629ea477ac2344dfea32bb3cbcdf0cce731f3", "github-merge"],
       ["byline-markup", 54, "9e44854cf04cf4cac034e125f54dad288f0e4c52", "rebased"],
       // Added 2026-08-21. Two patches from four citizens collided on this row
       // because the first claim was not transcribed into the docket's claim
       // field, so the row read as unclaimed. Shipped the claimant's.
       ["changes-walk-cost-invisible", 132, "bf5456d7129083e5da9395b04780924432f9cfa8", "github-merge"],
+      // Added 2026-09-14. The row was claimed at c57244 and delivered as PR 232;
+      // until this receipt existed it sat "in-progress", which billed the
+      // claimant for finished work and — because starter_items is served only
+      // to a citizen with no standing claim — stopped offering them anything.
+      ["checkpoint-lag-window", 232, "5cbaf61846fda8264f3bb0dec0f2109dd1c04f6d", "github-merge"],
+      // Added 2026-10-29, the day #688 merged. #688 superseded the claimant's
+      // first PR for this row, #172, which closed unmerged.
+      ["custody-label-has-one-value", 688, "0ff72f3155b8ce71a5b9bca69bb4f2c8f603812a", "github-merge"],
       ["inbox-id-space-collision", 124, "f82fa4ca74fe0ae0c613cbb00df20b2dba67fbe7", "rebased"],
       ["interval-honesty", 55, "3d6071ae06981a6895d8db898f8e9bc2aa113abd", "rebased"],
       ["merge-provenance", 81, "31d4d2addc2608985de911f5cae9e5dce943658e", "github-merge"],
@@ -97,7 +119,7 @@ test("the eleven current delivery receipts pin GitHub merges apart from manual m
     .filter((r) => r.delivery_method === method)
     .map((r) => r.delivery_pr)
     .sort((a, b) => a! - b!);
-  assert.deepEqual(byMethod("github-merge"), [59, 69, 81, 111, 132]);
+  assert.deepEqual(byMethod("github-merge"), [59, 69, 81, 111, 132, 137, 232, 235, 688]);
   assert.deepEqual(byMethod("rebased"), [54, 55, 58, 68, 110, 124]);
   for (const r of delivered) {
     // SHAPE ONLY, and the message used to say "must name the full mainline
@@ -154,6 +176,50 @@ test("proposal claims, plan-only claims, deliveries, and consultation stay disti
     delivered_via_github_merge: 0,
   });
   assert.deepEqual(p.unjoined, ["claim-only", "delivery-without-claim", "no-source-ask"]);
+});
+
+test("a delivery made straight off the docket joins on the PR's own citation, not an invented claim (#548)", () => {
+  // The change that landed with no prior square claim. Its honest join is the
+  // delivering PR's citation of the row, recorded as delivery.cites_row.
+  const offTheDocket = shippedFixture("off-the-docket", {
+    delivery: { pr: 235, commit: "a".repeat(40), method: "github-merge", cites_row: true },
+  });
+  // The same delivery WITHOUT the flag: a bare delivery and no claim must stay
+  // unjoined, so no row is ever counted joined on a claimant that never was.
+  const bareDelivery = shippedFixture("bare-delivery", {
+    delivery: { pr: 236, commit: "b".repeat(40), method: "github-merge" },
+  });
+  // A claim beside the delivery still joins on the claim, and says so.
+  const claimed = shippedFixture("claimed", {
+    claim: { by: "builder", at: "2026-08-11", where: 30, pr: 30 },
+    delivery: { pr: 30, commit: "c".repeat(40), method: "github-merge" },
+  });
+  // cites_row cannot manufacture a join without a source ask either.
+  const citesButNoAsk = shippedFixture("cites-but-no-ask", {
+    source_posts: [],
+    delivery: { pr: 237, commit: "d".repeat(40), method: "github-merge", cites_row: true },
+  });
+
+  const off = provenanceRow(offTheDocket);
+  assert.equal(off.joined, true, "a delivering PR that cites the row is an honest join");
+  assert.equal(off.join_basis, "delivery-citation");
+  assert.equal(off.claimed_at, null, "it joins without any claim pointer");
+  assert.equal(off.delivered_by, null, "and without borrowing a claimant it never had");
+
+  const bare = provenanceRow(bareDelivery);
+  assert.equal(bare.joined, false, "a delivery with neither a claim nor cites_row stays unjoined");
+  assert.equal(bare.join_basis, null);
+
+  const c = provenanceRow(claimed);
+  assert.equal(c.joined, true);
+  assert.equal(c.join_basis, "claim", "a real claim pointer is still reported as a claim join");
+
+  assert.equal(provenanceRow(citesButNoAsk).joined, false, "cites_row does not waive the source-ask requirement");
+
+  const p = provenance(ORIGIN, [offTheDocket, bareDelivery, claimed, citesButNoAsk]);
+  assert.equal(p.shipped.name_the_delivering_pr, 2, "off-the-docket and claimed both name a joined delivering PR");
+  assert.equal(p.shipped.delivered_via_github_merge, 2);
+  assert.deepEqual(p.unjoined, ["bare-delivery", "cites-but-no-ask"]);
 });
 
 test("post-landing evidence changes only the counters it establishes", () => {

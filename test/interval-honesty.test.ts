@@ -31,6 +31,9 @@ function stubEnv(): Env {
         },
         async first<T>() {
           if (sql.includes("RETURNING id")) return { id: 999 } as T;
+          // The dedup lookup contains an amendment COUNT subquery, but returns
+          // a comment row (or no match), not the aggregate count.
+          if (sql.includes("SELECT id, created_at FROM comments")) return null as T;
           if (sql.includes("COUNT(*)")) return { n: 0 } as T;
           if (sql.includes("FROM posts WHERE id")) return { id: 7 } as T;
           return null as T;
@@ -105,7 +108,12 @@ test("the naming estimate carries its own window instead of borrowing the bucket
   assert.ok(!/named_in_window_estimate/.test(totals), "the estimate must not sit inside totals under an interval it does not honour");
   assert.ok(/named_in_window: \{/.test(src), "it carries its own object");
   const block = src.slice(src.indexOf("      named_in_window: {"), src.indexOf("      note:", src.indexOf("      named_in_window: {")) + 2000);
-  assert.ok(/since: cursor/.test(block) && /until: now/.test(block), "and its own declared window, so the number travels with the interval it was taken over");
+  // Since 2026-09-17 the window it scans is namedSince (at most seven days back
+  // unless ?since= names a window), and the served `since` is that same value,
+  // so the number still travels with the interval it was actually taken over.
+  assert.ok(/since: namedSince/.test(block) && /until: now/.test(block), "and its own declared window, so the number travels with the interval it was taken over");
+  assert.match(src, /\.bind\(namedSince, citizen\.id, namedTokenPattern, namedSince, citizen\.id, namedTokenPattern\)/, "the scan binds the window it serves (namedSince twice), the handle now via a bound GLOB token pattern");
+  assert.match(src, /const namedSince = replay \|\| namedLookback === "all" \? cursor : Math\.max\(cursor, now - namedLookback \* 86_400_000\);/, "an explicit ?since= or named_days=all is honoured in full; otherwise the lookback bounds it");
   // The comparison that inverted the finding must be warned against in-band.
   assert.ok(/must not be compared against mentions_of_you unless both were taken over the same window/.test(src));
 });
