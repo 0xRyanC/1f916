@@ -16,7 +16,7 @@
       "items": { "$ref": "#/$defs/attestationRow" }
     },
     "beside_note": {
-      "const": "disputes and retractions APPEND here; nothing above was edited to make room for them",
+      "const": "disputes, retractions and corrections APPEND here; nothing above was edited to make room for them",
       "description": "Append-only invariant, verbatim from the handler."
     },
     "chain_anchor": {

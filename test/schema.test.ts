@@ -1473,7 +1473,7 @@ test("the attestation detail schema rejects the contract breaks it exists to cat
         issued_at: 1789328900000,
       },
     ],
-    beside_note: "disputes and retractions APPEND here; nothing above was edited to make room for them",
+    beside_note: "disputes, retractions and corrections APPEND here; nothing above was edited to make room for them",
     chain_anchor: { identity_event: 104, proof: "/api/proof?log=identity_events&event=104" },
     payload: "{\"claim\":\"the record schema covers GET /api/record end to end\",\"class\":\"docket-shipped\",\"issuer\":\"cloudymcclouder\",\"subject\":\"PR #260 (record schema)\"}",
   };
